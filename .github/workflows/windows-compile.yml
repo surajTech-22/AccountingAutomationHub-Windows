@@ -1,4 +1,4 @@
-name: AAH Windows Compile (CL017 R14)
+name: AAH Windows Compile
 
 on:
   push:
@@ -11,39 +11,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: aah-windows-${{ github.ref }}
+  group: aah-windows-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  compile:
+  windows-compile:
+    name: .NET 10 Desktop / All Test Project Builds
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout private source bundle
+      - name: Check out current AAH source
         uses: actions/checkout@v4
 
-      - name: Verify and extract SHA-pinned AAH source
+      - name: Require committed AAH source
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $parts = @(Get-ChildItem -LiteralPath 'source-bundle' -Filter 'part*.b64' -File | Sort-Object Name)
-          if ($parts.Count -ne 18) { throw "AAH source incomplete: expected 18 parts, found $($parts.Count)" }
-          $encoded = [System.Text.StringBuilder]::new()
-          foreach ($part in $parts) {
-            $data = [System.IO.File]::ReadAllText($part.FullName, [System.Text.Encoding]::ASCII).Trim()
-            if ($data -notmatch '^[A-Za-z0-9+/=]+$') { throw "Invalid base64 source part: $($part.Name)" }
-            [void]$encoded.Append($data)
+          if (-not (Test-Path 'AAH/AccountingAutomationHub.sln')) {
+            throw 'AAH Windows source missing: AAH/AccountingAutomationHub.sln'
           }
-          $bytes = [System.Convert]::FromBase64String($encoded.ToString())
-          if ($bytes.Length -ne 5070732) { throw "AAH source length mismatch: $($bytes.Length)" }
-          New-Item -ItemType Directory -Force -Path 'ci-artifacts', 'ci-source' | Out-Null
-          $zipPath = Join-Path (Resolve-Path 'ci-artifacts').Path 'aah-source.zip'
-          [System.IO.File]::WriteAllBytes($zipPath, $bytes)
-          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-          if ($sha -ne 'c3cd0286e81f43b6b427081cd3313fe08153a86baba032da3c2d8b2b3382571f') { throw "AAH source SHA256 mismatch: $sha" }
-          Expand-Archive -LiteralPath $zipPath -DestinationPath 'ci-source' -Force
-          if (-not (Test-Path 'ci-source/AAH/AccountingAutomationHub.sln')) { throw 'AAH source solution is missing after extraction' }
-          Write-Host "AAH CL017 R14 source verified, extracted, and ready to compile."
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
@@ -51,34 +36,59 @@ jobs:
           dotnet-version: '10.0.x'
           cache: false
 
-      - name: Windows SDK information
-        shell: pwsh
-        run: dotnet --info
-
-      - name: Restore the full Windows solution
+      - name: Display .NET and source revision
         shell: pwsh
         run: |
-          dotnet restore 'ci-source/AAH/AccountingAutomationHub.sln' --verbosity minimal
-          if ($LASTEXITCODE -ne 0) { throw "Solution restore failed: $LASTEXITCODE" }
+          dotnet --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Compile all five solution projects
+      - name: Restore Windows solution
         shell: pwsh
         run: |
-          dotnet build 'ci-source/AAH/AccountingAutomationHub.sln' --configuration Release --no-restore --verbosity normal -p:ContinuousIntegrationBuild=true -bl:ci-artifacts/aah-windows-compile.binlog
-          if ($LASTEXITCODE -ne 0) { throw "Windows compilation failed: $LASTEXITCODE" }
+          dotnet restore 'AAH/AccountingAutomationHub.sln' --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw "Windows solution restore failed (exit $LASTEXITCODE)" }
 
-      - name: Publish Windows Desktop to isolated CI folder
+      - name: Compile complete Windows solution
         shell: pwsh
         run: |
-          dotnet publish 'ci-source/AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj' --configuration Release --runtime win-x64 --self-contained false --output ci-artifacts/published-app --verbosity minimal
-          if ($LASTEXITCODE -ne 0) { throw "Desktop publish failed: $LASTEXITCODE" }
-          if (-not (Test-Path 'ci-artifacts/published-app/AccountingAutomationHub.exe')) { throw 'Desktop executable missing from publish' }
+          New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
+          dotnet build 'AAH/AccountingAutomationHub.sln' --configuration Release --no-restore --verbosity normal -p:ContinuousIntegrationBuild=true -bl:ci-artifacts/AAH-Windows-Solution.binlog
+          if ($LASTEXITCODE -ne 0) { throw "Windows solution compilation failed (exit $LASTEXITCODE)" }
 
-      - name: Upload Windows compilation diagnostics
+      - name: Compile seven independent .NET regression projects
+        shell: pwsh
+        run: |
+          $projects = @(
+            'AAH.BankXmlValidator.Tests',
+            'AAH.CacheLifecycle.Tests',
+            'AAH.FeatureAudit.Tests',
+            'AAH.StockIdentity.Tests',
+            'AAH.StockMapping.Tests',
+            'AAH.StockProjection.Tests',
+            'AAH.TallyInventory.Tests'
+          )
+          foreach ($project in $projects) {
+            $path = "AAH/Tests/$project/$project.csproj"
+            if (-not (Test-Path $path)) { throw "Missing mandatory test project: $path" }
+            Write-Host "BUILDING $project"
+            dotnet build $path --configuration Release --verbosity minimal -p:ContinuousIntegrationBuild=true -p:CopyLocalLockFileAssemblies=true "-bl:ci-artifacts/$project.binlog"
+            if ($LASTEXITCODE -ne 0) { throw "Failed .NET regression project: $project" }
+          }
+
+      - name: Publish Windows WPF Desktop into isolated CI folder
+        shell: pwsh
+        run: |
+          dotnet publish 'AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj' --configuration Release --runtime win-x64 --self-contained false --output ci-artifacts/published-app --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw "Windows Desktop publish failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path 'ci-artifacts/published-app/AccountingAutomationHub.exe')) { throw 'Windows Desktop executable missing from publish.' }
+
+      - name: Upload Windows compilation diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: aah-windows-build-diagnostics
+          name: AAH-Windows-Compile-Diagnostics
           path: ci-artifacts/*.binlog
-          retention-days: 14
           if-no-files-found: warn
+          retention-days: 14
