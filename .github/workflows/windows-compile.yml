@@ -1,0 +1,71 @@
+name: AAH Windows Compile
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aah-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout private AAH source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: false
+
+      - name: Confirm source upload completed
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'AAH/AccountingAutomationHub.sln')) {
+            throw 'AAH source has not been uploaded. Missing AAH/AccountingAutomationHub.sln. This is NOT a successful compile.'
+          }
+
+      - name: Record .NET environment
+        shell: pwsh
+        run: dotnet --info
+
+      - name: Restore full Windows solution
+        shell: pwsh
+        run: |
+          dotnet restore 'AAH/AccountingAutomationHub.sln' --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw "Solution restore failed (exit $LASTEXITCODE)" }
+
+      - name: Build full Windows solution with diagnostics
+        shell: pwsh
+        run: |
+          New-Item -Path ci-artifacts -ItemType Directory -Force | Out-Null
+          dotnet build 'AAH/AccountingAutomationHub.sln' --configuration Release --no-restore --verbosity normal -p:ContinuousIntegrationBuild=true -bl:ci-artifacts/windows-build.binlog
+          if ($LASTEXITCODE -ne 0) { throw "Windows build failed (exit $LASTEXITCODE)" }
+
+      - name: Publish Windows Desktop into CI staging
+        shell: pwsh
+        run: |
+          dotnet publish 'AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj' --configuration Release --runtime win-x64 --self-contained false --output ci-artifacts/published-app --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw "Desktop publish failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path 'ci-artifacts/published-app/AccountingAutomationHub.exe')) {
+            throw 'Desktop executable missing after publish.'
+          }
+
+      - name: Upload diagnostic build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aah-windows-msbuild-diagnostics
+          path: ci-artifacts/*.binlog
+          if-no-files-found: warn
+          retention-days: 14
