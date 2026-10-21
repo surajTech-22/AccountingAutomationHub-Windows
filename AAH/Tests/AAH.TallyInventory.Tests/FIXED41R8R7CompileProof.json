@@ -1,0 +1,16 @@
+{
+  "repair": "FIXED41 R8 Repair 7 DataGrid totals compile correction",
+  "files": [
+    {
+      "path": "src/AccountingAutomationHub.Desktop/Behaviors/DataGridColumnFilterBehavior.cs",
+      "baseline_text_sha256": "e33b41ea4aa27e855f19ac5f4382e37d8a1e8a0c79d3423be323ec1e668e72fa",
+      "current_text_sha256": "58072f3c43327e143fc0efba2defee0495eef71621f5b1c760f1a406cf44459c",
+      "changes": [
+        {
+          "before": "            else UpdateHeaderTotals(grid, state);\n",
+          "after": "            else QueueTotalsRefresh(grid);\n"
+        }
+      ]
+    }
+  ]
+}

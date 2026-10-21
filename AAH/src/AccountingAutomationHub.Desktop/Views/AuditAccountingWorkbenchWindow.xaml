@@ -1,0 +1,48 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AuditAccountingWorkbenchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Accounting Module · Audit" Width="1500" Height="850" MinWidth="980" MinHeight="620"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="{Binding Header}" FontSize="24" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding Subtitle}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                <TextBlock Text="{Binding FilterContext}" Foreground="{DynamicResource AccentBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button Content="Create Voucher" Padding="12,7" Click="Create_Click"/>
+                <Button Content="Edit Selected Vouchers" Padding="12,7" Margin="8,0,0,0" Click="Modify_Click"/>
+                <Button Content="Delete Selected" Padding="12,7" Margin="8,0,0,0" Click="Delete_Click"/>
+                <Button Content="Close" Padding="12,7" Margin="8,0,0,0" IsCancel="True"/>
+            </StackPanel>
+        </Grid>
+        <Border Grid.Row="1" Padding="10" Margin="0,0,0,10" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <TextBlock Text="Independent Audit accounting mode: select one or many vouchers, then open the Advanced Voucher Workbench. The selected module/drill-down is already applied. Linked Accounting client transaction data is never loaded. Source evidence stays immutable; Audit edits are working overrides/revisions." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+        </Border>
+        <DataGrid x:Name="RowsGrid" Grid.Row="2" ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow, Mode=TwoWay}"
+                  AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow"
+                  EnableRowVirtualization="True" EnableColumnVirtualization="True" CanUserSortColumns="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Date" Binding="{Binding DateText}" Width="100"/>
+                <DataGridTextColumn Header="Party / Ledger" Binding="{Binding PartyOrLedger}" Width="190"/>
+                <DataGridTextColumn Header="Exact Ledger" Binding="{Binding BusinessLedger}" Width="180"/>
+                <DataGridTextColumn Header="Group" Binding="{Binding BusinessGroup}" Width="150"/>
+                <DataGridTextColumn Header="Reference" Binding="{Binding Reference}" Width="120"/>
+                <DataGridTextColumn Header="Voucher Type" Binding="{Binding VoucherType}" Width="120"/>
+                <DataGridTextColumn Header="Debit" Binding="{Binding Debit, StringFormat=N2}" Width="110"/>
+                <DataGridTextColumn Header="Credit" Binding="{Binding Credit, StringFormat=N2}" Width="110"/>
+                <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat=N2}" Width="120"/>
+                <DataGridTextColumn Header="Taxable" Binding="{Binding TaxableValue, StringFormat=N2}" Width="120"/>
+                <DataGridTextColumn Header="GST %" Binding="{Binding GstRate, StringFormat=0.##}" Width="80"/>
+                <DataGridTextColumn Header="GST" Binding="{Binding GstAmount, StringFormat=N2}" Width="110"/>
+                <DataGridTextColumn Header="Item" Binding="{Binding ItemName}" Width="170"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="150"/>
+                <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="190"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock Grid.Row="3" Margin="0,10,0,0" Text="{Binding Status}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+    </Grid>
+</Window>

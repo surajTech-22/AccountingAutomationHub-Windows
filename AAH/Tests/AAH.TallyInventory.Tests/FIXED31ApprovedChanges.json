@@ -1,0 +1,16 @@
+{
+  "files": [
+    {
+      "name": "coordinator",
+      "path": "src/AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs",
+      "current_text_sha256": "90fb7b9bfbf56f0602a8df304458d563c62e91744efaa891154a49388c367c57",
+      "baseline_text_sha256": "f96912ebc1b95e8ec57c806cf9749782327710cdf876eef1c6db3a1e402ba9d4",
+      "changes": [
+        {
+          "before": "                        usePreSynchronizedVoucherAuthority: true, synchronizedAuthorityAlterId: authorityAlterId,\n                        explicitRestoreSourceAnchors: request.RestoreSourceAnchors);",
+          "after": "                        usePreSynchronizedVoucherAuthority: true, synchronizedAuthorityAlterId: authorityAlterId,\n                        explicitRestoreSourceAnchors: request.RestoreSourceAnchors,\n                        allowUnmappedSuspense: request.AllowBankSuspenseForUnmapped);"
+        }
+      ]
+    }
+  ]
+}

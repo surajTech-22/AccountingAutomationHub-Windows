@@ -1,0 +1,465 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.GstReconciliationView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Style="{StaticResource CardBorderStyle}"
+                Padding="12"
+                Margin="0,0,0,8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="{Binding ReportingFrequency}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding ReportingPeriodDescription}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontSize="10"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <WrapPanel Grid.Column="1" HorizontalAlignment="Right">
+                        <Button Content="Open Journal"
+                                Click="OpenJournal_Click"
+                                Padding="13,8"
+                                Margin="0,0,8,6"
+                                ToolTip="Open the linked Journal Center (Ctrl+6)" />
+                        <Button Content="Open Purchase"
+                                Click="OpenPurchase_Click"
+                                Padding="13,8"
+                                Margin="0,0,8,6"
+                                ToolTip="Open Purchase directly from GSTR-3B" />
+                        <Button Content="Reimport Portal Files"
+                                Command="{Binding AutoImportCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Margin="0,0,8,6" />
+                        <Button Content="Check Portal Changes"
+                                Command="{Binding ReconcileCommand}"
+                                Padding="13,8"
+                                Margin="0,0,8,6" />
+                        <Button Content="Recalculate Books + 3B"
+                                Command="{Binding RefreshCommand}"
+                                Padding="13,8"
+                                Margin="0,0,0,6" />
+                    </WrapPanel>
+                </Grid>
+                <Expander Grid.Row="1"
+                          Header="Manual import fallback"
+                          IsExpanded="False"
+                          Margin="0,4,0,0">
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="Select GSTR-3B PDFs"
+                                Command="{Binding ImportGstr3bCommand}"
+                                Padding="13,8"
+                                Margin="0,0,8,6" />
+                        <Button Content="Select Credit Ledger"
+                                Command="{Binding ImportCreditLedgerCommand}"
+                                Padding="13,8"
+                                Margin="0,0,8,6" />
+                        <Button Content="Select Cash Ledger"
+                                Command="{Binding ImportCashLedgerCommand}"
+                                Padding="13,8"
+                                Margin="0,0,8,6" />
+                    </WrapPanel>
+                </Expander>
+                <TextBlock Grid.Row="2" Text="{Binding GstPermissionSummary}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="2,5,0,0"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="12">
+                <StackPanel>
+                    <TextBlock Text="{Binding MatchedCount}" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="Matched" Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="12">
+                <StackPanel>
+                    <TextBlock Text="{Binding DifferenceCount}" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="Mismatch" Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="4" Style="{StaticResource CardBorderStyle}" Padding="12">
+                <StackPanel>
+                    <TextBlock Text="{Binding MissingCount}" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="3B / Ledger Evidence Missing" Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <TabControl Grid.Row="2" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+            <TabItem Header="Reconciliation">
+                <DataGrid ItemsSource="{Binding Rows}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          RowHeaderWidth="0"
+                          EnableRowVirtualization="True"
+                          EnableColumnVirtualization="True"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="130" />
+                        <DataGridTextColumn Header="Books Output" Binding="{Binding BooksOutput, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="3B Output" Binding="{Binding PortalOutput, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Output Diff" Binding="{Binding OutputDifference, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Books RCM Taxable" Binding="{Binding BooksRcmTaxable, StringFormat=N2}" Width="125" />
+                        <DataGridTextColumn Header="3B RCM Taxable" Binding="{Binding PortalRcmTaxable, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="RCM Taxable Diff" Binding="{Binding RcmTaxableDifference, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Books RCM Liability GST" Binding="{Binding BooksRcmLiabilityGst, StringFormat=N2}" Width="145" />
+                        <DataGridTextColumn Header="3B RCM GST" Binding="{Binding PortalRcmGst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="RCM GST Diff" Binding="{Binding RcmGstDifference, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Books ITC incl. Claimed RCM" Binding="{Binding BooksItc, StringFormat=N2}" Width="165" />
+                        <DataGridTextColumn Header="3B ITC" Binding="{Binding PortalItc, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="ITC Diff" Binding="{Binding ItcDifference, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="3B Net" Binding="{Binding PortalNet, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Books Net incl. Opening" Binding="{Binding BooksNetWithOpening, StringFormat=N2}" Width="145" />
+                        <DataGridTextColumn Header="Cash + Credit Ledger Balance" Binding="{Binding PortalLedgerBalance, StringFormat=N2}" Width="170" />
+                        <DataGridTextColumn Header="Ledger Diff" Binding="{Binding LedgerDifference, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Books Position" Binding="{Binding BooksPosition}" Width="140" />
+                        <DataGridTextColumn Header="6.1 Tax Payable" Binding="{Binding TaxPayable, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="6.1 ITC Used" Binding="{Binding ItcUsed, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="6.1 Cash Paid" Binding="{Binding CashPaid, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="6.1 Interest" Binding="{Binding Interest, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="6.1 Late Fee" Binding="{Binding LateFee, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="RCM Cash" Binding="{Binding RcmCash, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="6.1 Offset Total" Binding="{Binding OffsetTotal, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Payment Diff" Binding="{Binding PaymentDifference, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="105" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <TabItem Header="Nil Returns / Nil Sales">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                        <StackPanel>
+                            <TextBlock Text="Active-client GST Control Panel parity" FontWeight="SemiBold" />
+                            <TextBlock Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap">
+                                <Run Text="GSTR-3B Nil Return / Nil-Sales evidence is classified, selected, saved and applied automatically. Manual fallback selections save/apply immediately when clicked; no separate Save/Apply action is required. " />
+                                <Run Text="Selected: " /><Run Text="{Binding NilSalesSelectedCount, Mode=OneWay}" FontWeight="SemiBold" />
+                                <Run Text=" · Conflicts: " /><Run Text="{Binding NilSalesConflictCount, Mode=OneWay}" FontWeight="SemiBold" />
+                            </TextBlock>
+                        </StackPanel>
+                    </DockPanel>
+                    <DataGrid Grid.Row="1"
+                              ItemsSource="{Binding NilSalesOptions}"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Nil Filing" Width="85">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Click="NilSalesSelection_Click"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                            <CheckBox.Style>
+                                                <Style TargetType="CheckBox">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding CanSelect}" Value="True"/>
+                                                                <Condition Binding="{Binding DataContext.CanControlGst, RelativeSource={RelativeSource AncestorType=DataGrid}}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="IsEnabled" Value="True"/>
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </CheckBox.Style>
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" IsReadOnly="True" Width="130" />
+                            <DataGridTextColumn Header="Period Key" Binding="{Binding PeriodKey}" IsReadOnly="True" Width="95" />
+                            <DataGridTextColumn Header="Input GST" Binding="{Binding InputGst, StringFormat=N2}" IsReadOnly="True" Width="110" />
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="170" />
+                            <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="220" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="GSTR-3B Return Summary">
+                <DataGrid ItemsSource="{Binding Returns}"
+                          SelectedItem="{Binding SelectedReturn, Mode=TwoWay}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          RowHeaderWidth="0">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="130" />
+                        <DataGridTextColumn Header="Month Key" Binding="{Binding PeriodKey}" Width="95" />
+                        <DataGridTextColumn Header="GSTIN" Binding="{Binding Gstin}" Width="145" />
+                        <DataGridTextColumn Header="Legal Name" Binding="{Binding LegalName}" Width="180" />
+                        <DataGridTextColumn Header="Trade Name" Binding="{Binding TradeName}" Width="180" />
+                        <DataGridTextColumn Header="Year" Binding="{Binding YearDisplay}" Width="85" />
+                        <DataGridTextColumn Header="ARN" Binding="{Binding Arn}" Width="175" />
+                        <DataGridTextColumn Header="ARN Date" Binding="{Binding ArnDate, StringFormat=dd-MM-yyyy}" Width="100" />
+                        <DataGridTextColumn Header="Output Taxable" Binding="{Binding OutwardTaxable, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Output GST" Binding="{Binding OutwardGst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="RCM Taxable" Binding="{Binding RcmTaxable, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="RCM GST" Binding="{Binding RcmGst, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Net ITC" Binding="{Binding NetItc, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="File Name" Binding="{Binding SourceFileName}" Width="180" />
+                        <DataGridTextColumn Header="File Path" Binding="{Binding SourcePath}" Width="320" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <TabItem Header="Table 5 / 5.1">
+                <DataGrid ItemsSource="{Binding Returns}"
+                          SelectedItem="{Binding SelectedReturn, Mode=TwoWay}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          RowHeaderWidth="0">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="130" />
+                        <DataGridTextColumn Header="Comp/Exempt/Nil Inter" Binding="{Binding CompositionExemptNilInterState, StringFormat=N2}" Width="145" />
+                        <DataGridTextColumn Header="Comp/Exempt/Nil Intra" Binding="{Binding CompositionExemptNilIntraState, StringFormat=N2}" Width="145" />
+                        <DataGridTextColumn Header="Non-GST Inter" Binding="{Binding NonGstInterState, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Non-GST Intra" Binding="{Binding NonGstIntraState, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="System Interest" Binding="{Binding SystemInterest, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Interest Paid" Binding="{Binding InterestPaid, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Late Fee" Binding="{Binding LateFee, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Interest IGST" Binding="{Binding InterestPaidIgst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Interest CGST" Binding="{Binding InterestPaidCgst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Interest SGST" Binding="{Binding InterestPaidSgst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Late Fee IGST" Binding="{Binding LateFeeIgst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Late Fee CGST" Binding="{Binding LateFeeCgst, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Late Fee SGST" Binding="{Binding LateFeeSgst, StringFormat=N2}" Width="105" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <TabItem Header="Table 6.1 Payment / Utilisation">
+                <DataGrid ItemsSource="{Binding Returns}"
+                          SelectedItem="{Binding SelectedReturn, Mode=TwoWay}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          RowHeaderWidth="0">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="130" />
+                        <DataGridTextColumn Header="Tax Payable IGST" Binding="{Binding TaxPayableIgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Tax Payable CGST" Binding="{Binding TaxPayableCgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Tax Payable SGST" Binding="{Binding TaxPayableSgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Tax Payable Total" Binding="{Binding TaxPayableTotal, StringFormat=N2}" Width="125" />
+                        <DataGridTextColumn Header="Credit Used IGST" Binding="{Binding CreditUsedIgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Credit Used CGST" Binding="{Binding CreditUsedCgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Credit Used SGST" Binding="{Binding CreditUsedSgst, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Credit Used Total" Binding="{Binding CreditUsedTotal, StringFormat=N2}" Width="125" />
+                        <DataGridTextColumn Header="Cash Paid IGST" Binding="{Binding CashPaidIgst, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Cash Paid CGST" Binding="{Binding CashPaidCgst, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Cash Paid SGST" Binding="{Binding CashPaidSgst, StringFormat=N2}" Width="115" />
+                        <DataGridTextColumn Header="Cash Paid Total" Binding="{Binding CashPaidTotal, StringFormat=N2}" Width="120" />
+                        <DataGridTextColumn Header="Interest" Binding="{Binding PaymentInterest, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Late Fee" Binding="{Binding PaymentLateFee, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="RCM Cash" Binding="{Binding RcmCash, StringFormat=N2}" Width="100" />
+                        <DataGridTextColumn Header="Payment Diff" Binding="{Binding PaymentDifference, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Payment Status" Binding="{Binding PaymentStatus}" Width="110" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <TabItem Header="6.1 Detailed Matrix">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <ComboBox Grid.Row="0"
+                              ItemsSource="{Binding Returns}"
+                              SelectedItem="{Binding SelectedReturn, Mode=TwoWay}"
+                              DisplayMemberPath="PeriodLabel"
+                              IsTextSearchEnabled="True"
+                              TextSearch.TextPath="PeriodLabel"
+                              Width="220"
+                              HorizontalAlignment="Left"
+                              Margin="8" />
+                    <DataGrid Grid.Row="1"
+                              ItemsSource="{Binding PaymentRows}"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="220" />
+                            <DataGridTextColumn Header="Tax Head" Binding="{Binding TaxHead}" Width="80" />
+                            <DataGridTextColumn Header="Tax Payable" Binding="{Binding TaxPayable, StringFormat=N2}" Width="105" />
+                            <DataGridTextColumn Header="Negative Liability Adjustment" Binding="{Binding NegativeLiabilityAdjustment, StringFormat=N2}" Width="165" />
+                            <DataGridTextColumn Header="Net Tax Payable" Binding="{Binding NetTaxPayable, StringFormat=N2}" Width="115" />
+                            <DataGridTextColumn Header="ITC-IGST" Binding="{Binding ItcIntegrated, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="ITC-CGST" Binding="{Binding ItcCentral, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="ITC-SGST" Binding="{Binding ItcState, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="ITC-Cess" Binding="{Binding ItcCess, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="Cash" Binding="{Binding PaidCash, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="Interest" Binding="{Binding InterestPaidCash, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="Late Fee" Binding="{Binding LateFeePaidCash, StringFormat=N2}" Width="90" />
+                            <DataGridTextColumn Header="Offset Total" Binding="{Binding OffsetTotal, StringFormat=N2}" Width="105" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Liability Breakup">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <ComboBox Grid.Row="0"
+                              ItemsSource="{Binding Returns}"
+                              SelectedItem="{Binding SelectedReturn, Mode=TwoWay}"
+                              DisplayMemberPath="PeriodLabel"
+                              IsTextSearchEnabled="True"
+                              TextSearch.TextPath="PeriodLabel"
+                              Width="220"
+                              HorizontalAlignment="Left"
+                              Margin="8" />
+                    <DataGrid Grid.Row="1"
+                              ItemsSource="{Binding LiabilityBreakupRows}"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Liability Period" Binding="{Binding Period}" Width="180" />
+                            <DataGridTextColumn Header="IGST" Binding="{Binding Igst, StringFormat=N2}" Width="120" />
+                            <DataGridTextColumn Header="CGST" Binding="{Binding Cgst, StringFormat=N2}" Width="120" />
+                            <DataGridTextColumn Header="SGST" Binding="{Binding Sgst, StringFormat=N2}" Width="120" />
+                            <DataGridTextColumn Header="Cess" Binding="{Binding Cess, StringFormat=N2}" Width="120" />
+                            <DataGridTextColumn Header="Total" Binding="{Binding Total, StringFormat=N2}" Width="130" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Portal Ledgers">
+                <DataGrid ItemsSource="{Binding LedgerPeriods}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          RowHeaderWidth="0">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Ledger" Binding="{Binding LedgerType}" Width="180" />
+                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="130" />
+                        <DataGridTextColumn Header="Opening IGST" Binding="{Binding OpeningIgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Opening CGST" Binding="{Binding OpeningCgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Opening SGST" Binding="{Binding OpeningSgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Opening Cess" Binding="{Binding OpeningCess, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Opening Total" Binding="{Binding OpeningTotal, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Closing IGST" Binding="{Binding ClosingIgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Closing CGST" Binding="{Binding ClosingCgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Closing SGST" Binding="{Binding ClosingSgst, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Closing Cess" Binding="{Binding ClosingCess, StringFormat=N2}" Width="105" />
+                        <DataGridTextColumn Header="Closing Total" Binding="{Binding ClosingTotal, StringFormat=N2}" Width="110" />
+                        <DataGridTextColumn Header="Source" Binding="{Binding SourcePath}" Width="300" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <TabItem Header="Original / Parsed Data">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="4,4,4,8">
+                        <Button DockPanel.Dock="Right"
+                                Content="Edit Period"
+                                Command="{Binding EditPeriodCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Padding="12,7"
+                                Margin="8,0,0,0" />
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Last Edited: " Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding SelectedSourceReturn.LastEditedDisplay}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </DockPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <DataGrid Grid.Column="0"
+                                  ItemsSource="{Binding SourceReturns}"
+                                  SelectedItem="{Binding SelectedSourceReturn, Mode=TwoWay}"
+                                  AutoGenerateColumns="False"
+                                  IsReadOnly="True"
+                                  CanUserAddRows="False"
+                                  RowHeaderWidth="0">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel}" Width="105" />
+                                <DataGridTextColumn Header="Month Key" Binding="{Binding PeriodKey}" Width="82" />
+                                <DataGridTextColumn Header="Last Edited" Binding="{Binding LastEditedDisplay}" Width="135" />
+                                <DataGridTextColumn Header="File" Binding="{Binding SourceFileName}" Width="150" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TabControl Grid.Column="2">
+                        <TabItem Header="Parsed Fields">
+                            <DataGrid ItemsSource="{Binding RawFields}"
+                                      AutoGenerateColumns="False"
+                                      IsReadOnly="True"
+                                      CanUserAddRows="False"
+                                      RowHeaderWidth="0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="140" />
+                                    <DataGridTextColumn Header="Field" Binding="{Binding Field}" Width="280" />
+                                    <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </TabItem>
+                        <TabItem Header="Original PDF Text">
+                            <TextBox Text="{Binding SelectedRawText, Mode=OneWay}"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     AcceptsTab="True"
+                                     TextWrapping="NoWrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     FontFamily="Consolas"
+                                     FontSize="11" />
+                        </TabItem>
+                        </TabControl>
+                    </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <TextBlock Grid.Row="3"
+                   Text="{Binding StatusText}"
+                   Foreground="{DynamicResource TextSecondaryBrush}"
+                   Margin="4,8,4,0"
+                   TextWrapping="Wrap" />
+    </Grid>
+</UserControl>

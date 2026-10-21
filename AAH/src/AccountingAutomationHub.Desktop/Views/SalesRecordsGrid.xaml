@@ -1,0 +1,52 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.SalesRecordsGrid"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <controls:MultiSearchFilterBar x:Name="SearchFilterBar" Grid.Row="0" Margin="0,0,0,6"/>
+        <DataGrid x:Name="RecordsGrid" Grid.Row="1"
+              ItemsSource="{Binding ItemsSource, RelativeSource={RelativeSource AncestorType=UserControl}}"
+              CellEditEnding="RecordsGrid_CellEditEnding"
+              AutoGenerateColumns="False"
+              IsReadOnly="{Binding IsSalesReadOnly}"
+              CanUserAddRows="False"
+              CanUserDeleteRows="False"
+              CanUserReorderColumns="True"
+              CanUserResizeColumns="True"
+              CanUserSortColumns="True"
+              EnableRowVirtualization="True"
+              EnableColumnVirtualization="True"
+              FrozenColumnCount="4"
+              HeadersVisibility="Column"
+              GridLinesVisibility="Horizontal"
+              AlternatingRowBackground="#F8FAFC"
+              BorderBrush="{DynamicResource BorderBrush}"
+              BorderThickness="1"
+              RowHeaderWidth="0"
+              SelectionMode="Extended"
+              SelectionUnit="CellOrRowHeader">
+        <DataGrid.Resources>
+            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource GlobalFilterableDataGridColumnHeaderStyle}">
+                <Setter Property="Background" Value="#F1F5F9" />
+                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Padding" Value="8,8" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+                <Setter Property="BorderThickness" Value="0,0,1,1" />
+            </Style>
+            <Style TargetType="DataGridCell">
+                <Setter Property="Padding" Value="6,4" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
+            <Style TargetType="TextBox">
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="4,2" />
+            </Style>
+        </DataGrid.Resources>
+        </DataGrid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,255 @@
+<Window x:Class="AccountingAutomationHub.Desktop.AuditWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views"
+        Title="Accounting Automation Hub"
+        Width="1440" Height="900" MinWidth="1100" MinHeight="700"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" ResizeMode="CanResize"
+        Background="{DynamicResource AppBackgroundBrush}"
+        PreviewKeyDown="AuditWindow_PreviewKeyDown">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="42"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Fix96: Audit uses the same AAH shell language as Accounting. -->
+        <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="270"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="560"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <Border Width="25" Height="25" Background="{DynamicResource AccentBrush}" CornerRadius="7">
+                        <TextBlock Text="A" Foreground="White" FontWeight="Bold" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="Accounting Automation Hub" Margin="9,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="13"/>
+                    <Border Background="#F0EAFE" CornerRadius="8" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="AUDIT" Foreground="#6A45B8" FontWeight="Bold" FontSize="9"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="{Binding Status, Mode=OneWay}" ToolTip="{Binding Status}" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Stretch" TextAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="12,0" FontSize="11"/>
+
+                <Grid Grid.Column="2" Margin="8,5,8,5" VerticalAlignment="Center" shell:WindowChrome.IsHitTestVisibleInChrome="True" Visibility="{Binding HasActiveWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/><ColumnDefinition Width="32"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,8,0">
+                        <TextBlock Text="TALLY" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="8" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding TallyConnectionStatus, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" MaxWidth="130" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" Height="29" MinWidth="230" ItemsSource="{Binding LiveTallyCompanies}" SelectedItem="{Binding SelectedLiveTallyCompany, Mode=TwoWay}" DisplayMemberPath="Name" ToolTip="Select a live Tally company, then press Link" VerticalContentAlignment="Center"/>
+                    <Button Grid.Column="2" Content="Link" Command="{Binding LinkTallyCommand}" Height="29" Margin="4,0,0,0" Padding="7,0" ToolTip="Explicitly link this Audit client to the selected live Tally company"/>
+                    <Button Grid.Column="3" Content="↻" Command="{Binding RefreshTallyCompaniesCommand}" Width="29" Height="29" Margin="4,0,0,0" Padding="0" FontSize="15" ToolTip="Refresh open Tally companies"/>
+                </Grid>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Style="{StaticResource WindowCommandButtonStyle}" ToolTip="Minimize" Click="Minimize_Click"><Path Width="12" Height="2" Data="M 0,1 L 12,1" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Stretch="Fill"/></Button>
+                    <Button Style="{StaticResource WindowCommandButtonStyle}" ToolTip="Maximize or restore" Click="MaximizeRestore_Click"><Rectangle Width="11" Height="11" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.3" Fill="Transparent"/></Button>
+                    <Button Style="{StaticResource CloseWindowButtonStyle}" ToolTip="Close" Click="Close_Click"><Path Width="12" Height="12" Data="M 0,0 L 12,12 M 12,0 L 0,12" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" Stretch="Fill"/></Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="{DynamicResource SidebarBrush}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="92"/><RowDefinition Height="*"/><RowDefinition Height="58"/><RowDefinition Height="72"/></Grid.RowDefinitions>
+                    <Button Command="{Binding CloseAuditClientCommand}" Margin="10,10,10,8" Padding="10,8" Background="Transparent" BorderThickness="0" Cursor="Hand" HorizontalContentAlignment="Stretch" ToolTip="Close this Audit client workspace and return to Audit Clients">
+                        <StackPanel>
+                            <TextBlock Text="AUDIT WORKSPACE" Foreground="#94A3B8" FontWeight="SemiBold" FontSize="10"/>
+                            <TextBlock Text="{Binding WorkspaceButtonText, Mode=OneWay}" Foreground="White" FontWeight="SemiBold" FontSize="14" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding CurrentClientDetail, Mode=OneWay}" Foreground="#94A3B8" FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Modules}" SelectedItem="{Binding SelectedClientModule, Mode=TwoWay}" Style="{StaticResource NavigationListStyle}" ItemContainerStyle="{StaticResource NavigationItemStyle}" Visibility="{Binding HasActiveWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <Border Width="25" Height="25" CornerRadius="7" Background="#26FFFFFF" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Icon, Mode=OneWay}" Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Foreground}" FontWeight="Bold" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="{Binding Title, Mode=OneWay}" Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Foreground}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding CountText, Mode=OneWay}" Foreground="#94A3B8" FontSize="10" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Button Grid.Row="2" Command="{Binding OpenAuditSettingsCommand}" Margin="10,5,10,5" Padding="10,7" Background="Transparent" BorderThickness="0" Cursor="Hand" HorizontalContentAlignment="Stretch" Visibility="{Binding HasActiveWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Border Width="25" Height="25" CornerRadius="7" Background="#26FFFFFF"><TextBlock Text="⚙" Foreground="#CBD5E1" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><TextBlock Grid.Column="1" Text="Audit Settings" Foreground="#CBD5E1" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/></Grid>
+                    </Button>
+
+                    <Border Grid.Row="3" BorderBrush="#334155" BorderThickness="0,1,0,0" Padding="20,13">
+                        <StackPanel><TextBlock Text="VERSION" Foreground="#64748B" FontWeight="SemiBold" FontSize="9"/><TextBlock Text="4.0.0" Foreground="#CBD5E1" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"/><TextBlock Text="AUDIT · Own Clients · Explicit Links · Tally" Foreground="#94A3B8" FontSize="9" TextWrapping="Wrap" Margin="0,2,0,0"/></StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions><RowDefinition Height="64"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="20,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <TextBlock Text="{Binding CurrentPageTitle, Mode=OneWay}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding CurrentPageSubtitle, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button Content="WORKSPACE" Command="{Binding SwitchToAccountingCommand}" Focusable="False" Padding="11,6" Margin="0,0,8,0" ToolTip="Return to the Accounting / Audit workspace selector"/>
+                            <Button Content="LOGOUT" Command="{Binding LogoutCommand}" Focusable="False" Padding="11,6" Margin="0,0,8,0"/>
+                            <Button Content="Undo" Click="Undo_Click" Focusable="False" Padding="11,6" Margin="0,0,8,0" ToolTip="Undo the current editor/grid change (Ctrl+Z)"/>
+                            <Button Content="Calculator" Click="Calculator_Click" Focusable="False" Padding="11,6" Margin="0,0,8,0" ToolTip="Open the universal calculator (Ctrl+Alt+C)"/>
+                            <Button Content="Chat" Click="Chat_Click" Focusable="False" Padding="11,6" ToolTip="Open Team &amp; Chat"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="1" Margin="14">
+                    <views:AuditClientManagementView DataContext="{Binding ClientManagement}"
+                                                     Visibility="{Binding DataContext.IsClients, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+
+                    <ScrollViewer Visibility="{Binding IsDashboard, Converter={StaticResource BooleanToVisibilityConverter}}" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Audit Dashboard" FontSize="24" FontWeight="SemiBold"/>
+                            <TextBlock Text="This dashboard belongs to the selected Audit client. Nothing from Accounting is included unless an explicit link exists." Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,14"/>
+                            <ItemsControl ItemsSource="{Binding DashboardCards}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Command="{Binding DataContext.OpenDashboardCardCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}"
+                                                Background="Transparent" BorderThickness="0" Padding="0" Margin="0,0,12,12" Cursor="Hand" ToolTip="Open this Audit area">
+                                            <Border Width="245" MinHeight="118" Padding="16" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="13"/>
+                                                    <TextBlock Text="{Binding CountText, Mode=OneWay}" FontWeight="Bold" FontSize="30" Margin="0,7,0,2"/>
+                                                    <TextBlock Text="{Binding Detail, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="Open →" Foreground="{DynamicResource AccentBrush}" FontSize="9" HorizontalAlignment="Right" Margin="0,5,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Border Padding="16" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Margin="0,6,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Independent by default" FontWeight="SemiBold" FontSize="14"/>
+                                    <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Text="Audit has its own client directory and audit data store. Accounting and Tally become visible only when you explicitly link them from Sources &amp; Links. Removing a link does not delete either side."/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Visibility="{Binding IsBanking, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="150"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="Banking Audit" FontSize="22" FontWeight="SemiBold"/>
+                            <TextBlock Text="Audit-owned banking evidence appears here. Accounting bank reconciliation is shown only when this Audit client is explicitly linked to an Accounting client." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding BankSummaries}" IsReadOnly="True" AutoGenerateColumns="False" Margin="0,0,0,10">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Account" Binding="{Binding Account, Mode=OneWay}" Width="2*"/>
+                                <DataGridTextColumn Header="Period" Binding="{Binding Period, Mode=OneWay}" Width="*"/>
+                                <DataGridTextColumn Header="Opening" Binding="{Binding Opening, Mode=OneWay}" Width="*"/>
+                                <DataGridTextColumn Header="Books Debit" Binding="{Binding BooksDebit, Mode=OneWay, StringFormat=N2}" Width="*"/>
+                                <DataGridTextColumn Header="Books Credit" Binding="{Binding BooksCredit, Mode=OneWay, StringFormat=N2}" Width="*"/>
+                                <DataGridTextColumn Header="Expected Closing" Binding="{Binding ExpectedClosing, Mode=OneWay}" Width="*"/>
+                                <DataGridTextColumn Header="Statement Closing" Binding="{Binding StatementClosing, Mode=OneWay}" Width="*"/>
+                                <DataGridTextColumn Header="Difference" Binding="{Binding Difference, Mode=OneWay, StringFormat=N2}" Width="*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="1.3*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <DataGrid Grid.Row="2" ItemsSource="{Binding Rows}" IsReadOnly="True" AutoGenerateColumns="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Date" Binding="{Binding DateText, Mode=OneWay}" Width="95"/>
+                                <DataGridTextColumn Header="Reference" Binding="{Binding Reference, Mode=OneWay}" Width="130"/>
+                                <DataGridTextColumn Header="Voucher" Binding="{Binding VoucherType, Mode=OneWay}" Width="105"/>
+                                <DataGridTextColumn Header="Authority ID" Binding="{Binding AuthorityId, Mode=OneWay}" Width="115"/>
+                                <DataGridTextColumn Header="Ledger / Bank" Binding="{Binding PartyOrLedger, Mode=OneWay}" Width="180"/>
+                                <DataGridTextColumn Header="Narration" Binding="{Binding Details, Mode=OneWay}" Width="3*"/>
+                                <DataGridTextColumn Header="Debit" Binding="{Binding Debit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Credit" Binding="{Binding Credit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="140"/>
+                                <DataGridTextColumn Header="Source" Binding="{Binding Source, Mode=OneWay}" Width="190"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+
+                    <Grid Visibility="{Binding IsGenericDataModule, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="{Binding SelectedModule.Title, Mode=OneWay}" FontSize="22" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding SelectedModule.Description, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding Rows}" IsReadOnly="True" AutoGenerateColumns="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Date" Binding="{Binding DateText, Mode=OneWay}" Width="100"/>
+                                <DataGridTextColumn Header="Reference" Binding="{Binding Reference, Mode=OneWay}" Width="145"/>
+                                <DataGridTextColumn Header="Voucher" Binding="{Binding VoucherType, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Authority ID" Binding="{Binding AuthorityId, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Party / Ledger" Binding="{Binding PartyOrLedger, Mode=OneWay}" Width="190"/>
+                                <DataGridTextColumn Header="Details" Binding="{Binding Details, Mode=OneWay}" Width="3*"/>
+                                <DataGridTextColumn Header="Debit" Binding="{Binding Debit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Credit" Binding="{Binding Credit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Amount" Binding="{Binding Amount, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="140"/>
+                                <DataGridTextColumn Header="Source" Binding="{Binding Source, Mode=OneWay}" Width="190"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+
+                    <Grid Visibility="{Binding IsSources, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                            <TextBlock Text="Sources &amp; Links" FontSize="22" FontWeight="SemiBold"/>
+                            <TextBlock Text="Audit source ownership is separate. Use the controls below only when you intentionally want this Audit client to see one Accounting client or one cached Tally company." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <WrapPanel Grid.Row="1" Margin="0,0,0,12">
+                            <Button Content="Link Accounting Client" Command="{Binding LinkAccountingCommand}" Padding="12,7" Margin="0,0,8,8"/>
+                            <Button Content="Remove Accounting Link" Command="{Binding ClearAccountingLinkCommand}" Padding="12,7" Margin="0,0,18,8"/>
+                            <Button Content="Link Tally Company" Command="{Binding LinkTallyCommand}" Padding="12,7" Margin="0,0,8,8"/>
+                            <Button Content="Remove Tally Link" Command="{Binding ClearTallyLinkCommand}" Padding="12,7" Margin="0,0,8,8"/>
+                        </WrapPanel>
+                        <DataGrid Grid.Row="2" ItemsSource="{Binding SourceRows}" IsReadOnly="True" AutoGenerateColumns="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Audit Authority" Binding="{Binding Source, Mode=OneWay}" Width="190"/>
+                                <DataGridTextColumn Header="Selection / Identity" Binding="{Binding PathOrAuthority, Mode=OneWay}" Width="2.2*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="150"/>
+                                <DataGridTextColumn Header="Behavior" Binding="{Binding Detail, Mode=OneWay}" Width="3*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+
+                    <Border Visibility="{Binding IsClientReconciliation, Converter={StaticResource BooleanToVisibilityConverter}}" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="22">
+                        <StackPanel>
+                            <TextBlock Text="Client Reconciliation" FontSize="24" FontWeight="SemiBold"/>
+                            <TextBlock Text="Independent Audit reconciliation foundation" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,14"/>
+                            <TextBlock TextWrapping="Wrap" Text="This reconciliation area belongs to the selected Audit client. Client ledgers, external ledgers, one-to-many/many-to-one grouping and audit conclusions will be stored in Audit. Accounting data may be used as evidence only after an explicit link; Audit decisions do not alter Accounting automatically."/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Visibility="{Binding IsSettings, Converter={StaticResource BooleanToVisibilityConverter}}" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="22">
+                        <StackPanel>
+                            <TextBlock Text="Audit Settings" FontSize="24" FontWeight="SemiBold"/>
+                            <TextBlock Text="Audit settings are intentionally separate from Accounting settings." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,14"/>
+                            <TextBlock TextWrapping="Wrap" Text="The Audit workspace now has its own client identity, current-client selection and link state. Source-folder registration, audit procedures, sampling, materiality and audit-only preferences will be added here without changing Accounting configuration."/>
+                            <Button Content="Archive Current Audit Client" Command="{Binding ArchiveAuditClientCommand}" Padding="14,8" HorizontalAlignment="Left" Margin="0,18,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

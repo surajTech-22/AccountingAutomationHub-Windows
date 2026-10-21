@@ -1,0 +1,1366 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.BankingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+             xmlns:behaviors="clr-namespace:AccountingAutomationHub.Desktop.Behaviors"
+             MinWidth="900" MinHeight="620">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <Style x:Key="BankingSummaryButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <!-- Do not let the Windows Button theme paint the summary card blue when
+                 it is hovered/pressed/selected. The card itself owns all visuals. -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="BankingMappingProgressFillStyle" TargetType="ProgressBar">
+            <Setter Property="Background" Value="#ECFDF3"/>
+            <Setter Property="Foreground" Value="#86EFAC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid x:Name="PART_Track" Background="{TemplateBinding Background}">
+                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Use the normal application ComboBox chrome.  The previous release wrapped a
+             custom rounded surface inside a default ToggleButton, which produced the
+             double-boxed filter appearance visible on Windows. -->
+        <Style x:Key="FlatFilterComboBoxStyle" TargetType="{x:Type ComboBox}">
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="MinWidth" Value="82"/>
+            <Setter Property="Padding" Value="7,2"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#C8D1DE"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="IsEditable" Value="False"/>
+            <Setter Property="IsTextSearchEnabled" Value="True"/>
+            <Setter Property="MaxDropDownHeight" Value="320"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <EventSetter Event="PreviewMouseWheel" Handler="FilterComboBox_PreviewMouseWheel"/>
+            <EventSetter Event="PreviewKeyDown" Handler="FilterComboBox_PreviewKeyDown"/>
+        </Style>
+
+        <Style x:Key="FilterableDataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <Grid ClipToBounds="True" MinWidth="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0"
+                                       Text="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                       FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Stretch" TextAlignment="Right"
+                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                       Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,2">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <DockPanel Grid.Row="1" LastChildFill="True" ClipToBounds="True">
+                                <Button DockPanel.Dock="Right" Content="▾" Width="19" Height="20" Padding="0" Margin="5,0,0,0"
+                                        Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Focusable="False" Cursor="Hand" Click="GridHeaderFilter_Click" ToolTip="Filter by values in this column"/>
+                                <TextBlock Text="{Binding}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+                        </Grid>
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MappingSelectorStyle" TargetType="{x:Type controls:SuggestTextBox}">
+            <Setter Property="MinHeight" Value="31"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="Padding" Value="7,2"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#C9D4E2"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="LedgerMappingCellStyle" TargetType="DataGridCell">
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="BorderBrush" Value="#E3E9F1"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#EAF2FB"/>
+                    <Setter Property="Foreground" Value="#1F2937"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="#4A86C5"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Margin="20,16,20,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Banking" FontSize="24" FontWeight="SemiBold"/>
+                <TextBlock Text="Excel, CSV, PDF and scanned/image Bank Statements, account balances, transfer reconciliation, ledger mapping and workbook authority reports"
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
+            </StackPanel>
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right">
+                <Button Content="Import Excel / CSV" Command="{Binding ImportBankStatementsCommand}" Margin="5" Padding="14,8"/>
+                <Button Content="Import PDF / Images (Advanced OCR)" Command="{Binding ImportPdfStatementsCommand}" Margin="5" Padding="14,8"/>
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="5" Padding="14,8"/>
+            </WrapPanel>
+        </Grid>
+
+        <UniformGrid Grid.Row="1" Columns="5" Margin="20,0,20,10">
+            <Button Command="{Binding OpenBankAccountsCommand}" Style="{StaticResource BankingSummaryButtonStyle}" ToolTip="Open bank rename and Master ledger details">
+                <Border Margin="4" Padding="12" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="8">
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock Text="{Binding AccountCount, Mode=OneWay}" FontSize="22"/>
+                            <TextBlock Text="Bank Accounts" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock Text="{Binding MissingStatementPeriodCount, Mode=OneWay, StringFormat={}{0} missing period(s)}"
+                                       FontSize="9" Foreground="#B91C1C" Margin="0,3,0,0"
+                                       Visibility="{Binding HasBankAccountPeriodWarnings, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                            <TextBlock Text="{Binding BankAccountPeriodWarningSummaryText, Mode=OneWay}"
+                                       FontSize="8" Foreground="#B91C1C" Margin="0,2,24,0" TextWrapping="Wrap" MaxHeight="34"
+                                       Visibility="{Binding HasBankAccountPeriodWarnings, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        </StackPanel>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Top" Width="18" Height="18" CornerRadius="9"
+                                Background="#FEE2E2" BorderBrush="#DC2626" BorderThickness="1"
+                                ToolTip="{Binding BankAccountPeriodWarningText}"
+                                Visibility="{Binding HasBankAccountPeriodWarnings, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Text="!" Foreground="#B91C1C" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Button>
+            <Button Command="{Binding OpenBankStatementCommand}" Style="{StaticResource BankingSummaryButtonStyle}" ToolTip="Open Bank Statement">
+                <Border Margin="4" Padding="12" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="8">
+                    <StackPanel><TextBlock Text="{Binding TransactionCount, Mode=OneWay}" FontSize="22"/><TextBlock Text="Transactions" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                </Border>
+            </Button>
+            <Button Command="{Binding OpenLedgerMappingCommand}" Style="{StaticResource BankingSummaryButtonStyle}" ToolTip="Open Ledger Mapping - Pending / Completed" Visibility="{Binding CanViewLedgerMapping, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Border Margin="4" Padding="0" BorderBrush="#B7E4C7" BorderThickness="1" CornerRadius="8" ClipToBounds="True" Background="#F1F5F9" ToolTip="Soft neutral = unresolved; light green = Ready; stronger green = completed/mapped transaction coverage.">
+                    <Grid>
+                        <!-- Three-state mapping progress: soft neutral = unresolved base,
+                             light green = Ready (including mapped), stronger green = Mapped.
+                             The dark mapped layer sits on top of the ready layer. -->
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding MappingReadyPercent, Mode=OneWay}"
+                                     Style="{StaticResource BankingMappingProgressFillStyle}" IsHitTestVisible="False"
+                                     Background="#F1F5F9" Foreground="#DCFCE7"
+                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding MappingCompletionPercent, Mode=OneWay}"
+                                     Style="{StaticResource BankingMappingProgressFillStyle}" IsHitTestVisible="False"
+                                     Background="Transparent" Foreground="#86EFAC"
+                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                        <StackPanel Margin="12">
+                            <TextBlock Text="{Binding PendingMappingCount, Mode=OneWay}" FontSize="22" FontWeight="SemiBold"/>
+                            <TextBlock Text="Pending Mapping" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                <TextBlock Text="{Binding CompletedMappingCount, Mode=OneWay}" FontWeight="SemiBold"/>
+                                <TextBlock Text=" completed" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <TextBlock Text="  •  "/>
+                                <TextBlock Text="{Binding ReadyMappingCount, Mode=OneWay}" FontWeight="SemiBold" Foreground="#15803D"/>
+                                <TextBlock Text=" ready" Foreground="#15803D"/>
+                            </StackPanel>
+                            <TextBlock FontSize="10" Foreground="#15803D">
+                                <Run Text="{Binding MappingCompletionPercent, Mode=OneWay, StringFormat={}{0:0}% mapped}"/>
+                                <Run Text=" • "/>
+                                <Run Text="{Binding MappingReadyPercent, Mode=OneWay, StringFormat={}{0:0}% ready/mapped}"/>
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Button>
+            <Button Command="{Binding OpenBalanceReviewCommand}" Style="{StaticResource BankingSummaryButtonStyle}" ToolTip="Open Balance Review">
+                <Border Margin="4" Padding="12" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="8">
+                    <StackPanel><TextBlock Text="{Binding ReconciliationIssueCount, Mode=OneWay}" FontSize="22"/><TextBlock Text="Balance Review" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                </Border>
+            </Button>
+            <Border x:Name="BankBalanceSnapshotBorder" Margin="4" Padding="9" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="8" Focusable="True"
+                    Loaded="BankBalanceSnapshot_Loaded" PreviewKeyDown="BankBalanceSnapshot_PreviewKeyDown" PreviewMouseWheel="BankBalanceSnapshot_PreviewMouseWheel"
+                    ToolTip="Balance Snapshot. Use the arrows, mouse wheel, or Left/Right/Home/End keys here to move between bank accounts.">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="BankBalancePreviousButton" Grid.Column="0" Content="&#x25C0;" Width="24" Height="22" Padding="0" Margin="0,0,5,0"
+                                Click="BankBalancePrevious_Click" ToolTip="Previous bank account"/>
+                        <TextBlock Grid.Column="1" Text="Balance Snapshot" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="BankBalanceAccountPositionText" Grid.Column="2" MinWidth="34" TextAlignment="Right" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" Margin="4,0"/>
+                        <Button x:Name="BankBalanceNextButton" Grid.Column="3" Content="&#x25B6;" Width="24" Height="22" Padding="0" Margin="5,0,0,0"
+                                Click="BankBalanceNext_Click" ToolTip="Next bank account"/>
+                    </Grid>
+                    <TextBlock Text="{Binding BankBalanceAccountName}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,4"/>
+                    <Grid Margin="0,1,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Padding="5" BorderBrush="#E1E7EF" BorderThickness="1" CornerRadius="4">
+                            <StackPanel>
+                                <TextBlock Text="BALANCE VERIFICATION" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <TextBlock FontSize="9" Margin="0,2,0,0"><Run Text="Tally OB  "/><Run Text="{Binding BankTallyOpeningBalanceText, Mode=OneWay}" FontWeight="SemiBold"/></TextBlock>
+                                <TextBlock FontSize="9" Margin="0,1,0,0"><Run Text="Imported Calc CB  "/><Run Text="{Binding BankCalculatedClosingBalanceText, Mode=OneWay}" FontWeight="SemiBold"/></TextBlock>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Padding="5" BorderBrush="#E1E7EF" BorderThickness="1" CornerRadius="4">
+                            <StackPanel>
+                                <TextBlock Text="STATEMENT ACTUALS" FontSize="8" FontWeight="Bold" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <TextBlock FontSize="9" Margin="0,2,0,0"><Run Text="Actual OB  "/><Run Text="{Binding BankOriginalOpeningBalanceText, Mode=OneWay}" FontWeight="SemiBold"/></TextBlock>
+                                <TextBlock FontSize="9" Margin="0,1,0,0"><Run Text="Actual CB  "/><Run Text="{Binding BankOriginalClosingBalanceText, Mode=OneWay}" FontWeight="SemiBold"/></TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <TextBlock FontSize="9" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"><Run Text="Movement  "/><Run Text="{Binding BankMovementSummaryText, Mode=OneWay}"/></TextBlock>
+                    <TextBlock Text="{Binding BankBalanceStatus}" FontSize="9" FontWeight="SemiBold" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <Grid Grid.Row="2" Margin="20,0,20,8">
+            <TabControl x:Name="BankingTabs" Margin="0"
+                    SelectedIndex="{Binding SelectedBankingTabIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                    SelectionChanged="BankingTabs_SelectionChanged">
+            <TabItem Header="Bank Statement">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <WrapPanel Margin="0,0,0,8" VerticalAlignment="Center">
+                        <Button Content="Save Selected Transaction" Command="{Binding SaveTransactionCommand}" Margin="0,0,8,0" Padding="12,7"/>
+                        <Button Content="Manual Cash Contra" Click="ManualCashContra_Click" Margin="0,0,8,0" Padding="12,7"
+                                ToolTip="Select one or more Bank Statement rows. Opens a separate review panel before applying Contra."/>
+                        <Button Content="Manual Inter-Bank Link" Click="ManualInterbankLink_Click" Margin="0,0,8,0" Padding="12,7"
+                                ToolTip="Select exactly two rows from different bank accounts with the same date and amount. Narration is intentionally ignored."/>
+                        <Button Content="Advanced Match" Click="AdvancedReconciliation_Click" Margin="0,0,10,0" Padding="12,7"
+                                ToolTip="Preview and commit 1→many, many→1, partial or adjusted reconciliation groups using the selected Bank Statement rows."/>
+                        <Button Content="Export Suspense" Command="{Binding ExportSuspenseCommand}" Margin="0,0,8,0" Padding="12,7"
+                                ToolTip="Export active empty/Suspense Bank rows with permanent transaction IDs for bulk Ledger resolution."/>
+                        <Button Content="Import Suspense" Command="{Binding ImportSuspenseCommand}" Margin="0,0,10,0" Padding="12,7"
+                                ToolTip="Import only the yellow Ledger values from an AAH Suspense workbook. Transaction values are never overwritten."/>
+                        <CheckBox Content="Include archived transfer counterparts" IsChecked="{Binding IncludeArchivedTransfers}" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                        <Button Click="EmptyLedgerExport_Click" Margin="0,0,18,0" Padding="12,7"
+                                ToolTip="Open the Empty Ledger Export panel. Existing mapped Ledgers are never overwritten.">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Empty Ledger Export"/>
+                                <TextBlock Text="  •  "/>
+                                <TextBlock Text="{Binding EmptyLedgerFullStatementCount, Mode=OneWay, StringFormat={}{0:N0} empty}" FontWeight="SemiBold"/>
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="Dates" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <RadioButton Content="Full Statement" GroupName="BankStatementDateScope" Style="{StaticResource SegmentedRadioButtonStyle}"
+                                     IsChecked="{Binding IsBankStatementFullStatement, Mode=TwoWay}" Margin="0,0,3,0"/>
+                        <RadioButton Content="Tally Export Dates" GroupName="BankStatementDateScope" Style="{StaticResource SegmentedRadioButtonStyle}"
+                                     IsChecked="{Binding IsBankStatementTallyExportDates, Mode=TwoWay}" Margin="0,0,14,0"/>
+                        <TextBlock Text="Visible" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding BankStatementVisibleCount, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,14,0"/>
+                        <TextBlock Text="Filter" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding BankStatementFilterColumns}"
+                                  SelectedItem="{Binding BankStatementFilterColumn, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  Style="{StaticResource FlatFilterComboBoxStyle}" Width="135" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding BankStatementFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="230" MinHeight="28" Padding="7,3" Margin="0,0,6,0"
+                                 VerticalContentAlignment="Center" ToolTip="Contains filter for the selected Bank Statement column"/>
+                        <Button Content="Clear Filter" Click="BankStatementClearFilter_Click" Padding="10,5" Margin="0,0,6,0"/>
+                        <Button Content="Clear Sort" Click="BankStatementClearSort_Click" Padding="10,5" Margin="0,0,6,0"/>
+                        <Button Content="Clear Sort &amp; Filter" Click="BankStatementClearSortFilter_Click" Padding="10,5"/>
+                    </WrapPanel>
+                    <DataGrid x:Name="BankStatementGrid"
+                              Grid.Row="1"
+                              ItemsSource="{Binding FilteredTransactions}"
+                              SelectedItem="{Binding SelectedTransaction}"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              IsReadOnly="False"
+                              SelectionUnit="FullRow"
+                              SelectionMode="Extended"
+                              ColumnHeaderStyle="{StaticResource FilterableDataGridColumnHeaderStyle}"
+                              FrozenColumnCount="1"
+                              EnableRowVirtualization="True"
+                              EnableColumnVirtualization="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling"
+                              ScrollViewer.CanContentScroll="True"
+                              Loaded="BankStatementGrid_Loaded"
+                              BeginningEdit="BankStatementGrid_BeginningEdit"
+                              RowEditEnding="BankStatementGrid_RowEditEnding">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" IsReadOnly="True" Width="Auto" MinWidth="95" MaxWidth="125"/>
+                            <DataGridTextColumn Header="Narration" Binding="{Binding Narration, Mode=OneWay}" IsReadOnly="True" Width="*" MinWidth="300"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding Debit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="Auto" MinWidth="105" MaxWidth="145"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding Credit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="Auto" MinWidth="105" MaxWidth="145"/>
+                            <DataGridTextColumn Header="Running Balance" Binding="{Binding RunningBalance, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="Auto" MinWidth="125" MaxWidth="165"/>
+                            <DataGridTemplateColumn Header="Mode" IsReadOnly="True" Width="Auto" MinWidth="110" MaxWidth="145">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding Mode, Mode=OneWay}" Padding="4,2"/></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding DataContext.BankModes, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                  SelectedItem="{Binding Mode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Ledger" Width="Auto" MinWidth="190" MaxWidth="360">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding LedgerName, Mode=OneWay}" Padding="4,2"/></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <controls:SearchableComboBox SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                             Text="{Binding LedgerName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                             AllowCustomText="False" OpenOnFocus="True" EnableMouseWheelSelection="False"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Bank" Binding="{Binding BankAccountName, Mode=OneWay}" IsReadOnly="True" Width="Auto" MinWidth="240" MaxWidth="420"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <StackPanel Grid.Row="2" Margin="2,8,0,0">
+                        <TextBlock Text="{Binding BankStatementDateScopeText, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                        <Expander Header="Last Import Review" IsExpanded="False">
+                            <DataGrid ItemsSource="{Binding ImportIssues}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="170" Margin="0,6,0,4">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Code" Binding="{Binding ErrorCodeText, Mode=OneWay}" Width="65"/>
+                                    <DataGridTextColumn Header="Source File" Binding="{Binding SourceFile, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Stage" Binding="{Binding Stage, Mode=OneWay}" Width="145"/>
+                                    <DataGridTextColumn Header="Friendly Error" Binding="{Binding FriendlyMessage, Mode=OneWay}" Width="180"/>
+                                    <DataGridTextColumn Header="Technical Details" Binding="{Binding TechnicalMessage, Mode=OneWay}" Width="*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Expander>
+                        <TextBlock Text="The visible Bank Statement remains Date, Narration, Debit, Credit, Mode, Ledger and Bank. Source evidence stays in the named authority reports."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Accounts &amp; Statements">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="0.8*" MinWidth="300"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="1.7*" MinWidth="560"/>
+                    </Grid.ColumnDefinitions>
+
+                    <GroupBox Header="Bank Accounts">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <Border Margin="8" Padding="10" Background="#F5F8FC" CornerRadius="6">
+                                <TextBlock Text="Select the Bank Accounts summary card to open the separate rename and Master ledger panel."
+                                           Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                            </Border>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                                      AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionUnit="FullRow" Margin="8,0,8,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Bank" Binding="{Binding BankName, Mode=OneWay}" Width="*" MinWidth="150"/>
+                                    <DataGridTextColumn Header="Type" Binding="{Binding AccountType, Mode=OneWay}" Width="70"/>
+                                    <DataGridTextColumn Header="Account" Binding="{Binding AccountNumber, Mode=OneWay}" Width="140"/>
+                                    <DataGridTextColumn Header="Master Ledger" Binding="{Binding LedgerName, Mode=OneWay}" Width="220"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </GroupBox>
+
+                    <GroupBox Grid.Column="2" Header="Statement Registry and Opening/Closing Balance Verification">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <WrapPanel Margin="8">
+                                <Button Content="Use Suggested Opening" Command="{Binding UseSuggestedOpeningCommand}" Margin="0,0,8,0" Padding="10,6"/>
+                                <Button Content="Verify &amp; Save Balances" Command="{Binding VerifyStatementCommand}" Margin="0,0,8,0" Padding="10,6"/>
+                                <Button Content="Skip Balance Review" Command="{Binding SkipStatementCommand}" Margin="0,0,8,0" Padding="10,6"/>
+                                <Button Content="Delete Selected Statement" Command="{Binding DeleteStatementCommand}" Padding="10,6"/>
+                            </WrapPanel>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding Statements}" SelectedItem="{Binding SelectedStatement}" AutoGenerateColumns="False" IsReadOnly="False" CanUserAddRows="False" Margin="8,0,8,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="File" Binding="{Binding SourceFile, Mode=OneWay}" IsReadOnly="True" Width="*" MinWidth="190"/>
+                                    <DataGridTextColumn Header="From" Binding="{Binding PeriodFrom, Mode=OneWay, StringFormat=dd.MM.yyyy}" IsReadOnly="True" Width="95"/>
+                                    <DataGridTextColumn Header="To" Binding="{Binding PeriodTo, Mode=OneWay, StringFormat=dd.MM.yyyy}" IsReadOnly="True" Width="95"/>
+                                    <DataGridTextColumn Header="Opening (Books +Dr/-Cr)" Binding="{Binding OpeningBalance, StringFormat=N2, UpdateSourceTrigger=PropertyChanged}" Width="110"/>
+                                    <DataGridTextColumn Header="Closing (Books +Dr/-Cr)" Binding="{Binding ClosingBalance, StringFormat=N2, UpdateSourceTrigger=PropertyChanged}" Width="110"/>
+                                    <DataGridTextColumn Header="Debit" Binding="{Binding TotalDebit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="105"/>
+                                    <DataGridTextColumn Header="Credit" Binding="{Binding TotalCredit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="105"/>
+                                    <DataGridTextColumn Header="Rows" Binding="{Binding TransactionCount, Mode=OneWay}" IsReadOnly="True" Width="65"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding ReconciliationStatus, Mode=OneWay}" IsReadOnly="True" Width="170"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Reconciliation &amp; Transfers">
+                <Grid Margin="8">
+                    <TabControl SelectedIndex="{Binding SelectedReconciliationViewIndex, Mode=TwoWay}">
+                        <TabItem Header="Balance Review">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <Border Padding="10" Margin="0,0,0,8" Background="#F5F8FC" CornerRadius="8" BorderBrush="#D8E0EB" BorderThickness="1">
+                                    <DockPanel LastChildFill="False">
+                                        <StackPanel DockPanel.Dock="Left">
+                                            <TextBlock Text="Balance Review" FontSize="18" FontWeight="SemiBold"/>
+                                            <TextBlock Text="Select a statement summary to open its balance detail panel." Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                        </StackPanel>
+                                        <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                                            <Button Content="Reconcile Balances" Command="{Binding ReconcileCommand}" Margin="8,0,0,0" Padding="12,7"/>
+                                        </WrapPanel>
+                                    </DockPanel>
+                                </Border>
+
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding ReconciliationRows}" SelectedItem="{Binding SelectedReconciliationRow, Mode=TwoWay}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" SelectionUnit="FullRow">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Account" Binding="{Binding AccountName, Mode=OneWay}" Width="*" MinWidth="220"/>
+                                        <DataGridTextColumn Header="Period" Binding="{Binding PeriodLabel, Mode=OneWay}" Width="190"/>
+                                        <DataGridTextColumn Header="Suggested Opening (Books)" Binding="{Binding SuggestedOpeningBalanceText, Mode=OneWay}" Width="150"/>
+                                        <DataGridTextColumn Header="Opening (Books)" Binding="{Binding OpeningBalanceText, Mode=OneWay}" Width="135"/>
+                                        <DataGridTextColumn Header="Books Debit (Stmt Credit)" Binding="{Binding BooksDebitMovements, Mode=OneWay, StringFormat=N2}" Width="155"/>
+                                        <DataGridTextColumn Header="Books Credit (Stmt Debit)" Binding="{Binding BooksCreditMovements, Mode=OneWay, StringFormat=N2}" Width="155"/>
+                                        <DataGridTextColumn Header="Expected Closing (Books)" Binding="{Binding ExpectedClosingBalanceText, Mode=OneWay}" Width="165"/>
+                                        <DataGridTextColumn Header="Statement Closing (Books)" Binding="{Binding StatementClosingBalanceText, Mode=OneWay}" Width="165"/>
+                                        <DataGridTextColumn Header="Difference" Binding="{Binding Difference, Mode=OneWay, StringFormat=N2}" Width="105"/>
+                                        <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="170"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock Grid.Row="2" Text="{Binding ChainStatusText, Mode=OneWay}" TextWrapping="Wrap" Margin="2,8" Foreground="{DynamicResource TextSecondaryBrush}"/>
+
+                                <Border Grid.RowSpan="3" Panel.ZIndex="20" HorizontalAlignment="Right" Width="540" Margin="18"
+                                        Background="White" BorderBrush="#C9D4E3" BorderThickness="1" CornerRadius="10"
+                                        Visibility="{Binding IsBalanceReviewDetailOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="2" Opacity="0.24"/></Border.Effect>
+                                    <Grid Margin="18">
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <DockPanel LastChildFill="False">
+                                            <StackPanel DockPanel.Dock="Left">
+                                                <TextBlock Text="Balance Review Details" FontSize="20" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding SelectedReconciliationRow.AccountName, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                                            </StackPanel>
+                                            <Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseBalanceReviewDetailCommand}" Padding="12,6"/>
+                                        </DockPanel>
+
+                                        <Border Grid.Row="1" Margin="0,14,0,12" Padding="12" Background="#F5F8FC" CornerRadius="8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <TextBlock Text="Period" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Grid.Column="1" Text="{Binding SelectedReconciliationRow.PeriodLabel, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Row="1" Text="Suggested Opening (Books)" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedReconciliationRow.SuggestedOpeningBalanceText, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Row="2" Text="Expected Closing (Books)" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedReconciliationRow.ExpectedClosingBalanceText, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Row="3" Text="Statement Closing (Books)" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedReconciliationRow.StatementClosingBalanceText, Mode=OneWay}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Row="4" Text="Difference / Status" Foreground="{DynamicResource TextSecondaryBrush}"/><StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal"><TextBlock Text="{Binding SelectedReconciliationRow.Difference, Mode=OneWay, StringFormat=N2}" FontWeight="SemiBold"/><TextBlock Text="  •  "/><TextBlock Text="{Binding SelectedReconciliationRow.Status, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                                            </Grid>
+                                        </Border>
+
+                                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                                            <StackPanel>
+                                                <TextBlock Text="Statement" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                                <TextBox Text="{Binding SelectedStatement.SourceFile, Mode=OneWay}" IsReadOnly="True" Margin="0,0,0,8"/>
+                                                <TextBlock Text="Opening Balance (Books: positive Dr / negative Cr)" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                <TextBox Text="{Binding SelectedStatement.OpeningBalance, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Margin="0,4,0,8"/>
+                                                <TextBlock Text="Closing Balance (Books: positive Dr / negative Cr)" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                <TextBox Text="{Binding SelectedStatement.ClosingBalance, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Margin="0,4,0,8"/>
+                                                <TextBlock Text="Books Debit / Credit movements" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                <TextBlock Margin="0,4,0,0"><Run Text="{Binding SelectedReconciliationRow.BooksDebitMovements, Mode=OneWay, StringFormat=N2}"/><Run Text="  /  "/><Run Text="{Binding SelectedReconciliationRow.BooksCreditMovements, Mode=OneWay, StringFormat=N2}"/></TextBlock>
+                                            </StackPanel>
+                                        </ScrollViewer>
+
+                                        <WrapPanel Grid.Row="3" Margin="0,14,0,0">
+                                            <Button Content="Use Suggested Opening" Command="{Binding UseSuggestedOpeningCommand}" Margin="0,0,8,8" Padding="10,6"/>
+                                            <Button Content="Verify &amp; Save" Command="{Binding VerifyStatementCommand}" Margin="0,0,8,8" Padding="10,6"/>
+                                            <Button Content="Skip" Command="{Binding SkipStatementCommand}" Margin="0,0,8,8" Padding="10,6"/>
+                                            <Button Content="Delete Statement" Command="{Binding DeleteStatementCommand}" Margin="0,0,0,8" Padding="10,6"/>
+                                        </WrapPanel>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Transfer Matches">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <Border Padding="10" Margin="0,0,0,8" Background="#F5F8FC" CornerRadius="8" BorderBrush="#D8E0EB" BorderThickness="1">
+                                    <DockPanel LastChildFill="False">
+                                        <StackPanel DockPanel.Dock="Left"><TextBlock Text="Transfer Reconciliation" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Exact Inter-Bank pairs from imported statements and converted live Tally Bank/OD/Secured Loan transactions. For Imported↔Tally, the existing Inter-Bank result is applied to the same Tally MASTERID as Contra and live-verified; the imported duplicate is then retired and exact closing-balance reconciliation is the final step. If that final balance gate fails, the imported row is restored." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/></StackPanel>
+                                        <Button DockPanel.Dock="Right" Content="Match Exact Interbank Transfers" Command="{Binding MatchTransfersCommand}" Padding="12,7"/>
+                                    </DockPanel>
+                                </Border>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding TransferMatches}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Match ID" Binding="{Binding MatchId, Mode=OneWay}" Width="190"/>
+                                        <DataGridTextColumn Header="Date" Binding="{Binding MatchDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" Width="95"/>
+                                        <DataGridTextColumn Header="Transfer Amount" Binding="{Binding Amount, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                        <DataGridTextColumn Header="Bank Charge" Binding="{Binding ChargeAmount, Mode=OneWay, StringFormat=N2}" Width="100"/>
+                                        <DataGridTextColumn Header="Charge Rule" Binding="{Binding ChargeRule, Mode=OneWay}" Width="220"/>
+                                        <DataGridTextColumn Header="Reference" Binding="{Binding ReferenceNumber, Mode=OneWay}" Width="150"/>
+                                        <DataGridTextColumn Header="Origin" Binding="{Binding MatchOrigin, Mode=OneWay}" Width="170"/>
+                                        <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="210"/>
+                                        <DataGridTextColumn Header="Tally Bank" Binding="{Binding TallyBankLedger, Mode=OneWay}" Width="190"/>
+                                        <DataGridTextColumn Header="Reason" Binding="{Binding Reason, Mode=OneWay}" Width="*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Tally Bank Conversion">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <Border Padding="10" Margin="0,0,0,8" Background="#F5F8FC" CornerRadius="8" BorderBrush="#D8E0EB" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="Tally Bank Transactions → Inter-Bank Reconciliation" FontSize="18" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Live Tally Bank/OD/Secured-Loan postings are synced to the exact Inter-Bank transaction contract: Date, Bank Ledger, Debit, Credit, Narration, Reference and stable Tally source ID. They enter the same Inter-Bank candidate pool as uploaded Bank Statement rows. Tally Bank Debit becomes Bank Statement Credit; Tally Bank Credit becomes Bank Statement Debit. Tally-to-Tally pairs are ignored. For an Imported-to-Tally match, the existing Inter-Bank output is applied to that same Tally voucher as Contra and live-verified; the imported duplicate is retired and exact closing-balance reconciliation runs last. A failed final balance gate restores the imported row." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding TallyInterbankVerificationStatus, Mode=OneWay}" Margin="0,5,0,0" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding TallyInterbankVerificationRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" SelectionUnit="FullRow">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="210"/>
+                                        <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" Width="95"/>
+                                        <DataGridTextColumn Header="Bank Ledger" Binding="{Binding ConvertedBankLedger, Mode=OneWay}" Width="220"/>
+                                        <DataGridTextColumn Header="Debit" Binding="{Binding ConvertedDebitAmount, Mode=OneWay, StringFormat={}{0:N2}}" Width="120"/>
+                                        <DataGridTextColumn Header="Credit" Binding="{Binding ConvertedCreditAmount, Mode=OneWay, StringFormat={}{0:N2}}" Width="120"/>
+                                        <DataGridTextColumn Header="Narration" Binding="{Binding OriginalNarration, Mode=OneWay}" Width="300"/>
+                                        <DataGridTextColumn Header="Reference" Binding="{Binding OriginalReference, Mode=OneWay}" Width="160"/>
+                                        <DataGridTextColumn Header="Tally Source ID" Binding="{Binding TransferMatchId, Mode=OneWay}" Width="220"/>
+                                        <DataGridTextColumn Header="Tally Master ID" Binding="{Binding TallyMasterId, Mode=OneWay}" Width="110"/>
+                                        <DataGridTextColumn Header="Voucher Type" Binding="{Binding OriginalVoucherType, Mode=OneWay}" Width="105"/>
+                                        <DataGridTextColumn Header="Conversion / Match Evidence" Binding="{Binding MatchEvidence, Mode=OneWay}" Width="*" MinWidth="340"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="OB Verification Dashboard">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="1.35*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.65*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.65*"/>
+                    </Grid.RowDefinitions>
+
+                    <WrapPanel Margin="0,0,0,8">
+                        <TextBlock Text="Filter Type" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding ObFilterTypes}" SelectedItem="{Binding ObFilterType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" Width="150" Margin="0,0,12,0" ToolTip="Mouse wheel does not change this filter; use the list or keyboard"/>
+                        <TextBlock Text="Filter Value" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding ObFilterValues}" SelectedItem="{Binding ObFilterValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" Width="260" Margin="0,0,18,0" ToolTip="Use the list, arrows, or Page Up/Page Down"/>
+                        <TextBlock Text="Pending : " FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding PendingObCount, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="Verified : " FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding VerifiedObCount, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="Skipped : " FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SkippedObCount, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,6"/>
+                    </WrapPanel>
+
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding PendingObVerificationRows}" SelectedItem="{Binding SelectedObVerificationRow}"
+                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" FrozenColumnCount="2">
+                        <DataGrid.RowStyle>
+                            <Style TargetType="DataGridRow">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Status}" Value="INVALID"><Setter Property="Background" Value="#FFFFB4B4"/></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGrid.RowStyle>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Client Name" Binding="{Binding ClientName, Mode=OneWay}" IsReadOnly="True" Width="150"/>
+                            <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber, Mode=OneWay}" IsReadOnly="True" Width="220"/>
+                            <DataGridTextColumn Header="File Name" Binding="{Binding FileName, Mode=OneWay}" IsReadOnly="True" Width="300"/>
+                            <DataGridTextColumn Header="OB Date" Binding="{Binding ObDate, Mode=OneWay, StringFormat=dd-MMM-yyyy}" IsReadOnly="True" Width="110"/>
+                            <DataGridTextColumn Header="Opening Amount" Binding="{Binding EnteredOpeningAmount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Width="125"/>
+                            <DataGridComboBoxColumn Header="Dr/Cr" SelectedItemBinding="{Binding OpeningBalanceNature, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70">
+                                <DataGridComboBoxColumn.ItemsSource>
+                                    <x:Array Type="{x:Type sys:String}"><sys:String>Dr</sys:String><sys:String>Cr</sys:String></x:Array>
+                                </DataGridComboBoxColumn.ItemsSource>
+                            </DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" IsReadOnly="True" Width="120"/>
+                            <DataGridTemplateColumn Header="Verify" Width="75">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Verify" Click="ObVerify_Click" Padding="8,3"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Skip" Width="70">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Skip" Click="ObSkip_Click" Padding="8,3"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Grid.Row="2" Text="SKIPPED" FontWeight="Bold" Margin="4,8,0,4"/>
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding SkippedObVerificationRows}" SelectedItem="{Binding SelectedObVerificationRow}"
+                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" FrozenColumnCount="2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Client Name" Binding="{Binding ClientName, Mode=OneWay}" IsReadOnly="True" Width="150"/>
+                            <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber, Mode=OneWay}" IsReadOnly="True" Width="220"/>
+                            <DataGridTextColumn Header="File Name" Binding="{Binding FileName, Mode=OneWay}" IsReadOnly="True" Width="300"/>
+                            <DataGridTextColumn Header="OB Date" Binding="{Binding ObDate, Mode=OneWay, StringFormat=dd-MMM-yyyy}" IsReadOnly="True" Width="110"/>
+                            <DataGridTextColumn Header="Opening Amount" Binding="{Binding EnteredOpeningAmount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Width="125"/>
+                            <DataGridComboBoxColumn Header="Dr/Cr" SelectedItemBinding="{Binding OpeningBalanceNature, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70">
+                                <DataGridComboBoxColumn.ItemsSource>
+                                    <x:Array Type="{x:Type sys:String}"><sys:String>Dr</sys:String><sys:String>Cr</sys:String></x:Array>
+                                </DataGridComboBoxColumn.ItemsSource>
+                            </DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" IsReadOnly="True" Width="120"/>
+                            <DataGridTemplateColumn Header="Verify" Width="75">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="Verify" Click="ObVerify_Click" Padding="8,3"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <WrapPanel Grid.Row="4" Margin="4,8,0,4">
+                        <TextBlock Text="VERIFIED (" FontWeight="Bold"/>
+                        <TextBlock Text="{Binding VerifiedObCount, Mode=OneWay}" FontWeight="Bold"/>
+                        <TextBlock Text=")" FontWeight="Bold" Margin="0,0,12,0"/>
+                        <CheckBox Content="Show Verified" IsChecked="{Binding ShowVerifiedObRows}"/>
+                    </WrapPanel>
+                    <DataGrid Grid.Row="5" ItemsSource="{Binding VerifiedObVerificationRows}" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                              Visibility="{Binding ShowVerifiedObRows, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Client Name" Binding="{Binding ClientName, Mode=OneWay}" Width="150"/>
+                            <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber, Mode=OneWay}" Width="220"/>
+                            <DataGridTextColumn Header="File Name" Binding="{Binding FileName, Mode=OneWay}" Width="300"/>
+                            <DataGridTextColumn Header="OB Date" Binding="{Binding ObDate, Mode=OneWay, StringFormat=dd-MMM-yyyy}" Width="110"/>
+                            <DataGridTextColumn Header="Opening Balance (Books)" Binding="{Binding EnteredOpeningBalanceText, Mode=OneWay}" Width="145"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="120"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Ledger Mapping" Visibility="{Binding CanViewLedgerMapping, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Border Padding="10" Margin="0,0,0,8" Background="#F5F8FC" CornerRadius="6" BorderBrush="#D8E0EB" BorderThickness="1">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" CanContentScroll="False" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><StackPanel Orientation="Horizontal" Margin="0,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Visible" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding LedgerMappingFilterCountText, Mode=OneWay}" VerticalAlignment="Center" FontWeight="SemiBold" Margin="7,0,0,0" />
+                                </StackPanel>
+                                
+<StackPanel Orientation="Horizontal" Margin="0,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Bank" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <ComboBox ItemsSource="{Binding LedgerMappingBankOptions}" SelectedValuePath="." SelectedValue="{Binding LedgerMappingBankFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" MinWidth="175" ToolTip="Use the list or keyboard navigation" />
+                                </StackPanel>
+                                
+<StackPanel Orientation="Horizontal" Margin="0,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Mapped" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton Content="Pending" GroupName="LedgerMappedFilter" Style="{StaticResource SegmentedRadioButtonStyle}" IsChecked="{Binding IsLedgerMappingUnmapped, Mode=TwoWay}" />
+                                        <RadioButton Content="Mapped" GroupName="LedgerMappedFilter" Style="{StaticResource SegmentedRadioButtonStyle}" IsChecked="{Binding IsLedgerMappingMapped, Mode=TwoWay}" />
+                                        <RadioButton Content="All" GroupName="LedgerMappedFilter" Style="{StaticResource SegmentedRadioButtonStyle}" IsChecked="{Binding IsLedgerMappingAll, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" CanContentScroll="False" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><StackPanel Orientation="Horizontal" Margin="0,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Voucher Type" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <ComboBox ItemsSource="{Binding LedgerMappingVoucherOptions}" SelectedItem="{Binding LedgerMappingVoucherFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" MinWidth="120" ToolTip="Use the list or keyboard navigation" />
+                                </StackPanel>
+                                
+<StackPanel Orientation="Horizontal" Margin="0,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Method" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <ComboBox ItemsSource="{Binding LedgerMappingMethodOptions}" SelectedValuePath="." SelectedValue="{Binding LedgerMappingMethodFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" MinWidth="120" ToolTip="Filter by the existing Banking method classification such as UPI, IMPS, NEFT, RTGS or CHEQUE" />
+                                </StackPanel>
+                                
+<StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
+                                    <TextBlock Text="Dates" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <StackPanel Orientation="Horizontal" ToolTip="Export Dates limits both the visible rows and Map All to the exact Bank Statement transactions in the selected export period">
+                                        <RadioButton Content="Full Statement" GroupName="LedgerDateScope" Style="{StaticResource SegmentedRadioButtonStyle}" IsChecked="{Binding IsLedgerMappingFullStatement, Mode=TwoWay}" />
+                                        <RadioButton Content="Export Dates" GroupName="LedgerDateScope" Style="{StaticResource SegmentedRadioButtonStyle}" IsChecked="{Binding IsLedgerMappingTallyExportDates, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                            <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" CanContentScroll="False" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><StackPanel Orientation="Horizontal" Margin="0,0,8,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Filter" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <ComboBox ItemsSource="{Binding LedgerMappingColumnFilterOptions}" SelectedItem="{Binding LedgerMappingColumnFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FlatFilterComboBoxStyle}" Width="145" Margin="0,0,6,0" />
+                                    <TextBox Text="{Binding LedgerMappingTextFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="205" MinHeight="28" Padding="7,3" Margin="0,0,6,0" VerticalContentAlignment="Center" ToolTip="Contains filter for the selected Ledger Mapping column" />
+                                    <Button Content="Clear Filter" Click="LedgerMappingClearFilter_Click" Padding="10,5" Margin="0,0,6,0" />
+                                    <Button Content="Clear Sort" Click="LedgerMappingClearSort_Click" Padding="10,5" Margin="0,0,6,0" />
+                                    <Button Content="Clear Sort &amp; Filter" Click="LedgerMappingClearSortFilter_Click" Padding="10,5" />
+                                </StackPanel>
+                            </StackPanel>
+                            </ScrollViewer>
+                            <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" CanContentScroll="False" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><CheckBox Content="Create missing Master ledger" IsChecked="{Binding CreateLedgerWhenApplying}" VerticalAlignment="Center" Margin="0,0,10,0" ToolTip="Excel-style Map All can create a new ledger when Final Ledger + Ledger Group are complete" />
+                                
+<Button Content="Put Suggested Name" Command="{Binding PutSuggestedNamesCommand}" Padding="12,6" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="For checked visible pending rows without an Existing Ledger Match, copy Suggested Match to Final Ledger. New Payment ledgers use Sundry Creditors; new Receipt ledgers use Sundry Debtors. Mixed rows are reviewed by Payment/Receipt in Bulk Mapping." />
+                                
+<Button Content="Bulk Map Selected" Click="BulkMapSelected_Click" Padding="12,6" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Opens the CHECKED rows in Bulk Mapping. Pending or mapped rows can be remapped, and the panel also provides Remove Final Ledger for the selected/filter scope." />
+                                
+<Button Content="Resolve Master Matches" Click="LedgerMappingResolveMasterMatches_Click" Padding="12,6" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Inspect exact Tally MASTERIDs for an ambiguous Mapping row; safely choose a unique ledger instead. Distinct same-name MASTERIDs are never collapsed."/>
+                                    <Button Content="Map All" Command="{Binding ApplyReadyMappingsCommand}" Padding="12,6" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Apply every row whose Final Ledger and Ledger Group are complete" />
+                                
+<Button Content="Manual Cash Contra" Click="LedgerMappingManualCashContra_Click" Padding="12,6" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Use the checked Ledger Mapping rows to open the same Cash Contra review panel." />
+                                
+<Button Content="Rebuild Mapping" Command="{Binding RebuildMappingsCommand}" Padding="12,6" VerticalAlignment="Center" />
+                            </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                    <DockPanel Grid.Row="1" Margin="4,0,4,8">
+                        <StackPanel>
+                            <TextBlock Text="Grid navigation: arrows move normally; Enter moves down. Click, type, or press F2 on Final Ledger / Ledger Group to edit. Esc cancels the active edit. Double-click Suggested Match to copy it."
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       Visibility="{Binding CanEditLedgerMapping, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                            <TextBlock Text="Review-only Ledger Mapping: filters, suggestions, membership and saved mappings are visible, but selection, mapping and Master-changing actions are unavailable for this role."
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Visibility="{Binding IsLedgerMappingReadOnly, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                            <TextBlock Text="{Binding LedgerMappingDateScopeText}"
+                                       Foreground="#235F9C"
+                                       FontSize="11"
+                                       Margin="0,3,0,0"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding LedgerMappingPermissionSummary}"
+                                       Foreground="#7A4E00"
+                                       FontWeight="SemiBold"
+                                       FontSize="11"
+                                       Margin="0,3,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </DockPanel>
+
+                    <Grid Grid.Row="2">
+                        <DataGrid x:Name="LedgerMappingGrid" ItemsSource="{Binding FilteredLedgerMappingRows}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="False"
+                                  SelectionUnit="Cell" SelectionMode="Single"
+                                  ColumnHeaderStyle="{StaticResource FilterableDataGridColumnHeaderStyle}"
+                                  CellStyle="{StaticResource LedgerMappingCellStyle}"
+                                  RowHeight="36" ColumnHeaderHeight="38"
+                                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True"
+                                  AlternatingRowBackground="#F8FAFD"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#E3E9F1"
+                                  PreviewKeyDown="LedgerMappingGrid_PreviewKeyDown"
+                                  PreviewTextInput="LedgerMappingGrid_PreviewTextInput"
+                                  MouseLeftButtonUp="LedgerMappingGrid_MouseLeftButtonUp"
+                                  CurrentCellChanged="LedgerMappingGrid_CurrentCellChanged">
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Select" Width="58" IsReadOnly="True" CanUserSort="False" CanUserReorder="False">
+                                    <DataGridTemplateColumn.HeaderTemplate>
+                                        <DataTemplate>
+                                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsChecked="{Binding DataContext.LedgerMappingAllRowsSelected, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      IsEnabled="{Binding DataContext.CanEditLedgerMapping, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" ToolTip="Checked = all visible action rows selected. Click once to unselect all; click again to select all."/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.HeaderTemplate>
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False"
+                                                      IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      Click="LedgerMappingRowSelection_Click"
+                                                      IsEnabled="{Binding DataContext.CanEditLedgerMapping, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                      ToolTip="Select this row for bulk actions such as Put Suggested Name."/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Count" Binding="{Binding Count, Mode=OneWay}" IsReadOnly="True" Width="70"/>
+                                <DataGridTextColumn Header="Summary Name" Binding="{Binding SummaryName, Mode=OneWay}" IsReadOnly="True" Width="*" MinWidth="220"/>
+                                <DataGridTextColumn Header="Type" Binding="{Binding Type, Mode=OneWay}" IsReadOnly="True" Width="90"/>
+                                <DataGridTextColumn Header="Existing Ledger Match" Binding="{Binding ExactMatch, Mode=OneWay}" IsReadOnly="True" Width="190"/>
+                                <DataGridTemplateColumn Header="Suggested Match" IsReadOnly="True" Width="220">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding SuggestedMatch, Mode=OneWay}"
+                                                       Padding="7,4"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="#235F9C"
+                                                       Cursor="Hand"
+                                                       IsEnabled="{Binding DataContext.CanEditLedgerMapping, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                       MouseLeftButtonDown="SuggestedMatch_MouseLeftButtonDown"
+                                                       ToolTip="Double-click to place this value in Final Ledger"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Confidence" Binding="{Binding SuggestionConfidenceDisplay, Mode=OneWay}" IsReadOnly="True" Width="88"/>
+                                <DataGridTextColumn Header="Why Suggested" Binding="{Binding SuggestionReason, Mode=OneWay}" IsReadOnly="True" Width="210"/>
+                                <!-- Final Ledger / Ledger Group deliberately use their SuggestTextBox in the
+                                     display template instead of DataGrid.CellEditingTemplate.  WPF DataGrid edit
+                                     transactions were keeping the editing template/caret alive after Escape. -->
+                                <DataGridTemplateColumn Header="Final Ledger" Width="250" IsReadOnly="True">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <controls:SuggestTextBox Style="{StaticResource MappingSelectorStyle}" Tag="FinalLedger"
+                                                                     Focusable="{Binding DataContext.CanEditLedgerMapping, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" IsReadOnly="{Binding DataContext.IsLedgerMappingReadOnly, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                     PreviewMouseLeftButtonDown="LedgerMappingSelector_PreviewMouseLeftButtonDown"
+                                                                     SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                     Text="{Binding FinalLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                     GotKeyboardFocus="LedgerMappingSelector_GotKeyboardFocus"
+                                                                     PreviewKeyDown="LedgerMappingEditor_PreviewKeyDown"
+                                                                     SuggestionChosen="LedgerMappingSelector_SuggestionChosen"
+                                                                     LostKeyboardFocus="LedgerMappingSelector_LostKeyboardFocus"
+                                                                     ToolTip="Type normally; matching Master ledgers appear as suggestions"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="Ledger Group" Width="215" IsReadOnly="True">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <controls:SuggestTextBox Style="{StaticResource MappingSelectorStyle}" Tag="LedgerGroup"
+                                                                     Focusable="{Binding DataContext.CanEditLedgerMapping, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" IsReadOnly="{Binding DataContext.IsLedgerMappingReadOnly, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                     PreviewMouseLeftButtonDown="LedgerMappingSelector_PreviewMouseLeftButtonDown"
+                                                                     SourceItems="{Binding DataContext.MasterGroupNames, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                     Text="{Binding LedgerGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                     GotKeyboardFocus="LedgerMappingSelector_GotKeyboardFocus"
+                                                                     PreviewKeyDown="LedgerMappingEditor_PreviewKeyDown"
+                                                                     SuggestionChosen="LedgerMappingSelector_SuggestionChosen"
+                                                                     LostKeyboardFocus="LedgerMappingSelector_LostKeyboardFocus"
+                                                                     ToolTip="Type normally or choose a matching Master group suggestion"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" IsReadOnly="True" Width="130"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Reports">
+                <TabControl Margin="6">
+                    <TabItem Header="Statement_Metadata">
+                        <Grid Margin="6">
+                            <DataGrid ItemsSource="{Binding StatementMetadataReport}" SelectedItem="{Binding SelectedStatementMetadata}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="File Name" Binding="{Binding FileName, Mode=OneWay}" Width="240"/>
+                                    <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Account Type" Binding="{Binding AccountType, Mode=OneWay}" Width="95"/>
+                                    <DataGridTextColumn Header="Opening Balance" Binding="{Binding OpeningBalanceText, Mode=OneWay}" Width="125"/>
+                                    <DataGridTextColumn Header="Closing Balance" Binding="{Binding ClosingBalanceText, Mode=OneWay}" Width="125"/>
+                                    <DataGridTextColumn Header="Calculated CB" Binding="{Binding CalculatedClosingBalanceText, Mode=OneWay}" Width="125"/>
+                                    <DataGridTextColumn Header="Difference" Binding="{Binding BalanceDifference, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Balance Status" Binding="{Binding BalanceStatus, Mode=OneWay}" Width="170"/>
+                                    <DataGridTextColumn Header="Missing Periods" Binding="{Binding MissingPeriods, Mode=OneWay}" Width="230"/>
+                                    <DataGridTextColumn Header="Overlaps" Binding="{Binding OverlapPeriods, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Start Date" Binding="{Binding StartDate, Mode=OneWay, StringFormat=dd-MM-yyyy}" Width="100"/>
+                                    <DataGridTextColumn Header="End Date" Binding="{Binding EndDate, Mode=OneWay, StringFormat=dd-MM-yyyy}" Width="100"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="90"/>
+                                    <DataGridTextColumn Header="OB Source" Binding="{Binding ObSource, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="CB Source" Binding="{Binding CbSource, Mode=OneWay}" Width="135"/>
+                                    <DataGridTextColumn Header="Suggested OB" Binding="{Binding SuggestedOb, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                    <DataGridTextColumn Header="Verification Status" Binding="{Binding VerificationStatus, Mode=OneWay}" Width="135"/>
+                                    <DataGridTextColumn Header="Total Debits" Binding="{Binding TotalDebits, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                    <DataGridTextColumn Header="Total Credits" Binding="{Binding TotalCredits, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                    <DataGridTextColumn Header="Client Name" Binding="{Binding ClientName, Mode=OneWay}" Width="180"/>
+                                    <DataGridTextColumn Header="Statement ID" Binding="{Binding StatementId, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="Bank Ledger Name" Binding="{Binding BankLedgerName, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Bank Name" Binding="{Binding BankName, Mode=OneWay}" Width="170"/>
+                                    <DataGridTextColumn Header="Branch Name" Binding="{Binding BranchName, Mode=OneWay}" Width="150"/>
+                                    <DataGridTextColumn Header="IFSC Code" Binding="{Binding IfscCode, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="MICR Code" Binding="{Binding MicrCode, Mode=OneWay}" Width="110"/>
+                                    <DataGridTextColumn Header="SWIFT Code" Binding="{Binding SwiftCode, Mode=OneWay}" Width="110"/>
+                                    <DataGridTextColumn Header="Bank Address" Binding="{Binding BankAddress, Mode=OneWay}" Width="230"/>
+                                    <DataGridTextColumn Header="Bank City" Binding="{Binding BankCity, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="Bank State" Binding="{Binding BankState, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="Bank Pincode" Binding="{Binding BankPincode, Mode=OneWay}" Width="110"/>
+                                    <DataGridTextColumn Header="Bank Phone" Binding="{Binding BankPhone, Mode=OneWay}" Width="125"/>
+                                    <DataGridTextColumn Header="Bank Email" Binding="{Binding BankEmail, Mode=OneWay}" Width="180"/>
+                                    <DataGridTextColumn Header="Bank Website" Binding="{Binding BankWebsite, Mode=OneWay}" Width="180"/>
+                                    <DataGridTextColumn Header="Account Holder Name" Binding="{Binding AccountHolderName, Mode=OneWay}" Width="180"/>
+                                    <DataGridTextColumn Header="Account Category" Binding="{Binding AccountCategory, Mode=OneWay}" Width="130"/>
+                                    <DataGridTextColumn Header="OD Limit" Binding="{Binding OdLimit, Mode=OneWay, StringFormat=N2}" Width="105"/>
+                                    <DataGridTextColumn Header="Drawing Power" Binding="{Binding DrawingPower, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                    <DataGridTextColumn Header="Credit Limit" Binding="{Binding CreditLimit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Sanction Date" Binding="{Binding SanctionDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" Width="110"/>
+                                    <DataGridTextColumn Header="Account Open Date" Binding="{Binding AccountOpenDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" Width="125"/>
+                                    <DataGridTextColumn Header="PAN Number" Binding="{Binding PanNumber, Mode=OneWay}" Width="115"/>
+                                    <DataGridTextColumn Header="GSTIN" Binding="{Binding Gstin, Mode=OneWay}" Width="135"/>
+                                    <DataGridTextColumn Header="TAN Number" Binding="{Binding TanNumber, Mode=OneWay}" Width="115"/>
+                                    <DataGridTextColumn Header="CIN Number" Binding="{Binding CinNumber, Mode=OneWay}" Width="145"/>
+                                    <DataGridTextColumn Header="Bank ID" Binding="{Binding BankId, Mode=OneWay}" Width="90"/>
+                                    <DataGridTextColumn Header="Metadata Version" Binding="{Binding MetadataVersion, Mode=OneWay}" Width="125"/>
+                                    <DataGridTextColumn Header="Last Updated" Binding="{Binding LastUpdated, Mode=OneWay, StringFormat=dd.MM.yyyy HH:mm}" Width="135"/>
+                                    <DataGridTextColumn Header="Verified By" Binding="{Binding VerifiedBy, Mode=OneWay}" Width="110"/>
+                                    <DataGridTextColumn Header="Notes" Binding="{Binding Notes, Mode=OneWay}" Width="250"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Transaction_Registry">
+                        <DataGrid Margin="6" ItemsSource="{Binding TransactionRegistryReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Transaction_ID" Binding="{Binding TransactionId, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="File_Name" Binding="{Binding FileName, Mode=OneWay}" Width="230"/>
+                                <DataGridTextColumn Header="Account_Number" Binding="{Binding AccountNumber, Mode=OneWay}" Width="210"/>
+                                <DataGridTextColumn Header="Sheet_Row" Binding="{Binding SheetRow, Mode=OneWay}" Width="85"/>
+                                <DataGridTextColumn Header="Transaction_Date" Binding="{Binding TransactionDate, Mode=OneWay, StringFormat=MM-dd-yy}" Width="115"/>
+                                <DataGridTextColumn Header="Narration" Binding="{Binding Narration, Mode=OneWay}" Width="320"/>
+                                <DataGridTextColumn Header="Debit" Binding="{Binding Debit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Credit" Binding="{Binding Credit, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Bank" Binding="{Binding Bank, Mode=OneWay}" Width="210"/>
+                                <DataGridTextColumn Header="Import_Status" Binding="{Binding ImportStatus, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Duplicate_Of" Binding="{Binding DuplicateOf, Mode=OneWay}" Width="150"/>
+                                <DataGridTextColumn Header="Match_Status" Binding="{Binding MatchStatus, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Matched_TXN_ID" Binding="{Binding MatchedTxnId, Mode=OneWay}" Width="130"/>
+                                <DataGridTextColumn Header="Match_ID" Binding="{Binding MatchId, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Archive_Reason" Binding="{Binding ArchiveReason, Mode=OneWay}" Width="175"/>
+                                <DataGridTextColumn Header="Archived_On" Binding="{Binding ArchivedOn, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="130"/>
+                                <DataGridTextColumn Header="Original_Sheet_Row" Binding="{Binding OriginalSheetRow, Mode=OneWay}" Width="125"/>
+                                <DataGridTextColumn Header="Current_Sheet_Row" Binding="{Binding CurrentSheetRow, Mode=OneWay}" Width="125"/>
+                                <DataGridTextColumn Header="Bank_Statement_Link" Binding="{Binding BankStatementLink, Mode=OneWay}" Width="230"/>
+                                <DataGridTextColumn Header="Account OB" Binding="{Binding AccountOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                <DataGridTextColumn Header="Account CB" Binding="{Binding AccountClosingBalance, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                <DataGridTextColumn Header="Balance Status" Binding="{Binding AccountBalanceStatus, Mode=OneWay}" Width="170"/>
+                                <DataGridTextColumn Header="Missing Periods" Binding="{Binding MissingPeriods, Mode=OneWay}" Width="230"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Transfer_Map">
+                        <Grid Margin="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <Button Content="Match Exact Interbank Transfers" Command="{Binding MatchTransfersCommand}" Padding="12,7" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding TransferMapReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Match_ID" Binding="{Binding MatchId, Mode=OneWay}" Width="120"/>
+                                    <DataGridTextColumn Header="Source_TXN_ID" Binding="{Binding SourceTxnId, Mode=OneWay}" Width="130"/>
+                                    <DataGridTextColumn Header="Target_TXN_ID" Binding="{Binding TargetTxnId, Mode=OneWay}" Width="130"/>
+                                    <DataGridTextColumn Header="Source_Account" Binding="{Binding SourceAccount, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Target_Account" Binding="{Binding TargetAccount, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Source OB" Binding="{Binding SourceOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Source CB" Binding="{Binding SourceClosingBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Target OB" Binding="{Binding TargetOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Target CB" Binding="{Binding TargetClosingBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Amount" Binding="{Binding Amount, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Created_On" Binding="{Binding CreatedOn, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="135"/>
+                                    <DataGridTextColumn Header="Source_Row" Binding="{Binding SourceRow, Mode=OneWay}" Width="95"/>
+                                    <DataGridTextColumn Header="Target_Row" Binding="{Binding TargetRow, Mode=OneWay}" Width="95"/>
+                                    <DataGridTextColumn Header="Reference" Binding="{Binding Reference, Mode=OneWay}" Width="160"/>
+                                    <DataGridTextColumn Header="Match_Method" Binding="{Binding MatchMethod, Mode=OneWay}" Width="230"/>
+                                    <DataGridTextColumn Header="Source_Link" Binding="{Binding SourceLink, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Target_Link" Binding="{Binding TargetLink, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Last_Updated" Binding="{Binding LastUpdated, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="135"/>
+                                    <DataGridTextColumn Header="Last_Updated" Binding="{Binding LastUpdated2, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="135"/>
+                                    <DataGridTextColumn Header="Reserved" Binding="{Binding Reserved, Mode=OneWay}" Width="100"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Contra_Debug">
+                        <DataGrid Margin="6" ItemsSource="{Binding ContraDebugReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Run_ID" Binding="{Binding RunId, Mode=OneWay}" Width="125"/>
+                                <DataGridTextColumn Header="Source Registry Row" Binding="{Binding SourceRegistryRow, Mode=OneWay}" Width="130"/>
+                                <DataGridTextColumn Header="Target Registry Row" Binding="{Binding TargetRegistryRow, Mode=OneWay}" Width="130"/>
+                                <DataGridTextColumn Header="Source Sheet Row" Binding="{Binding SourceSheetRow, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Target Sheet Row" Binding="{Binding TargetSheetRow, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Date" Binding="{Binding Date, Mode=OneWay, StringFormat=dd-MM-yyyy}" Width="100"/>
+                                <DataGridTextColumn Header="Amount" Binding="{Binding Amount, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Source Bank" Binding="{Binding SourceBank, Mode=OneWay}" Width="210"/>
+                                <DataGridTextColumn Header="Target Bank" Binding="{Binding TargetBank, Mode=OneWay}" Width="210"/>
+                                <DataGridTextColumn Header="Source OB" Binding="{Binding SourceOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Source CB" Binding="{Binding SourceClosingBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Target OB" Binding="{Binding TargetOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Target CB" Binding="{Binding TargetClosingBalance, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Source Method" Binding="{Binding SourceMethod, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Target Method" Binding="{Binding TargetMethod, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Source Reference Groups" Binding="{Binding SourceReferenceGroups, Mode=OneWay}" Width="240"/>
+                                <DataGridTextColumn Header="Target Reference Groups" Binding="{Binding TargetReferenceGroups, Mode=OneWay}" Width="240"/>
+                                <DataGridTextColumn Header="Matched Reference" Binding="{Binding MatchedReference, Mode=OneWay}" Width="160"/>
+                                <DataGridTextColumn Header="Source Txn" Binding="{Binding SourceTxn, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Target Txn" Binding="{Binding TargetTxn, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Workflow Stage" Binding="{Binding Result, Mode=OneWay}" Width="190"/>
+                                <DataGridTextColumn Header="Reason" Binding="{Binding Reason, Mode=OneWay}" Width="310"/>
+                                <DataGridTextColumn Header="Source Narration" Binding="{Binding SourceNarration, Mode=OneWay}" Width="320"/>
+                                <DataGridTextColumn Header="Target Narration" Binding="{Binding TargetNarration, Mode=OneWay}" Width="320"/>
+                                <DataGridTextColumn Header="Checked On" Binding="{Binding CheckedOn, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="135"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Chain_Report">
+                        <Grid Margin="6">
+                            <Grid.RowDefinitions><RowDefinition Height="1.2*"/><RowDefinition Height="Auto"/><RowDefinition Height="0.8*"/></Grid.RowDefinitions>
+                            <DataGrid ItemsSource="{Binding ChainReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Account" Binding="{Binding Account, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Previous File" Binding="{Binding PreviousFile, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Previous End Date" Binding="{Binding PreviousEndDate, Mode=OneWay, StringFormat=dd-MMM-yyyy}" Width="125"/>
+                                    <DataGridTextColumn Header="Next File" Binding="{Binding NextFile, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Next Start Date" Binding="{Binding NextStartDate, Mode=OneWay, StringFormat=dd-MMM-yyyy}" Width="120"/>
+                                    <DataGridTextColumn Header="Previous CB" Binding="{Binding PreviousCb, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                    <DataGridTextColumn Header="Next OB" Binding="{Binding NextOb, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                    <DataGridTextColumn Header="Difference" Binding="{Binding Difference, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="90"/>
+                                    <DataGridTextColumn Header="Gap Check" Binding="{Binding GapCheck, Mode=OneWay}" Width="150"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Grid.Row="1" Text="ACCOUNT SUMMARY" FontWeight="Bold" Margin="4,8"/>
+                            <DataGrid Grid.Row="2" ItemsSource="{Binding ChainAccountSummary}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Account" Binding="{Binding Account, Mode=OneWay}" Width="220"/>
+                                    <DataGridTextColumn Header="Overall OB" Binding="{Binding OverallOb, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                    <DataGridTextColumn Header="Overall CB" Binding="{Binding OverallCb, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                    <DataGridTextColumn Header="Calculated CB" Binding="{Binding CalculatedCb, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                    <DataGridTextColumn Header="Difference" Binding="{Binding Difference, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                    <DataGridTextColumn Header="Missing Periods" Binding="{Binding MissingPeriods, Mode=OneWay}" Width="230"/>
+                                    <DataGridTextColumn Header="Overlaps" Binding="{Binding OverlapPeriods, Mode=OneWay}" Width="210"/>
+                                    <DataGridTextColumn Header="Statements" Binding="{Binding Statements, Mode=OneWay}" Width="100"/>
+                                    <DataGridTextColumn Header="Fail Count" Binding="{Binding FailCount, Mode=OneWay}" Width="100"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="100"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Duplicate_Report">
+                        <DataGrid Margin="6" ItemsSource="{Binding DuplicateReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Transaction_ID" Binding="{Binding TransactionId, Mode=OneWay}" Width="160"/>
+                                <DataGridTextColumn Header="Account_Number" Binding="{Binding AccountNumber, Mode=OneWay}" Width="230"/>
+                                <DataGridTextColumn Header="Duplicate_Of" Binding="{Binding DuplicateOf, Mode=OneWay}" Width="200"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="Account OB" Binding="{Binding AccountOpeningBalance, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                <DataGridTextColumn Header="Account CB" Binding="{Binding AccountClosingBalance, Mode=OneWay, StringFormat=N2}" Width="115"/>
+                                <DataGridTextColumn Header="Balance Status" Binding="{Binding AccountBalanceStatus, Mode=OneWay}" Width="170"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Registry_Report">
+                        <DataGrid Margin="6" ItemsSource="{Binding RegistryReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" HorizontalAlignment="Left" Width="520">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Metric" Binding="{Binding Metric, Mode=OneWay}" Width="280"/>
+                                <DataGridTextColumn Header="Value" Binding="{Binding Value, Mode=OneWay}" Width="220"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Integrity_Report">
+                        <DataGrid Margin="6" ItemsSource="{Binding IntegrityReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" HorizontalAlignment="Left" Width="620">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Check" Binding="{Binding Check, Mode=OneWay}" Width="360"/>
+                                <DataGridTextColumn Header="Result" Binding="{Binding Result, Mode=OneWay}" Width="240"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Import_Log">
+                        <DataGrid Margin="6" ItemsSource="{Binding ImportLogReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="145"/>
+                                <DataGridTextColumn Header="File Name" Binding="{Binding FileName, Mode=OneWay}" Width="250"/>
+                                <DataGridTextColumn Header="Bank Name" Binding="{Binding BankName, Mode=OneWay}" Width="170"/>
+                                <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber, Mode=OneWay}" Width="150"/>
+                                <DataGridTextColumn Header="Rows Imported" Binding="{Binding RowsImported, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Opening Balance" Binding="{Binding OpeningBalance, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                <DataGridTextColumn Header="Closing Balance" Binding="{Binding ClosingBalance, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                <DataGridTextColumn Header="Balance Status" Binding="{Binding BalanceStatus, Mode=OneWay}" Width="170"/>
+                                <DataGridTextColumn Header="Missing Periods" Binding="{Binding MissingPeriods, Mode=OneWay}" Width="230"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="130"/>
+                                <DataGridTextColumn Header="Notes" Binding="{Binding Notes, Mode=OneWay}" Width="*" MinWidth="300"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Balance_Authority">
+                        <DataGrid Margin="6" ItemsSource="{Binding BalanceAuthorityReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Account" Binding="{Binding Account, Mode=OneWay}" Width="240"/>
+                                <DataGridTextColumn Header="Opening Balance" Binding="{Binding OpeningBalance, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                <DataGridTextColumn Header="OB Source" Binding="{Binding OpeningSource, Mode=OneWay}" Width="125"/>
+                                <DataGridTextColumn Header="Closing Balance" Binding="{Binding ClosingBalance, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                <DataGridTextColumn Header="CB Source" Binding="{Binding ClosingSource, Mode=OneWay}" Width="125"/>
+                                <DataGridTextColumn Header="Calculated CB" Binding="{Binding CalculatedClosingBalance, Mode=OneWay, StringFormat=N2}" Width="125"/>
+                                <DataGridTextColumn Header="Difference" Binding="{Binding Difference, Mode=OneWay, StringFormat=N2}" Width="110"/>
+                                <DataGridTextColumn Header="Total Debits" Binding="{Binding TotalDebits, Mode=OneWay, StringFormat=N2}" Width="120"/>
+                                <DataGridTextColumn Header="Total Credits" Binding="{Binding TotalCredits, Mode=OneWay, StringFormat=N2}" Width="120"/>
+                                <DataGridTextColumn Header="Statements" Binding="{Binding StatementCount, Mode=OneWay}" Width="95"/>
+                                <DataGridTextColumn Header="Missing Periods" Binding="{Binding MissingPeriods, Mode=OneWay}" Width="250"/>
+                                <DataGridTextColumn Header="Overlaps" Binding="{Binding OverlapPeriods, Mode=OneWay}" Width="220"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" Width="190"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+                    <TabItem Header="Import_Performance_Log">
+                        <DataGrid Margin="6" ItemsSource="{Binding ImportPerformanceLogReport}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="RecordType" Binding="{Binding RecordType, Mode=OneWay}" Width="120"/>
+                                <DataGridTextColumn Header="DateTime" Binding="{Binding DateTime, Mode=OneWay, StringFormat=M/d/yy H:mm}" Width="145"/>
+                                <DataGridTextColumn Header="Name" Binding="{Binding Name, Mode=OneWay}" Width="240"/>
+                                <DataGridTextColumn Header="Value1" Binding="{Binding Value1, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Value2" Binding="{Binding Value2, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Value3" Binding="{Binding Value3, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Value4" Binding="{Binding Value4, Mode=OneWay}" Width="110"/>
+                                <DataGridTextColumn Header="Notes" Binding="{Binding Notes, Mode=OneWay}" Width="*" MinWidth="260"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+
+
+                </TabControl>
+            </TabItem>
+            </TabControl>
+        </Grid>
+
+        <Border Grid.Row="3" Margin="20,0,20,14" Padding="10,7" Background="#EEF3F8" CornerRadius="6">
+            <TextBlock Text="{Binding StatusText, Mode=OneWay}" TextWrapping="Wrap"/>
+        </Border>
+
+        <Grid Grid.RowSpan="4" Panel.ZIndex="100" Background="#70000000"
+              Visibility="{Binding IsBankAccountPopupOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Width="1080" MaxWidth="1080" MaxHeight="720" Margin="28" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="White" BorderBrush="#C9D4E3" BorderThickness="1" CornerRadius="12">
+                <Border.Effect><DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.30"/></Border.Effect>
+                <Grid Margin="20">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,14">
+                        <StackPanel DockPanel.Dock="Left">
+                            <TextBlock Text="Bank Accounts" FontSize="22" FontWeight="SemiBold"/>
+                            <TextBlock Text="Rename bank ledgers or review Missing Periods bank-wise." Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                        <Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseBankAccountPopupCommand}" Padding="14,7"/>
+                    </DockPanel>
+
+                    <TabControl Grid.Row="1">
+                        <TabItem Header="Bank Rename">
+                            <Grid Margin="12">
+                                <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="0.9*" MinWidth="300"/><ColumnDefinition Width="16"/><ColumnDefinition Width="1.5*" MinWidth="520"/></Grid.ColumnDefinitions>
+                                <DataGrid ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" SelectionUnit="FullRow">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Bank Ledger" Binding="{Binding BankAccountListName, Mode=OneWay}" Width="*" MinWidth="220">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                                    <Setter Property="ToolTip" Value="{Binding RenameHistoryToolTip}"/>
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
+                                        <DataGridTextColumn Header="Account" Binding="{Binding AccountNumber, Mode=OneWay}" Width="125"/>
+                                        <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText, Mode=OneWay}" Width="120"/>
+                                        <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText, Mode=OneWay}" Width="120"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+
+                                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <Border Padding="14" Background="#F5F8FC" CornerRadius="8" Margin="0,0,0,12">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <TextBlock Text="Current Ledger Name" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                                <TextBox Grid.Column="1" Text="{Binding SelectedBankCurrentName, Mode=OneWay}" IsReadOnly="True" Margin="0,0,0,8"/>
+                                                <TextBlock Grid.Row="1" Text="Existing Master" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                                <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding BankLedgerRenameOptions}"
+                                                          SelectedItem="{Binding SelectedBankRenameOption, Mode=TwoWay}" DisplayMemberPath="SuggestionDisplay"
+                                                          IsEditable="False" MaxDropDownHeight="360"
+                                                          ToolTip="Choose an existing Bank/OD/Cash Credit Ledger. The list shows Ledger Name, authority (Tally or Manual), and Ledger Group."
+                                                          Margin="0,0,0,8"/>
+                                                <TextBlock Grid.Row="2" Text="Rename To" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SelectedBankRename.RenameTo, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="The selected existing Master is copied here. You can also type a new Bank Ledger name." Margin="0,0,0,8"/>
+                                                <Button Grid.Row="3" Grid.Column="1" Content="Apply Rename" Command="{Binding ApplyBankRenameCommand}" HorizontalAlignment="Left" Padding="12,7"/>
+                                            </Grid>
+                                        </Border>
+
+                                        <TextBlock Text="Bank Account Details" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                        <Grid Margin="0,0,0,14">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <TextBlock Text="Bank Name" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Column="1" Text="{Binding SelectedAccount.BankName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="1" Text="Account Type" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding SelectedAccount.AccountType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="2" Text="Account Number" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SelectedAccount.AccountNumber, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="3" Text="Branch" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding SelectedAccount.BranchName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="4" Text="IFSC" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding SelectedAccount.IfscCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="5" Text="OD Limit" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding SelectedAccount.OdLimit, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="6" Text="Drawing Power" VerticalAlignment="Center"/>
+                                            <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding SelectedAccount.DrawingPower, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}"/>
+                                        </Grid>
+
+                                        <TextBlock Text="Master Ledger Details" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <TextBlock Text="Ledger Name" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Column="1" Text="{Binding SelectedBankMasterRecord.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="1" Text="Parent Group" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <controls:SearchableComboBox Grid.Row="1" Grid.Column="1" SourceItems="{Binding MasterGroupNames}" Text="{Binding SelectedBankMasterRecord.Parent, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                         AllowCustomText="False" OpenOnFocus="True" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="2" Text="Master Type" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SelectedBankMasterRecord.Type, Mode=OneWay}" IsReadOnly="True" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="3" Text="Company" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding SelectedBankMasterRecord.Company, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                                            <TextBlock Grid.Row="4" Text="Master Source" VerticalAlignment="Center"/>
+                                            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding SelectedBankMasterSourceDisplay, Mode=OneWay}" IsReadOnly="True"
+                                                     ToolTip="Tally = imported/live Tally master. Manual = master created or maintained inside Accounting Automation Hub."/>
+                                        </Grid>
+                                    </StackPanel>
+                                </ScrollViewer>
+
+                                <DockPanel Grid.Row="1" Grid.ColumnSpan="3" LastChildFill="False" Margin="0,16,0,0">
+                                    <TextBlock Text="Changes remain client and Financial Year specific." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                                    <Button DockPanel.Dock="Right" Content="Save Bank Account &amp; Master Ledger" Command="{Binding SaveAccountCommand}" Padding="16,8"/>
+                                </DockPanel>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Missing Periods">
+                            <Grid Margin="16">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Missing Periods by Bank" FontSize="16" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Margin="18,0,0,0" Text="{Binding MissingStatementPeriodCount, Mode=OneWay, StringFormat='{}{0} range(s)'}" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </Grid>
+
+                                <Grid Grid.Row="1">
+                                    <TextBlock Text="No missing statement periods for the current coverage window." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Top">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasBankAccountPeriodWarnings}" Value="False"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding HasBankAccountPeriodWarnings, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <ItemsControl ItemsSource="{Binding MissingPeriodBankGroups}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Padding="14" Margin="0,0,0,10" Background="#FFF7E6" BorderBrush="#F0C36D" BorderThickness="1" CornerRadius="8">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding BankName}" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                                                            <ItemsControl ItemsSource="{Binding Periods}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <TextBlock Text="{Binding}" Margin="12,2,0,2"/>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.RowSpan="3" Panel.ZIndex="90" Visibility="{Binding IsManualCashContraMode, Converter={StaticResource BooleanToVisibilityConverter}}"
+                Background="#66000000" Padding="34">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Width="980" MaxWidth="1180" MaxHeight="720" Padding="18">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="Manual Cash Contra" FontSize="20" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding ManualCashContraStepText}" Foreground="#235F9C" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                            <TextBlock Text="{Binding ManualCashContraStatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Close" Command="{Binding CancelManualCashContraCommand}" Padding="12,6" VerticalAlignment="Top"/>
+                    </Grid>
+                    <Grid Grid.Row="1" Margin="0,14,0,10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="280"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Cash Ledger" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding CashInHandLedgerNames}" SelectedItem="{Binding ManualCashContraLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MinHeight="30"/>
+                        <TextBlock Grid.Column="2" Margin="14,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}">
+                            <Run Text="Source: "/><Run Text="{Binding ManualCashContraSourceText, Mode=OneWay}" FontWeight="SemiBold"/><Run Text="  ·  Selected: "/><Run Text="{Binding ManualCashContraSelectedCount, Mode=OneWay}" FontWeight="SemiBold"/>
+                        </TextBlock>
+                    </Grid>
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding ManualCashContraPreviewRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                              SelectionMode="Extended" SelectionUnit="FullRow" EnableRowVirtualization="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, StringFormat=dd.MM.yyyy}" Width="105"/>
+                            <DataGridTextColumn Header="Bank" Binding="{Binding BankAccountName}" Width="180"/>
+                            <DataGridTextColumn Header="Narration" Binding="{Binding Narration}" Width="*" MinWidth="260"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding Debit, StringFormat=N2}" Width="110"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding Credit, StringFormat=N2}" Width="110"/>
+                            <DataGridTextColumn Header="Current Ledger" Binding="{Binding LedgerName}" Width="180"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <Button Content="Cancel" Command="{Binding CancelManualCashContraCommand}" Padding="14,7" Margin="0,0,8,0"/>
+                        <Button Content="Apply Contra" Command="{Binding SaveManualCashContraCommand}" Padding="16,7"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>

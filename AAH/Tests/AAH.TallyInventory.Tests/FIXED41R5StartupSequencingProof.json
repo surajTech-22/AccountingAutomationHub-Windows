@@ -1,0 +1,29 @@
+{
+  "name": "FIXED41 R5 precise startup sequencing / no feature disable exact source proof",
+  "files": [
+    {
+      "name": "automation",
+      "path": "src/AccountingAutomationHub.Desktop/Services/BackgroundAutomationService.cs",
+      "baseline_text_sha256": "6ffb7840dda85ce4cdd4e29f43bb1dd98e3af94a266f4afe1765ef5d0f7eb8ad",
+      "current_text_sha256": "d3b7e3c4edf20f12b8a8305d4679819cc6c8414524e6296e6f00441b405df8b2",
+      "changes": [
+        {
+          "before": "    public bool IsLocalPreparationComplete =>\n        _centralSourceStartupComplete &&\n        _startupRecoveryComplete &&\n        _salesPurchaseSourceInFlight.IsEmpty &&\n        _salesPurchaseSetProcessors.IsEmpty &&\n        _gstBootstrapInFlight.IsEmpty &&\n        _queue.IsEmpty &&\n        _activeFiles.IsEmpty &&\n        _bankCachedProcessors.IsEmpty &&\n        _bankCachedQueues.Values.All(queue => queue.IsEmpty);\n",
+          "after": "    // FIXED41 R5: this is the one-time startup boundary for Tally-last sequencing.\n    // It deliberately excludes the continuously changing runtime Auto Import/Bank queues:\n    // those queues may refill forever after startup and therefore cannot be the release condition.\n    // Unlike the R3 shortcut, both central source discovery and startup recovery must actually\n    // finish before the five-second Tally authority loop is released.\n    public bool IsInitialLocalPreparationComplete =>\n        _centralSourceStartupComplete &&\n        _startupRecoveryComplete;\n\n    public bool IsLocalPreparationComplete =>\n        IsInitialLocalPreparationComplete &&\n        _salesPurchaseSourceInFlight.IsEmpty &&\n        _salesPurchaseSetProcessors.IsEmpty &&\n        _gstBootstrapInFlight.IsEmpty &&\n        _queue.IsEmpty &&\n        _activeFiles.IsEmpty &&\n        _bankCachedProcessors.IsEmpty &&\n        _bankCachedQueues.Values.All(queue => queue.IsEmpty);\n"
+        }
+      ]
+    },
+    {
+      "name": "main",
+      "path": "src/AccountingAutomationHub.Desktop/ViewModels/MainWindowViewModel.cs",
+      "baseline_text_sha256": "2e7e5904283370d66163087abe4bb406feca43d6eac993939db5f6e7eb73b3f9",
+      "current_text_sha256": "f36ca42815e360d209fd58c2981adc54d708a5797b510e78621c1a56f516943a",
+      "changes": [
+        {
+          "before": "        _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);\n        // FIXED41 R3: the 5-second Tally authority loop has a one-time startup latch of its own.\n        // Release that latch when startup cache scheduling is complete; do not tie it to the\n        // continuously changing Auto Import/Bank/source queues. Those queues may remain active\n        // or refill for the entire application session and must never starve ALTERID authority.\n        _tallyCoordinator.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);\n",
+          "after": "        _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);\n        // FIXED41 R5: restore the proven Tally-last startup boundary without reintroducing the\n        // old runtime interlock. The coordinator releases only after workspace startup scheduling,\n        // central source discovery and startup recovery have completed once. Its own one-time latch\n        // then stays open permanently; normal Auto Import/Bank queues can refill without blocking\n        // later five-second ALTERID synchronization.\n        _tallyCoordinator.AttachLocalPreparationReadyProvider(() =>\n            _workspaceStateCache.IsStartupPreparationComplete && _automationService.IsInitialLocalPreparationComplete);\n"
+        }
+      ]
+    }
+  ]
+}

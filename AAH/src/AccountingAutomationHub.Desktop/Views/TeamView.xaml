@@ -1,0 +1,203 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.TeamView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Team &amp; Chat" FontSize="28" FontWeight="Bold"/>
+                <TextBlock Text="Private chat, Global chat, Client/FY discussions, user presence, announcements and Main Server shared files"
+                           Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding ContextText}" FontWeight="SemiBold" Margin="0,4,0,0"/>
+            </StackPanel>
+            <WrapPanel Grid.Column="1" VerticalAlignment="Top">
+                <Border Padding="10,5" Margin="0,0,6,0" Background="#EAF7EE" CornerRadius="12"><TextBlock><Run Text="Online "/><Run Text="{Binding OnlineCount, Mode=OneWay}" FontWeight="Bold"/></TextBlock></Border>
+                <Border Padding="10,5" Margin="0,0,6,0" Background="#FFF5D9" CornerRadius="12"><TextBlock><Run Text="Away "/><Run Text="{Binding AwayCount, Mode=OneWay}" FontWeight="Bold"/></TextBlock></Border>
+                <Border Padding="10,5" Margin="0,0,6,0" Background="#F0F2F5" CornerRadius="12"><TextBlock><Run Text="Offline "/><Run Text="{Binding OfflineCount, Mode=OneWay}" FontWeight="Bold"/></TextBlock></Border>
+                <Border Padding="10,5" Margin="0,0,8,0" Background="#E9F1FF" CornerRadius="12"><TextBlock><Run Text="Unread "/><Run Text="{Binding UnreadCount, Mode=OneWay}" FontWeight="Bold"/></TextBlock></Border>
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}" Width="92"/>
+            </WrapPanel>
+        </Grid>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="270"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="310"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Conversations -->
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="10">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Conversations" FontSize="17" FontWeight="SemiBold"/>
+                        <WrapPanel Margin="0,8,0,8">
+                            <Button Content="Global" Command="{Binding OpenGlobalChatCommand}" Padding="9,4" Margin="0,0,5,5"/>
+                            <Button Content="Client" Command="{Binding OpenClientChatCommand}" Padding="9,4" Margin="0,0,5,5"/>
+                            <Button Content="Announcements" Command="{Binding OpenAnnouncementsCommand}" Padding="9,4" Margin="0,0,5,5"/>
+                        </WrapPanel>
+                    </StackPanel>
+                    <TextBox Grid.Row="1" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="Search the selected conversation" Margin="0,0,0,8" Padding="7,4"/>
+                    <ListBox Grid.Row="2" ItemsSource="{Binding Conversations}" SelectedItem="{Binding SelectedConversation}" BorderThickness="0" HorizontalContentAlignment="Stretch">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="8" Margin="0,1" BorderBrush="#E3E8F0" BorderThickness="0,0,0,1">
+                                    <Grid>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <Border Grid.Column="1" Background="#DDEAFF" CornerRadius="9" Padding="6,1" Margin="5,0,0,0" Visibility="{Binding HasUnread, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <TextBlock Text="{Binding UnreadCount, Mode=OneWay}" FontSize="11" FontWeight="Bold"/>
+                                        </Border>
+                                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding Subtitle}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                        <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{Binding LastMessage}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- Thread -->
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,8">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SelectedConversationTitle}" FontSize="19" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding SelectedConversationSubtitle}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding CurrentUserText}" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#235F9C"/>
+                    </DockPanel>
+
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,7">
+                        <Button Content="Reply" Command="{Binding ReplySelectedCommand}" Padding="9,4" Margin="0,0,5,0"/>
+                        <Button Content="Edit Mine" Command="{Binding EditSelectedCommand}" Padding="9,4" Margin="0,0,5,0"/>
+                        <Button Content="Delete" Command="{Binding DeleteSelectedCommand}" Padding="9,4" Margin="0,0,5,0"/>
+                        <Button Content="Pin / Unpin" Command="{Binding PinSelectedCommand}" Padding="9,4" Margin="0,0,12,0"/>
+                        <TextBlock Text="React:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <Button Content="Like" Command="{Binding ReactLikeCommand}" Padding="8,3" Margin="0,0,4,0"/>
+                        <Button Content="Done" Command="{Binding ReactDoneCommand}" Padding="8,3" Margin="0,0,4,0"/>
+                        <Button Content="Thanks" Command="{Binding ReactThanksCommand}" Padding="8,3"/>
+                    </WrapPanel>
+
+                    <ListBox Grid.Row="2" ItemsSource="{Binding VisibleMessages}" SelectedItem="{Binding SelectedMessage}" BorderThickness="0" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,3" Padding="10" BorderBrush="#DDE3EC" BorderThickness="1" CornerRadius="7" Background="#FAFBFD">
+                                    <Grid>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding SenderUserName}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Priority}" Foreground="#8A5A00" Margin="8,0,0,0"/>
+                                            <TextBlock Text="PINNED" Foreground="#235F9C" FontWeight="Bold" Margin="8,0,0,0" Visibility="{Binding IsPinned, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding CreatedUtc, StringFormat={}{0:g}}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
+                                        <Border Grid.Row="1" Grid.ColumnSpan="2" Background="#EEF3FA" CornerRadius="4" Padding="6" Margin="0,5,0,0" Visibility="{Binding HasReply, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <TextBlock Text="{Binding ReplyPreview}" FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                        </Border>
+                                        <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{Binding DisplayBody}" TextWrapping="Wrap" Margin="0,7,0,0" FontSize="13"/>
+                                        <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,6,0,0">
+                                            <TextBlock Text="{Binding ReactionSummary}" Foreground="#235F9C" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding EditedText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Border Grid.Row="3" Background="#FFF6D8" BorderBrush="#E6C767" BorderThickness="1" CornerRadius="5" Padding="7" Margin="0,7,0,5"
+                            Visibility="{Binding HasComposeContext, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <DockPanel><TextBlock Text="{Binding ComposeContextText}" TextWrapping="Wrap"/><Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelComposeContextCommand}" Margin="8,0,0,0" Padding="8,2"/></DockPanel>
+                    </Border>
+
+                    <Grid Grid.Row="4" Margin="0,4,0,0">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <TextBox x:Name="MessageComposer" Text="{Binding MessageText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="72" MaxHeight="150" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Padding="8" PreviewKeyDown="MessageComposer_PreviewKeyDown" ToolTip="Enter sends · Shift+Enter adds a new line"/>
+                        <DockPanel Grid.Row="1" Margin="0,7,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Priority" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <ComboBox ItemsSource="{Binding Priorities}" SelectedItem="{Binding Priority}" Width="100"/>
+                                <Button Content="Share File" Command="{Binding AttachFileCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="8,0,0,0"/>
+                            </StackPanel>
+                            <Button DockPanel.Dock="Right" Content="Send" Command="{Binding SendCommand}" Style="{StaticResource PrimaryButtonStyle}" MinWidth="90"/>
+                        </DockPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- People + files -->
+            <Border Grid.Column="4" Style="{StaticResource CardBorderStyle}" Padding="10">
+                <TabControl>
+                    <TabItem Header="People">
+                        <Grid Margin="6">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="My Status" FontWeight="SemiBold" FontSize="16"/>
+                                <ComboBox ItemsSource="{Binding AvailabilityOptions}" SelectedItem="{Binding MyAvailability}" Margin="0,6,0,5"/>
+                                <TextBox Text="{Binding MyStatusMessage, UpdateSourceTrigger=PropertyChanged}" MaxLength="160" ToolTip="Optional status message" Padding="6,4"/>
+                                <Button Content="Save My Status" Command="{Binding SaveMyStatusCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,6,0,10" HorizontalAlignment="Left"/>
+                                <Separator/>
+                                <TextBlock Text="Users" FontWeight="SemiBold" FontSize="16" Margin="0,8,0,5"/>
+                            </StackPanel>
+                            <Button Grid.Row="1" Content="Start Private Chat" Command="{Binding StartPrivateChatCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,0,7" HorizontalAlignment="Stretch"/>
+                            <ListBox Grid.Row="2" ItemsSource="{Binding Users}" SelectedItem="{Binding SelectedRecipient}" BorderThickness="0" HorizontalContentAlignment="Stretch" MouseDoubleClick="UsersList_MouseDoubleClick" ToolTip="Double-click a user to open a private chat">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="7" Margin="0,2" BorderBrush="#E3E8F0" BorderThickness="0,0,0,1">
+                                            <StackPanel>
+                                                <DockPanel><TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"/><TextBlock DockPanel.Dock="Right" Text="{Binding Presence}" Foreground="#235F9C"/></DockPanel>
+                                                <TextBlock Text="{Binding Availability}" FontSize="11" Foreground="#8A5A00"/>
+                                                <TextBlock Text="{Binding StatusMessage}" FontSize="11" TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding LastSeenText}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                <TextBlock Text="{Binding SessionText}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </TabItem>
+                    <TabItem Header="Shared Files">
+                        <Grid Margin="6">
+                            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <DataGrid ItemsSource="{Binding SharedFiles}" SelectedItem="{Binding SelectedSharedFile}" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column" HorizontalScrollBarVisibility="Auto">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="File" Binding="{Binding OriginalName}" Width="180"/>
+                                    <DataGridTextColumn Header="By" Binding="{Binding UploadedBy}" Width="90"/>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding CreatedUtc, StringFormat={}{0:g}}" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                                <Button Content="Download Selected File" Command="{Binding DownloadSharedFileCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,0,6"/>
+                                <Button Content="Open Server Collaboration Folder" Command="{Binding OpenSharedFolderCommand}" Style="{StaticResource SecondaryButtonStyle}"/>
+                            </StackPanel>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,8,2,0"/>
+    </Grid>
+</UserControl>

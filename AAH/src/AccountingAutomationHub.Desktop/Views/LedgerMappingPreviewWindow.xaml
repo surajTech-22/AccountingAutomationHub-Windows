@@ -1,0 +1,202 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.LedgerMappingPreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Ledger Mapping Preview"
+        Width="980" Height="700"
+        MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Background="{DynamicResource AppBackgroundBrush}">
+    <Window.Resources>
+        <Style x:Key="PreviewMappingSelectorStyle" TargetType="{x:Type controls:SuggestTextBox}">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#C9D4E2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                <TextBlock Text="Ledger Mapping Preview" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding SelectedLedgerSummary, Mode=OneWay}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Margin="0,4,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding SelectedLedgerDetailStatistics, Mode=OneWay}"
+                           Foreground="#235F9C" FontWeight="SemiBold" FontSize="11"
+                           Margin="0,5,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="Close" Click="Close_Click" Padding="14,7"
+                    MinWidth="92" Height="34" VerticalAlignment="Top"/>
+        </Grid>
+
+        <Border Grid.Row="1" Margin="0,14,0,12" Padding="14"
+                Background="#F5F8FC" CornerRadius="8"
+                BorderBrush="#D8E0EB" BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="Final Ledger" VerticalAlignment="Center"/>
+                <controls:SuggestTextBox Grid.Column="1"
+                                         Style="{StaticResource PreviewMappingSelectorStyle}"
+                                         SourceItems="{Binding MasterLedgerNames}"
+                                         Text="{Binding SelectedLedgerMappingRow.FinalLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         SuggestionChosen="MappingSelector_SuggestionChosen"
+                                         LostKeyboardFocus="MappingSelector_LostKeyboardFocus"
+                                         ToolTip="Type normally; matching Master ledgers appear below."/>
+
+                <TextBlock Grid.Column="3" Text="Ledger Group" VerticalAlignment="Center"/>
+                <controls:SuggestTextBox Grid.Column="4"
+                                         Style="{StaticResource PreviewMappingSelectorStyle}"
+                                         SourceItems="{Binding MasterGroupNames}"
+                                         Text="{Binding SelectedLedgerMappingRow.LedgerGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         SuggestionChosen="MappingSelector_SuggestionChosen"
+                                         LostKeyboardFocus="MappingSelector_LostKeyboardFocus"
+                                         ToolTip="Type normally or choose a matching Master group suggestion."/>
+
+                <TextBlock Grid.Row="1" Text="Existing Ledger Match" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedLedgerMappingRow.ExactMatch, Mode=OneWay}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,12,0,0" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Grid.Row="1" Grid.Column="3" Text="Status" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="4"
+                           Text="{Binding SelectedLedgerMappingRow.Status, Mode=OneWay}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,12,0,0"/>
+
+                <TextBlock Grid.Row="2" Text="Suggested Match" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <Border Grid.Row="2" Grid.Column="1"
+                        Margin="0,12,0,0" Padding="9,6"
+                        Background="#EAF2FB" CornerRadius="5"
+                        Cursor="Hand"
+                        MouseLeftButtonDown="SuggestedMatch_MouseLeftButtonDown"
+                        ToolTip="Double-click to place this value in Final Ledger">
+                    <TextBlock Text="{Binding SelectedLedgerMappingRow.SuggestedMatch, Mode=OneWay}"
+                               Foreground="#235F9C"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                </Border>
+
+                <CheckBox Grid.Row="3" Grid.ColumnSpan="2"
+                          Content="Create missing Master ledger"
+                          IsChecked="{Binding CreateLedgerWhenApplying}"
+                          Margin="0,12,0,0"/>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Margin="0,0,0,10" Padding="10"
+                Background="#FAFBFD" CornerRadius="6" BorderBrush="#D8E0EB" BorderThickness="1">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Button Content="Clear Visible Selection" Click="ClearVisibleSelection_Click" Padding="10,5" Margin="0,0,6,0"
+                            ToolTip="Uncheck only the rows currently visible after search/filter."/>
+                    <Button Content="Clear All Selection" Click="ClearAllSelection_Click" Padding="10,5"
+                            ToolTip="Uncheck every row in this expanded Summary Name."/>
+                </StackPanel>
+                <WrapPanel VerticalAlignment="Center">
+                    <TextBlock Text="Search / Filter" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                    <ComboBox ItemsSource="{Binding LedgerMappingDetailFilterOptions}"
+                              SelectedItem="{Binding LedgerMappingDetailFilterColumn, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              Width="140" MinHeight="28" Margin="0,0,6,0"/>
+                    <TextBox Text="{Binding LedgerMappingDetailFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Width="250" MinHeight="28" Padding="7,3" Margin="0,0,6,0"
+                             VerticalContentAlignment="Center"
+                             ToolTip="Search the selected detail column. ALL COLUMNS searches Date, Narration, Debit, Credit, Mode, Method, Ledger, Bank and Row No."/>
+                    <Button Content="Clear Filter" Click="ClearDetailFilter_Click" Padding="10,5" Margin="0,0,6,0"/>
+                    <Button Content="Clear Sort &amp; Filter" Click="ClearDetailSortFilter_Click" Padding="10,5" Margin="0,0,10,0"
+                            ToolTip="Clear the detail search/filter and every sort/filter applied to this grid."/>
+                    <TextBlock Text="Visible" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding LedgerMappingDetailFilterCountText, Mode=OneWay}" VerticalAlignment="Center"
+                               FontWeight="SemiBold" Foreground="#235F9C" Margin="6,0,0,0"/>
+                </WrapPanel>
+            </DockPanel>
+        </Border>
+
+        <DataGrid Grid.Row="3" x:Name="LedgerMappingDetailGrid"
+                  ItemsSource="{Binding FilteredLedgerMappingDetails}"
+                  SelectedItem="{Binding SelectedLedgerMappingDetail}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="False"
+                  EnableRowVirtualization="True"
+                  SelectionUnit="FullRow">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="Select" Width="65" IsReadOnly="True" CanUserSort="False" CanUserReorder="False">
+                    <DataGridTemplateColumn.HeaderTemplate>
+                        <DataTemplate>
+                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      IsChecked="{Binding DataContext.LedgerMappingDetailAllRowsSelected, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      ToolTip="Select or clear every transaction currently shown in this expanded Summary Name."/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.HeaderTemplate>
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False"
+                                      IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      Click="LedgerMappingDetailSelection_Click"
+                                      ToolTip="Only checked transactions receive the Final Ledger when Apply Selected is used."/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Date" Binding="{Binding Date, Mode=OneWay, StringFormat=dd-MM-yyyy}" IsReadOnly="True" Width="100"/>
+                <DataGridTextColumn Header="Narration" Binding="{Binding Narration, Mode=OneWay}" IsReadOnly="True" Width="*" MinWidth="340"/>
+                <DataGridTextColumn Header="Debit" Binding="{Binding Debit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="105"/>
+                <DataGridTextColumn Header="Credit" Binding="{Binding Credit, Mode=OneWay, StringFormat=N2}" IsReadOnly="True" Width="105"/>
+                <DataGridTextColumn Header="Mode" Binding="{Binding Mode, Mode=OneWay}" IsReadOnly="True" Width="90"/>
+                <DataGridTextColumn Header="Method" Binding="{Binding Method, Mode=OneWay}" IsReadOnly="True" Width="100"/>
+                <DataGridTextColumn Header="Ledger" Binding="{Binding Ledger, Mode=OneWay}" IsReadOnly="True" Width="180"/>
+                <DataGridTextColumn Header="Bank" Binding="{Binding Bank, Mode=OneWay}" IsReadOnly="True" Width="220"/>
+                <DataGridTextColumn Header="Row No" Binding="{Binding RowNo, Mode=OneWay}" IsReadOnly="True" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                <TextBlock Text="{Binding LedgerMappingDetailSelectionText, Mode=OneWay}"
+                           FontWeight="SemiBold" Foreground="#235F9C"/>
+                <TextBlock Text="Checked rows form a separate group named from the Final Ledger; unchecked rows remain in the original Summary Name."
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="Clear Final Ledger" Command="{Binding ClearFinalLedgerCommand}"
+                    Padding="16,8" MinWidth="138" Margin="0,0,8,0" VerticalAlignment="Center"/>
+            <Button Grid.Column="2" Content="Apply Selected" Command="{Binding ApplyLedgerMappingDetailSelectionCommand}"
+                    Padding="16,8" MinWidth="128" VerticalAlignment="Center"
+                    ToolTip="Apply the Final Ledger only to checked expanded transactions. Unchecked transactions are not changed."/>
+        </Grid>
+    </Grid>
+</Window>

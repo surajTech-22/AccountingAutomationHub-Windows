@@ -1,0 +1,66 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AuditEntryModifyWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Audit Entry Modification" Width="980" Height="760" MinWidth="820" MinHeight="620"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="Audit Entry Modification" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock Text="Original evidence stays immutable. Save a suggestion or explicitly apply the proposed correction." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+        </StackPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Padding="14" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel>
+                        <TextBlock Text="Original" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock Text="Date" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.DateText}" Margin="0,2,0,8"/>
+                        <TextBlock Text="Reference" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.Reference}" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                        <TextBlock Text="Voucher Type" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.VoucherType}" Margin="0,2,0,8"/>
+                        <TextBlock Text="Party / Ledger" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.PartyOrLedger}" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                        <TextBlock Text="Debit / Credit / Amount" FontWeight="SemiBold"/><TextBlock Margin="0,2,0,8"><Run Text="{Binding Original.Debit, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.Credit, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.Amount, StringFormat=N2}"/></TextBlock>
+                        <TextBlock Text="Taxable / GST Rate" FontWeight="SemiBold"/><TextBlock Margin="0,2,0,8"><Run Text="{Binding Original.TaxableValue, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.GstRate, StringFormat=N2}"/><Run Text="%"/></TextBlock>
+                        <TextBlock Text="IGST / CGST / SGST / Cess" FontWeight="SemiBold"/><TextBlock Margin="0,2,0,8"><Run Text="{Binding Original.Igst, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.Cgst, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.Sgst, StringFormat=N2}"/><Run Text=" / "/><Run Text="{Binding Original.Cess, StringFormat=N2}"/></TextBlock>
+                        <TextBlock Text="Narration" FontWeight="SemiBold"/><TextBlock Text="{Binding OriginalNarration}" TextWrapping="Wrap" Margin="0,2,0,8"/>
+                        <TextBlock Text="Source" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.Source}" TextWrapping="Wrap" Margin="0,2,0,8"/>
+                        <TextBlock Text="Authority ID" FontWeight="SemiBold"/><TextBlock Text="{Binding Original.AuthorityId}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Padding="14" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Proposed" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock Grid.Row="1" Text="Date" Margin="0,5"/><DatePicker Grid.Row="1" Grid.Column="1" SelectedDate="{Binding Draft.Date}"/>
+                        <TextBlock Grid.Row="2" Text="Reference" Margin="0,5"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Draft.Reference, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="3" Text="Voucher Type" Margin="0,5"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Draft.VoucherType, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="4" Text="Party / Ledger" Margin="0,5"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Draft.PartyOrLedger, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="5" Text="Debit" Margin="0,5"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Draft.Debit, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="6" Text="Credit" Margin="0,5"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Draft.Credit, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="7" Text="Amount" Margin="0,5"/><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Draft.Amount, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="8" Text="Taxable" Margin="0,5"/><TextBox Grid.Row="8" Grid.Column="1" Text="{Binding Draft.TaxableValue, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="9" Text="GST Rate %" Margin="0,5"/><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding Draft.GstRate, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="10" Text="IGST / CGST" Margin="0,5"/><StackPanel Grid.Row="10" Grid.Column="1" Orientation="Horizontal"><TextBox Width="105" Text="{Binding Draft.Igst, UpdateSourceTrigger=PropertyChanged}"/><TextBox Width="105" Margin="8,0,0,0" Text="{Binding Draft.Cgst, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <TextBlock Grid.Row="11" Text="SGST / Cess" Margin="0,5"/><StackPanel Grid.Row="11" Grid.Column="1" Orientation="Horizontal"><TextBox Width="105" Text="{Binding Draft.Sgst, UpdateSourceTrigger=PropertyChanged}"/><TextBox Width="105" Margin="8,0,0,0" Text="{Binding Draft.Cess, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <TextBlock Grid.Row="12" Text="Narration" Margin="0,5"/><TextBox Grid.Row="12" Grid.Column="1" MinHeight="58" AcceptsReturn="True" TextWrapping="Wrap" Text="{Binding Draft.Narration, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="13" Text="Cost Centre" Margin="0,5"/><TextBox Grid.Row="13" Grid.Column="1" Text="{Binding Draft.CostCentre, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="14" Text="Reason" Margin="0,5"/><ComboBox Grid.Row="14" Grid.Column="1" ItemsSource="{Binding Reasons}" SelectedItem="{Binding Draft.Reason}"/>
+                        <TextBlock Grid.Row="15" Grid.ColumnSpan="2" Margin="0,10,0,0" Text="Apply to AAH is available only for an exact linked Accounting record. Apply AAH + Tally additionally requires an exact Tally voucher identity and supported safe mutation." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </ScrollViewer>
+        <DockPanel Grid.Row="2" Margin="0,14,0,0" LastChildFill="False">
+            <Button Content="Cancel" Width="90" Padding="12,7" IsCancel="True" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+            <Button Content="Apply AAH + Tally" Padding="14,7" Click="Action_Click" Tag="ApplyAahTally" DockPanel.Dock="Right" Margin="8,0,0,0" IsEnabled="{Binding CanApplyTally}"/>
+            <Button Content="Apply to AAH" Padding="14,7" Click="Action_Click" Tag="ApplyAah" DockPanel.Dock="Right" Margin="8,0,0,0" IsEnabled="{Binding CanApplyAah}"/>
+            <Button Content="Save as Audit Suggestion" Padding="14,7" Click="Action_Click" Tag="Suggestion" DockPanel.Dock="Right"/>
+        </DockPanel>
+    </Grid>
+</Window>

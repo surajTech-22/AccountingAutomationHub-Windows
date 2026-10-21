@@ -1,0 +1,459 @@
+﻿<UserControl x:Class="AccountingAutomationHub.Desktop.Views.FinancialStatementsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{DynamicResource BackgroundBrush}">
+    <UserControl.Resources>
+        <Style x:Key="AutoField" TargetType="TextBox">
+            <Setter Property="Background" Value="#E8F2FC"/><Setter Property="BorderBrush" Value="#9CBAD4"/>
+            <Setter Property="Padding" Value="6,4"/><Setter Property="Margin" Value="0,1"/>
+        </Style>
+        <Style x:Key="ManualField" TargetType="TextBox">
+            <Setter Property="Background" Value="#FFF2CC"/><Setter Property="BorderBrush" Value="#D6B656"/>
+            <Setter Property="Padding" Value="6,4"/><Setter Property="Margin" Value="0,1"/>
+        </Style>
+        <Style x:Key="SectionHeader" TargetType="Border">
+            <Setter Property="Background" Value="#1F4E78"/><Setter Property="Padding" Value="8,5"/><Setter Property="Margin" Value="0,10,0,4"/>
+        </Style>
+        <Style x:Key="MappingCombo" TargetType="ComboBox">
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="MinHeight" Value="26"/>
+            <Setter Property="IsTextSearchEnabled" Value="True"/>
+            <Setter Property="MaxDropDownHeight" Value="420"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="Auto Mapped"><Setter Property="Background" Value="#FFF2CC"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="User Mapped"><Setter Property="Background" Value="#E2F0D9"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="Copied from FY"><Setter Property="Background" Value="#DDEBF7"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="Copied from PY"><Setter Property="Background" Value="#DDEBF7"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="Tally NCE"><Setter Property="Background" Value="#D9EAF7"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappedStatus}" Value="Unmapped"><Setter Property="Background" Value="#FCE4D6"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="StockMappingCombo" TargetType="ComboBox">
+            <Setter Property="Padding" Value="3,1"/><Setter Property="MinHeight" Value="26"/><Setter Property="IsTextSearchEnabled" Value="True"/><Setter Property="MaxDropDownHeight" Value="420"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding MappingStatus}" Value="Tally NCE"><Setter Property="Background" Value="#FFF2CC"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappingStatus}" Value="User Mapped"><Setter Property="Background" Value="#E2F0D9"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappingStatus}" Value="Copied from FY"><Setter Property="Background" Value="#DDEBF7"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappingStatus}" Value="Copied from PY"><Setter Property="Background" Value="#DDEBF7"/></DataTrigger>
+                <DataTrigger Binding="{Binding MappingStatus}" Value="Unmapped"><Setter Property="Background" Value="#FCE4D6"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ScheduleMappingCombo" TargetType="ComboBox">
+            <Setter Property="Padding" Value="3,1"/><Setter Property="MinHeight" Value="26"/><Setter Property="IsTextSearchEnabled" Value="True"/><Setter Property="MaxDropDownHeight" Value="420"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ScheduleMappedStatus}" Value="Mapped"><Setter Property="Background" Value="#E2F0D9"/></DataTrigger>
+                <DataTrigger Binding="{Binding ScheduleMappedStatus}" Value="Unmapped"><Setter Property="Background" Value="#FCE4D6"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,10" Visibility="{Binding FinancialStatementsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Financial Statements" FontSize="25" FontWeight="SemiBold"/>
+                <TextBlock Text="Prepare comparative financial statements, notes and statutory outputs from one Client/FY authority." Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <ToggleButton Content="Financial Statements ON" IsChecked="{Binding FinancialStatementsEnabled, Mode=TwoWay}" Padding="10,6" Margin="0,0,10,0" ToolTip="Disable Financial Statements for this Client/FY without deleting saved data"/>
+                <Button Content="Excel with Links" Command="{Binding ExportWithLinksCommand}" Padding="12,7" Margin="5,0"/>
+                <Button Content="Excel without Links" Command="{Binding ExportWithoutLinksCommand}" Padding="12,7" Margin="5,0"/>
+                <Button Content="PDF" Command="{Binding ExportPdfCommand}" Padding="12,7" Margin="5,0"/>
+                <Button Content="Notes Preparation" Command="{Binding NotesPreparationCommand}" Padding="12,7" Margin="5,0"/>
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="1" Visibility="{Binding FinancialStatementsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,10">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <TextBlock Text="FY: " FontWeight="SemiBold"/><TextBlock Text="{Binding FyCaption}" Margin="0,0,18,0"/>
+                    <TextBlock Text="PY: " FontWeight="SemiBold"/><TextBlock Text="{Binding PyCaption}" Margin="0,0,18,0"/>
+                    <TextBlock Text="{Binding PreviousYearStatus}" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="Connect Previous Year Tally" Command="{Binding ConnectPreviousYearTallyCommand}" Padding="10,5" Margin="0,0,8,0" Visibility="{Binding ShowConnectPreviousYearTally, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                    <Button Content="Save Mappings" Command="{Binding SaveMappingsCommand}" Padding="10,5" Margin="0,0,8,0"/>
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,5"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="2" Background="#F8FAFC" BorderBrush="#9CBAD4" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,10" Visibility="{Binding IsNotesPreparationVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="220"/></Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                    <TextBlock Text="Notes Preparation" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                        <TextBlock Text="View / Prepare:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding Notes}" SelectedItem="{Binding SelectedNote}" MinWidth="300"/>
+                    </StackPanel>
+                </DockPanel>
+                <DataGrid Grid.Row="1" ItemsSource="{Binding NotePreviewRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="No." Binding="{Binding Note}" Width="70"/>
+                        <DataGridTextColumn Header="Note / Schedule" Binding="{Binding NoteTitle}" Width="220"/>
+                        <DataGridTextColumn Header="Statutory Line Item" Binding="{Binding StatutoryLineItem}" Width="2*"/>
+                        <DataGridTextColumn Header="AAH Mapping Key" Binding="{Binding MappingKey}" Width="170"/>
+                        <DataGridTextColumn Header="FY" Binding="{Binding CurrentAmount, StringFormat=N2}" Width="120"/>
+                        <DataGridTextColumn Header="PY" Binding="{Binding PreviousAmount, StringFormat=N2}" Width="120"/>
+                        <DataGridTextColumn Header="Mapped" Binding="{Binding MappedLedgerCount}" Width="75"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+
+        <TabControl Grid.Row="3" Visibility="{Binding FinancialStatementsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <TabItem Header="Basic Info">
+                <Grid>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Margin="10" MaxWidth="1000" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="330"/><ColumnDefinition Width="430"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Grid.ColumnSpan="3" Style="{StaticResource SectionHeader}"><TextBlock Text="Details for Financial Statements" Foreground="White" FontWeight="SemiBold"/></Border>
+                        <TextBlock Grid.Row="1" Text="Company Name (Current Year)" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BasicInfo.CurrentYearCompanyName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="2" Text="Current Year End Date"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding BasicInfo.CurrentYearEnd}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="3" Text="Company Name (Previous Year)" VerticalAlignment="Center"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding BasicInfo.PreviousYearCompanyName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="4" Text="Previous Year End Date"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding BasicInfo.PreviousYearEnd}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="5" Text="Type of Entity" VerticalAlignment="Center"/>
+                        <ComboBox Grid.Row="5" Grid.Column="1" SelectedValue="{Binding EntityTypeSelection, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Content" Background="#FFF2CC">
+                            <ComboBoxItem Content="Company - AS - Schedule III Division I"/><ComboBoxItem Content="Company - Ind AS - Schedule III Division II"/>
+                            <ComboBoxItem Content="NBFC - AS + RBI"/><ComboBoxItem Content="NBFC - Ind AS - Schedule III Division III"/>
+                            <ComboBoxItem Content="NCE"/><ComboBoxItem Content="LLP"/><ComboBoxItem Content="NPO"/>
+                            <ComboBoxItem Content="Banking Company"/><ComboBoxItem Content="Co-operative Bank"/><ComboBoxItem Content="Life Insurance"/>
+                            <ComboBoxItem Content="General Insurance"/><ComboBoxItem Content="Reinsurance"/><ComboBoxItem Content="Mutual Fund Scheme"/>
+                            <ComboBoxItem Content="CIS"/><ComboBoxItem Content="REIT"/><ComboBoxItem Content="InvIT"/>
+                        </ComboBox>
+                        <TextBlock Grid.Row="6" Text="NCE Type" VerticalAlignment="Center" Visibility="{Binding IsNceEntityType, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{Binding NceTypes}" SelectedItem="{Binding BasicInfo.NceType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Background="#FFF2CC" Visibility="{Binding IsNceEntityType, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        <TextBlock Grid.Row="7" Text="Name of Entity (Mailing Name)"/><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding BasicInfo.MailingName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="8" Text="Address"/><TextBox Grid.Row="8" Grid.Column="1" Height="54" TextWrapping="Wrap" AcceptsReturn="True" Text="{Binding BasicInfo.Address, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="9" Text="Permanent Account Number (PAN)"/><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding BasicInfo.Pan, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="10" Text="{Binding RegistrationIdLabel}"/><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding BasicInfo.LlpIn, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="11" Text="GSTIN (where applicable)"/><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding BasicInfo.Gstin, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource AutoField}"/>
+                        <TextBlock Grid.Row="12" Text="Sundry Debtors and Sundry Creditors Details" VerticalAlignment="Center"/><ComboBox Grid.Row="12" Grid.Column="1" ItemsSource="{Binding DebtorCreditorDetailOptions}" SelectedItem="{Binding BasicInfo.DebtorCreditorDetail, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Background="#FFF2CC" ToolTip="Original workbook report detail: Party-wise or Bill-wise."/>
+                        <TextBlock Grid.Row="13" Text="Stock Detail" VerticalAlignment="Center"/><ComboBox Grid.Row="13" Grid.Column="1" ItemsSource="{Binding StockDetailOptions}" SelectedItem="{Binding BasicInfo.StockDetail, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Background="#FFF2CC" ToolTip="Original workbook stock report detail: Item-wise or Ledger-wise."/>
+                        <TextBlock Grid.Row="14" Text="Round Off Amount To Nearest"/><ComboBox Grid.Row="14" Grid.Column="1" ItemsSource="{Binding RoundingOptions}" SelectedItem="{Binding BasicInfo.Rounding, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Background="#FFF2CC"/>
+                        <TextBlock Grid.Row="15" Text="PPE and IA Block"/><ComboBox Grid.Row="15" Grid.Column="1" ItemsSource="{Binding PpeBlockOptions}" SelectedItem="{Binding PpeBlockSelection, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Background="#FFF2CC"/>
+
+                        <Border Grid.Row="16" Grid.ColumnSpan="3" Style="{StaticResource SectionHeader}"><TextBlock Text="Signatory Details" Foreground="White" FontWeight="SemiBold"/></Border>
+                        <DataGrid Grid.Row="17" Grid.ColumnSpan="3" Width="1000" HorizontalAlignment="Left" Height="230" ItemsSource="{Binding Signatories}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" HorizontalScrollBarVisibility="Disabled">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Name of Entity Signatory" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="270"/>
+                                <DataGridTextColumn Header="Designation" Binding="{Binding Designation, UpdateSourceTrigger=PropertyChanged}" Width="190"/>
+                                <DataGridTextColumn Header="DIN (where applicable)" Binding="{Binding Din, UpdateSourceTrigger=PropertyChanged}" Width="170"/>
+                                <DataGridTextColumn Header="Place" Binding="{Binding Place, UpdateSourceTrigger=PropertyChanged}" Width="170"/>
+                                <DataGridTextColumn Header="Signing Date" Binding="{Binding SigningDate, UpdateSourceTrigger=PropertyChanged}" Width="190"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <Border Grid.Row="20" Grid.ColumnSpan="3" Style="{StaticResource SectionHeader}"><TextBlock Text="Auditor / CA Details" Foreground="White" FontWeight="SemiBold"/></Border>
+                        <TextBlock Grid.Row="21" Text="Select Saved CA" VerticalAlignment="Center"/><ComboBox Grid.Row="21" Grid.Column="1" ItemsSource="{Binding CaProfiles}" SelectedItem="{Binding SelectedCaProfile}" DisplayMemberPath="CaName" Background="#FFF2CC"/>
+                        <TextBlock Grid.Row="22" Text="Audit Firm Name (exclude 'Chartered Accountant')"/><TextBox Grid.Row="22" Grid.Column="1" Text="{Binding BasicInfo.AuditFirmName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="23" Text="Firm Registration Number"/><TextBox Grid.Row="23" Grid.Column="1" Text="{Binding BasicInfo.FirmRegistrationNumber, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="24" Text="UDIN"/><TextBox Grid.Row="24" Grid.Column="1" Text="{Binding BasicInfo.Udin, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="25" Text="Name of Signing Auditor"/><TextBox Grid.Row="25" Grid.Column="1" Text="{Binding BasicInfo.CaName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="26" Text="Designation"/><TextBox Grid.Row="26" Grid.Column="1" Text="{Binding BasicInfo.CaDesignation, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="27" Text="Membership Number"/><TextBox Grid.Row="27" Grid.Column="1" Text="{Binding BasicInfo.CaMembershipNumber, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="28" Text="Place"/><TextBox Grid.Row="28" Grid.Column="1" Text="{Binding BasicInfo.AuditPlace, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+                        <TextBlock Grid.Row="29" Text="Signing Date"/><TextBox Grid.Row="29" Grid.Column="1" Text="{Binding BasicInfo.CaSigningDate, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource ManualField}"/>
+
+                        <TextBlock Grid.Row="30" Text="Presentation Unit (fallback when Round Off = Default)" VerticalAlignment="Center"/><ComboBox Grid.Row="30" Grid.Column="1" SelectedValue="{Binding BasicInfo.PresentationUnit, Mode=TwoWay}" SelectedValuePath="Content" Background="#FFF2CC"><ComboBoxItem Content="₹"/><ComboBoxItem Content="₹ in Hundreds"/><ComboBoxItem Content="₹ in Thousands"/><ComboBoxItem Content="₹ in Lakhs"/><ComboBoxItem Content="₹ in Crores"/></ComboBox>
+                        <TextBlock Grid.Row="31" Text="Statement Type" VerticalAlignment="Center"/><ComboBox Grid.Row="31" Grid.Column="1" SelectedValue="{Binding BasicInfo.StandaloneConsolidated, Mode=TwoWay}" SelectedValuePath="Content" Background="#FFF2CC"><ComboBoxItem Content="Standalone"/><ComboBoxItem Content="Consolidated"/></ComboBox>
+                        <Button Grid.Row="31" Grid.Column="2" Content="Save Basic Info" Command="{Binding SaveBasicInfoCommand}" Padding="12,6" Margin="10,0,0,0"/>
+
+                        <Border Grid.Row="32" Grid.ColumnSpan="3" Style="{StaticResource SectionHeader}" Visibility="{Binding IsNceEntityType, Converter={StaticResource BooleanToVisibilityConverter}}"><TextBlock Text="Owner / Partners Details" Foreground="White" FontWeight="SemiBold"/></Border>
+                        <DataGrid Grid.Row="33" Grid.ColumnSpan="3" Width="760" HorizontalAlignment="Left" Height="210" ItemsSource="{Binding OwnerPartners}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsNceEntityType, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Name" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="430"/>
+                                <DataGridTextColumn Header="Share of Profit/(Loss)" Binding="{Binding ShareOfProfitLoss, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Width="330"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <Border Grid.Row="32" Grid.ColumnSpan="3" Style="{StaticResource SectionHeader}" Visibility="{Binding IsCompanyScheduleIIIEntityType, Converter={StaticResource BooleanToVisibilityConverter}}"><TextBlock Text="Share Capital Details" Foreground="White" FontWeight="SemiBold"/></Border>
+                        <DataGrid Grid.Row="33" Grid.ColumnSpan="3" Width="760" HorizontalAlignment="Left" Height="210" ItemsSource="{Binding ShareCapitalDetails}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsCompanyScheduleIIIEntityType, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Type of Shares" Binding="{Binding TypeOfShares, UpdateSourceTrigger=PropertyChanged}" Width="430"/>
+                                <DataGridTextColumn Header="Face Value" Binding="{Binding FaceValue, UpdateSourceTrigger=PropertyChanged, StringFormat=N2}" Width="330"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </ScrollViewer>
+                <ToggleButton x:Name="FinancialStatementSettingsButton" Content="⚙" Width="30" Height="28" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,22,0" ToolTip="Financial Statements settings" Panel.ZIndex="10" Visibility="{Binding ShowClientFinancialStatementSettings, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <Popup IsOpen="{Binding IsChecked, ElementName=FinancialStatementSettingsButton}" PlacementTarget="{Binding ElementName=FinancialStatementSettingsButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                    <Border Background="White" BorderBrush="#9CBAD4" BorderThickness="1" CornerRadius="6" Padding="12" Width="430">
+                        <StackPanel>
+                            <TextBlock Text="Financial Statements Settings" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Previous Year Data" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                            <CheckBox Content="No Previous Year Data / First Year" IsChecked="{Binding NoPreviousYearData, Mode=TwoWay}" Margin="0,2,0,10"/>
+                            <Grid Visibility="{Binding ShowPreviousYearSourceOptions, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding PreviousYearModeDisplay}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                                <ToggleButton x:Name="PreviousYearChangeButton" Grid.Column="1" Content="Change" Padding="10,5"/>
+                                <Popup IsOpen="{Binding IsChecked, ElementName=PreviousYearChangeButton}" PlacementTarget="{Binding ElementName=PreviousYearChangeButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                                    <Border Background="White" BorderBrush="#9CBAD4" BorderThickness="1" CornerRadius="6" Padding="8" Width="310">
+                                        <StackPanel>
+                                            <Button Content="Actual Previous Year Data" Command="{Binding UseActualPreviousYearCommand}" Padding="9,6" HorizontalContentAlignment="Left" Margin="0,0,0,5"/>
+                                            <Button Content="Use Current FY Opening Balances as PY" Command="{Binding UseFyOpeningAsPreviousYearCommand}" Padding="9,6" HorizontalContentAlignment="Left"/>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                            <TextBlock Text="First Year keeps PY as N/A and does not block export. FY Opening mode uses only genuine current-FY opening balances; stored Actual PY data is retained when modes change." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,9,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="TB">
+                <Grid Margin="6">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox Content="Hide 0 Balance" IsChecked="{Binding HideZeroClosingBalance, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <CheckBox Content="Show Unmapped Only" IsChecked="{Binding ShowUnmappedOnly, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button x:Name="ToggleSourceColumnsButton" Content="Hide Source" Click="ToggleSourceColumns_Click" Padding="8,3" Margin="0,0,6,0" ToolTip="Hide/show Parent Group, Opening, Debit and Credit like the trial workbook's collapsible preparation columns."/>
+                            <Button x:Name="ToggleSplitColumnsButton" Content="Hide Split" Click="ToggleSplitColumns_Click" Padding="8,3" Margin="0,0,6,0" ToolTip="Hide/show Non-current/Current or &gt;6M/&lt;6M bifurcation columns."/>
+                            <ComboBox ItemsSource="{Binding SameTallyGroupScopes}" SelectedItem="{Binding SameTallyGroupScope, Mode=TwoWay}" Width="86" Margin="0,0,6,0" ToolTip="Choose whether the explicit same-Tally-Group mapping applies only to FY or to FY and PY."/>
+                            <Button Content="Apply to Same Tally Group" Command="{Binding ApplyMappingToSameTallyGroupCommand}" Padding="9,3" ToolTip="Select an FY ledger with a fully resolved workbook mapping. Only the exact factory-valid C1-C3 mapping is applied to rows with the same Tally Parent Group; schedule-only detail is never copied."/>
+                        </StackPanel>
+                        <Grid DockPanel.Dock="Right">
+                            <Button x:Name="TbMappingInfoButton" Width="28" Height="28" Padding="0"
+                                    Click="TbMappingInfoButton_Click" ToolTip="Financial Statements mapping information">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Button>
+                        </Grid>
+                    </DockPanel>
+                    <TabControl Grid.Row="1">
+                        <TabItem Header="FY">
+                            <DataGrid ItemsSource="{Binding FyTrialBalanceView}" SelectedItem="{Binding SelectedFyTrialBalanceRow, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False" CanUserSortColumns="False" CanUserReorderColumns="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Ledger Name" Binding="{Binding Ledger}" Width="230" IsReadOnly="True"/>
+                                    <DataGridTextColumn x:Name="FyParentGroupColumn" Header="Parent Group" Binding="{Binding ParentGroup}" Width="170" IsReadOnly="True"/>
+                                    <DataGridTextColumn x:Name="FyOpeningColumn" Header="Opening Balance" Binding="{Binding Opening, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="115" IsReadOnly="True"/>
+                                    <DataGridTextColumn x:Name="FyDebitColumn" Header="Debit" Binding="{Binding Debit, Converter={StaticResource FinancialStatementBalanceDisplayConverter}, ConverterParameter=Absolute}" Width="110" IsReadOnly="True"/>
+                                    <DataGridTextColumn x:Name="FyCreditColumn" Header="Credit" Binding="{Binding Credit, Converter={StaticResource FinancialStatementBalanceDisplayConverter}, ConverterParameter=Absolute}" Width="110" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Closing Balance" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="120" IsReadOnly="True"/>
+                                    <DataGridTemplateColumn x:Name="FyFirstSplitColumn" Header="Non-current / &gt;6M" Width="130">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBox Text="{Binding NonCurrentAmount, Mode=TwoWay, UpdateSourceTrigger=LostFocus, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" IsEnabled="{Binding CanEditBifurcation}" ToolTip="{Binding BifurcationValidation}" HorizontalContentAlignment="Right"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn x:Name="FySecondSplitColumn" Header="Current / &lt;6M" Binding="{Binding CurrentBifurcatedAmount, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="120" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Statement" Binding="{Binding StatementDisplay}" Width="115" IsReadOnly="True"/>
+                                    <DataGridTextColumn x:Name="FySourceNatureColumn" Header="Tally Nature" Binding="{Binding SourceNatureDisplay}" Width="105" IsReadOnly="True"/>
+                                    <DataGridTemplateColumn Header="Nature of Group" Width="125">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding NatureChoices}" SelectedItem="{Binding NatureDisplay, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C1 (FS Heads)" Width="230">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding Class3Choices}" SelectedItem="{Binding Classification3, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C2 (Notes Heads)" Width="270">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding Class4Choices}" SelectedItem="{Binding Classification4, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C3 (Notes Sub-Heads)" Width="260">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding WorkbookClass3Choices}" SelectedItem="{Binding WorkbookClassification3, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Mapping Status" Binding="{Binding MappedStatus}" Width="120" IsReadOnly="True"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </TabItem>
+                        <TabItem Header="PY">
+                            <Grid>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                                        <Button Content="Copy FY → PY" Visibility="{Binding ShowClientFinancialStatementSettings, Converter={StaticResource BooleanToVisibilityConverter}}" Command="{Binding CopyFyToPyMappingCommand}" Padding="9,3" Margin="0,0,6,0" ToolTip="Copy exact same-ledger FS Nature and C1-C3 mapping only into unmapped PY rows. Existing PY mappings are never overwritten."/>
+                                        <Button Content="Copy PY → FY" Visibility="{Binding ShowClientFinancialStatementSettings, Converter={StaticResource BooleanToVisibilityConverter}}" Command="{Binding CopyPyToFyMappingCommand}" Padding="9,3" ToolTip="Copy exact same-ledger FS Nature and C1-C3 mapping only into unmapped FY rows. Existing FY mappings are never overwritten."/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding PreviousYearStatus}" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding PyTrialBalanceView}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False" CanUserSortColumns="False" CanUserReorderColumns="False">
+                                    <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Ledger Name" IsReadOnly="True" Binding="{Binding Ledger}" Width="230"/>
+                                    <DataGridTextColumn x:Name="PyParentGroupColumn" Header="Parent Group" IsReadOnly="True" Binding="{Binding ParentGroup}" Width="170"/>
+                                    <DataGridTextColumn x:Name="PyOpeningColumn" Header="Opening Balance" IsReadOnly="True" Binding="{Binding Opening, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="115"/>
+                                    <DataGridTextColumn x:Name="PyDebitColumn" Header="Debit" IsReadOnly="True" Binding="{Binding Debit, Converter={StaticResource FinancialStatementBalanceDisplayConverter}, ConverterParameter=Absolute}" Width="110"/>
+                                    <DataGridTextColumn x:Name="PyCreditColumn" Header="Credit" IsReadOnly="True" Binding="{Binding Credit, Converter={StaticResource FinancialStatementBalanceDisplayConverter}, ConverterParameter=Absolute}" Width="110"/>
+                                    <DataGridTextColumn Header="Closing Balance" IsReadOnly="True" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="120"/>
+                                    <DataGridTemplateColumn x:Name="PyFirstSplitColumn" Header="Non-current / &gt;6M" Width="130">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBox Text="{Binding NonCurrentAmount, Mode=TwoWay, UpdateSourceTrigger=LostFocus, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" IsEnabled="{Binding CanEditBifurcation}" ToolTip="{Binding BifurcationValidation}" HorizontalContentAlignment="Right"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn x:Name="PySecondSplitColumn" Header="Current / &lt;6M" IsReadOnly="True" Binding="{Binding CurrentBifurcatedAmount, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="120"/>
+                                    <DataGridTextColumn Header="Statement" IsReadOnly="True" Binding="{Binding StatementDisplay}" Width="115"/>
+                                    <DataGridTextColumn x:Name="PySourceNatureColumn" Header="Tally Nature" IsReadOnly="True" Binding="{Binding SourceNatureDisplay}" Width="105"/>
+                                    <DataGridTemplateColumn Header="Nature of Group" Width="125">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding NatureChoices}" SelectedItem="{Binding NatureDisplay, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C1 (FS Heads)" Width="230">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding Class3Choices}" SelectedItem="{Binding Classification3, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C2 (Notes Heads)" Width="270">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding Class4Choices}" SelectedItem="{Binding Classification4, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="C3 (Notes Sub-Heads)" Width="260">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource MappingCombo}" ItemsSource="{Binding WorkbookClass3Choices}" SelectedItem="{Binding WorkbookClassification3, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="MappingComboBox_PreviewMouseLeftButtonDown" PreviewKeyDown="MappingComboBox_PreviewKeyDown"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Mapping Status" IsReadOnly="True" Binding="{Binding MappedStatus}" Width="120"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Stock Summary">
+                <Grid Margin="6">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                        <CheckBox Content="Hide 0 Balance" IsChecked="{Binding HideZeroClosingBalance, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0" ToolTip="Default on. Stock rows with an authoritative zero closing balance are hidden; rows whose stock balance authority is unavailable remain visible rather than being treated as zero."/>
+                        <CheckBox Content="Show Unmapped Only" IsChecked="{Binding ShowUnmappedOnly, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <ComboBox ItemsSource="{Binding SameTallyGroupScopes}" SelectedItem="{Binding SameTallyGroupScope, Mode=TwoWay}" Width="86" Margin="0,0,6,0"/>
+                        <Button Content="Apply to Same Stock Group" Command="{Binding ApplyStockMappingToSameGroupCommand}" Padding="9,3" ToolTip="Select an FY stock row with an Inventory Classification, then apply it to other items in the same exact Stock Group. Scope can include PY."/>
+                    </StackPanel>
+                    <TabControl Grid.Row="1">
+                        <TabItem Header="FY">
+                            <DataGrid ItemsSource="{Binding FyStockView}" SelectedItem="{Binding SelectedFyStockRow, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Stock Item" Binding="{Binding Item}" Width="2*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Tally Group" Binding="{Binding Group}" Width="160" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="140" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Unit" Binding="{Binding Unit}" Width="80" IsReadOnly="True"/>
+                                    <DataGridTemplateColumn Header="Inventory Classification" Width="190"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource StockMappingCombo}" ItemsSource="{Binding MappingChoices}" SelectedItem="{Binding Mapping, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Mapping Status" Binding="{Binding MappingStatus}" Width="120" IsReadOnly="True"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </TabItem>
+                        <TabItem Header="PY">
+                            <Grid>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                                    <Button Content="Copy FY → PY" Command="{Binding CopyStockFyToPyMappingCommand}" Padding="9,3" Margin="0,0,6,0"/>
+                                    <Button Content="Copy PY → FY" Command="{Binding CopyStockPyToFyMappingCommand}" Padding="9,3"/>
+                                </StackPanel>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding PyStockView}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Stock Item" Binding="{Binding Item}" Width="2*" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Tally Group" Binding="{Binding Group}" Width="160" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="140" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Unit" Binding="{Binding Unit}" Width="80" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="Inventory Classification" Width="190"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource StockMappingCombo}" ItemsSource="{Binding MappingChoices}" SelectedItem="{Binding Mapping, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Mapping Status" Binding="{Binding MappingStatus}" Width="120" IsReadOnly="True"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Debtors">
+                <Grid Margin="6">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                        <CheckBox Content="Hide 0 Balance" IsChecked="{Binding HideZeroClosingBalance, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <CheckBox Content="Show Unmapped Only" IsChecked="{Binding ShowUnmappedOnly, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <ComboBox ItemsSource="{Binding SameTallyGroupScopes}" SelectedItem="{Binding SameTallyGroupScope, Mode=TwoWay}" Width="86" Margin="0,0,6,0"/>
+                        <Button Content="Apply to Same Tally Group" Command="{Binding ApplyDebtorScheduleToSameGroupCommand}" Padding="9,3" ToolTip="Apply the selected FY Debtor schedule C1/C2 to other Debtors in the same exact Tally Group. Scope can include PY."/>
+                    </StackPanel>
+                    <TabControl Grid.Row="1">
+                        <TabItem Header="FY"><DataGrid ItemsSource="{Binding FyDebtorsView}" SelectedItem="{Binding SelectedFyDebtorRow, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Ledger" Binding="{Binding Ledger}" Width="2*" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Tally Group" Binding="{Binding ParentGroup}" Width="160" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Closing" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="110" IsReadOnly="True"/>
+                                <DataGridTemplateColumn Header="Schedule C1 (Statutory Head)" Width="245"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass1Choices}" SelectedItem="{Binding ScheduleClass1, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="Receivable Status" Width="300"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass2Choices}" SelectedItem="{Binding ScheduleClass2, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Schedule Status" Binding="{Binding ScheduleMappedStatus}" Width="115" IsReadOnly="True"/>
+                            </DataGrid.Columns></DataGrid></TabItem>
+                        <TabItem Header="PY">
+                            <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                                    <Button Content="Copy FY → PY" Command="{Binding CopyDebtorFyToPyMappingCommand}" Padding="9,3" Margin="0,0,6,0"/>
+                                    <Button Content="Copy PY → FY" Command="{Binding CopyDebtorPyToFyMappingCommand}" Padding="9,3"/>
+                                </StackPanel>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding PyDebtorsView}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Ledger" Binding="{Binding Ledger}" Width="2*" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Tally Group" Binding="{Binding ParentGroup}" Width="160" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Closing" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="110" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="Schedule C1 (Statutory Head)" Width="245"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass1Choices}" SelectedItem="{Binding ScheduleClass1, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Receivable Status" Width="300"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass2Choices}" SelectedItem="{Binding ScheduleClass2, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Schedule Status" Binding="{Binding ScheduleMappedStatus}" Width="115" IsReadOnly="True"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Creditors">
+                <Grid Margin="6">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                        <CheckBox Content="Hide 0 Balance" IsChecked="{Binding HideZeroClosingBalance, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <CheckBox Content="Show Unmapped Only" IsChecked="{Binding ShowUnmappedOnly, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <ComboBox ItemsSource="{Binding SameTallyGroupScopes}" SelectedItem="{Binding SameTallyGroupScope, Mode=TwoWay}" Width="86" Margin="0,0,6,0"/>
+                        <Button Content="Apply to Same Tally Group" Command="{Binding ApplyCreditorScheduleToSameGroupCommand}" Padding="9,3" ToolTip="Apply the selected FY Creditor schedule C1/C2 to other Creditors in the same exact Tally Group. Scope can include PY."/>
+                    </StackPanel>
+                    <TabControl Grid.Row="1">
+                        <TabItem Header="FY"><DataGrid ItemsSource="{Binding FyCreditorsView}" SelectedItem="{Binding SelectedFyCreditorRow, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Ledger" Binding="{Binding Ledger}" Width="2*" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Tally Group" Binding="{Binding ParentGroup}" Width="160" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Closing" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="110" IsReadOnly="True"/>
+                                <DataGridTemplateColumn Header="Schedule C1 (Statutory Head)" Width="245"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass1Choices}" SelectedItem="{Binding ScheduleClass1, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="MSME / Non-MSME (Others)" Width="260"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass2Choices}" SelectedItem="{Binding ScheduleClass2, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" ToolTip="Original workbook values: MSME, Others (Non-MSME), Disputed MSME, Disputed Others."/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Schedule Status" Binding="{Binding ScheduleMappedStatus}" Width="115" IsReadOnly="True"/>
+                            </DataGrid.Columns></DataGrid></TabItem>
+                        <TabItem Header="PY">
+                            <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                                    <Button Content="Copy FY → PY" Command="{Binding CopyCreditorFyToPyMappingCommand}" Padding="9,3" Margin="0,0,6,0"/>
+                                    <Button Content="Copy PY → FY" Command="{Binding CopyCreditorPyToFyMappingCommand}" Padding="9,3"/>
+                                </StackPanel>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding PyCreditorsView}" AutoGenerateColumns="False" IsReadOnly="False" RowHeaderWidth="0" CanUserAddRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Ledger" Binding="{Binding Ledger}" Width="2*" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Tally Group" Binding="{Binding ParentGroup}" Width="160" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Closing" Binding="{Binding Closing, Converter={StaticResource FinancialStatementBalanceDisplayConverter}}" Width="110" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="Schedule C1 (Statutory Head)" Width="245"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass1Choices}" SelectedItem="{Binding ScheduleClass1, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="MSME / Non-MSME (Others)" Width="260"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox Style="{StaticResource ScheduleMappingCombo}" ItemsSource="{Binding ScheduleClass2Choices}" SelectedItem="{Binding ScheduleClass2, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" ToolTip="Original workbook values: MSME, Others (Non-MSME), Disputed MSME, Disputed Others."/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Schedule Status" Binding="{Binding ScheduleMappedStatus}" Width="115" IsReadOnly="True"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <StackPanel Grid.Row="4" Visibility="{Binding FinancialStatementsEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" Margin="2,8,0,0">
+            <TextBlock Text="{Binding PreparationStatusText}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <Border Grid.RowSpan="5" Visibility="{Binding IsFinancialStatementsDisabled, Converter={StaticResource BooleanToVisibilityConverter}}" Background="{DynamicResource BackgroundBrush}" Panel.ZIndex="50">
+            <Grid>
+                <Border Width="560" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center" Style="{StaticResource CardBorderStyle}">
+                    <StackPanel>
+                        <TextBlock Text="Financial Statements is temporarily disabled in this AAH release" FontSize="22" FontWeight="SemiBold" TextAlignment="Center"/>
+                        <TextBlock Text="Saved preparation, mappings, previous-year data and CA details are retained for future reactivation. No Financial Statements-specific Tally/NCE collection runs while this release gate is active." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,10,0,20"/>
+                        <TextBlock Text="We will re-enable this module in a later update after the Financial Statements plug-in authority is redesigned and revalidated." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

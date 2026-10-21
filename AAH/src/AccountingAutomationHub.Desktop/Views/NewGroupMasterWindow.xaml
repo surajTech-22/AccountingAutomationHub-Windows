@@ -1,0 +1,69 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.NewGroupMasterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="New Group"
+        Width="650" Height="465"
+        MinWidth="600" MinHeight="430"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock x:Name="HeaderText" Text="New Group" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock x:Name="IntroText" Text="Create a new accounting Group separately from Ledger creation. For automatic Tally CREATE, place the Manual Group under an existing accounting Group. A local top-level Primary Group is allowed, but Tally export will require its Group Nature before it can be auto-created."
+                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,5,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Margin="0,16,0,12" Padding="18"
+                Background="White" BorderBrush="#D8E0EB" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="Group Name" VerticalAlignment="Center"/>
+                <TextBox x:Name="GroupNameBox" Grid.Column="1" MinHeight="34" Padding="9,6"/>
+
+                <TextBlock Grid.Row="1" Text="Under / Parent Group" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <ComboBox x:Name="ParentBox" Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" MinHeight="34"
+                          SelectionChanged="ParentBox_SelectionChanged"/>
+
+                <TextBlock Grid.Row="2" Text="Parent's Parent" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <TextBlock x:Name="ParentParentText" Grid.Row="2" Grid.Column="1" Margin="0,12,0,0"
+                           FontWeight="SemiBold" VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="3" Text="Company" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <TextBlock x:Name="CompanyText" Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="4" Text="Master Source" VerticalAlignment="Center" Margin="0,12,0,0"/>
+                <Border Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Padding="9,6" Background="#F5F8FC" CornerRadius="5">
+                    <TextBlock Text="Manual Group" FontWeight="SemiBold"/>
+                </Border>
+            </Grid>
+        </Border>
+
+        <DockPanel Grid.Row="2" LastChildFill="True">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" Click="Cancel_Click" Padding="15,8" Margin="8,0,0,0"/>
+                <Button x:Name="ActionButton" Content="Create Group" Click="Create_Click" Style="{StaticResource PrimaryButtonStyle}" Padding="15,8" Margin="8,0,0,0"/>
+            </StackPanel>
+            <TextBlock x:Name="ValidationText" Foreground="#B42318" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </DockPanel>
+    </Grid>
+</Window>

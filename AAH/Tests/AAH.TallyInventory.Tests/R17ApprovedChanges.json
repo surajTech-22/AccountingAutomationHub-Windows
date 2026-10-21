@@ -1,0 +1,14 @@
+[
+  {
+    "path": "src/AccountingAutomationHub.Infrastructure/Tally/TallyAccountingVoucherExportService.cs",
+    "before": "        var stockItemUnitProfiles = _stockMasterRepository.GetStockItemUnitProfiles(client.Id, client.FinancialYear);",
+    "after": "        // R17: frozen voucher entries must use the exact name of their verified\n        // durable Master before both master dependency lookup and voucher XML.\n        var stockExportIdentity = new StockExportIdentityResolver(stockItems,\n            _stockMasterRepository.GetItemAliases(client.Id, client.FinancialYear));\n        for (var index = 0; index < rawPrepared.Count; index++)\n        {\n            var voucher = rawPrepared[index];\n            if (voucher.InventoryEntries is not { Count: > 0 } inventoryEntries) continue;\n            rawPrepared[index] = voucher with\n            {\n                InventoryEntries = inventoryEntries.Select(entry =>\n                {\n                    var master = stockExportIdentity.Resolve(entry.StockItemPersistentId, entry.ItemName, entry.TallyStockMasterId);\n                    return entry with { ItemName = master.Name.Trim() };\n                }).ToArray()\n            };\n        }\n        var stockItemUnitProfiles = _stockMasterRepository.GetStockItemUnitProfiles(client.Id, client.FinancialYear);",
+    "baseline_text_sha256": "25eb908e2d06e0e04bdab400c56652bab863abb32d38fcc46c3871317c6f7c8a"
+  },
+  {
+    "path": "src/AccountingAutomationHub.Infrastructure/Tally/TallyHttpService.cs",
+    "before": "\"<(LEDGER|GROUP|STOCKITEM|STOCKGROUP|STOCKCATEGORY|UNIT|GODOWN|VOUCHERTYPE|COSTCATEGORY|COSTCENTRE|TAXCLASSIFICATION|TAXUNIT)\\b\"",
+    "after": "@\"<(LEDGER|GROUP|STOCKITEM|STOCKGROUP|STOCKCATEGORY|UNIT|GODOWN|VOUCHERTYPE|COSTCATEGORY|COSTCENTRE|TAXCLASSIFICATION|TAXUNIT)\\b\"",
+    "baseline_text_sha256": "0a01814f0e27b5226fcf1b726f71d23f14190ebe5d9751fc40fedd886a919dc6"
+  }
+]

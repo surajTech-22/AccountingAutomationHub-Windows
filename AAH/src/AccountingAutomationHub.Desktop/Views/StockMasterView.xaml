@@ -1,0 +1,247 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.StockMasterView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:viewModels="clr-namespace:AccountingAutomationHub.Desktop.ViewModels">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <HierarchicalDataTemplate DataType="{x:Type viewModels:MasterTreeNode}" ItemsSource="{Binding Children}">
+            <TextBlock Text="{Binding DisplayTitle}" />
+        </HierarchicalDataTemplate>
+    </UserControl.Resources>
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,0,8">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <WrapPanel>
+                    <TextBox Width="280" MinHeight="34" Padding="9,6" Text="{Binding SearchText,UpdateSourceTrigger=PropertyChanged}" ToolTip="Search the selected Stock Master section" Margin="0,0,8,6"/>
+                    <CheckBox Content="Include archived" IsChecked="{Binding IncludeArchived}" VerticalAlignment="Center" Margin="6,0,12,6"/>
+                </WrapPanel>
+                <WrapPanel Grid.Row="1">
+                    <Button Content="Import Stock Masters File" Command="{Binding ImportCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,6" ToolTip="Import an XML/JSON Master file already exported from Tally."/>
+                    <Button Content="Import Stock From Tally" Command="{Binding ImportFromTallyCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,6" ToolTip="Force one fresh live Tally Stock Master read for the linked client/company. Does not import vouchers or Sales/Purchase."/>
+                    <Button Content="Add Master" Command="{Binding AddCommand}" Padding="14,8" Margin="0,0,8,6"/>
+                    <Button Content="Save Master" Command="{Binding SaveCommand}" Padding="14,8" Margin="0,0,8,6"/>
+                    <Button Content="Archive / Restore" Command="{Binding ArchiveCommand}" Padding="14,8" Margin="0,0,8,6"/>
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="14,8" Margin="0,0,8,6"/>
+                    <Button Content="Refresh GST HSN/SAC" Command="{Binding RefreshOfficialGstDirectoryCommand}" Padding="14,8" Margin="0,0,8,6" ToolTip="Best-effort download of the complete official GSTN HSN/SAC directory into AAH"/>
+                    <Button Content="Open GSTN HSN/SAC" Command="{Binding OpenGstSearchCommand}" Padding="14,8" Margin="0,0,8,6" ToolTip="Open the official GST Portal Search HSN/SAC page to download the current HSN directory Excel"/>
+                    <Button Content="Import GST Directory" Command="{Binding ImportGstDirectoryCommand}" Padding="14,8" Margin="0,0,8,6" ToolTip="Import the official GSTN HSN_SAC.xlsx if the portal download is unavailable"/>
+                </WrapPanel>
+                <TextBlock Grid.Row="2" Text="{Binding StockMasterPermissionSummary}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="2,2,0,0"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><TextBlock Text="{Binding StockItemCount}" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Stock Items" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><TextBlock Text="{Binding UnitCount}" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Units" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+            <Border Grid.Column="4" Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><TextBlock Text="{Binding MappingCount}" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Item / Unit / Conversion Mappings" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+        </Grid>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="245"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="8">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Stock Master — Tally Inventory Masters" FontWeight="SemiBold" Margin="4,2,4,8" TextWrapping="Wrap"/>
+                    <TreeView ItemsSource="{Binding Sections}" SelectedItemChanged="StockTree_SelectedItemChanged" BorderThickness="0" Background="Transparent">
+                        <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem"><Setter Property="IsExpanded" Value="{Binding IsExpanded,Mode=TwoWay}"/><Setter Property="Padding" Value="2"/></Style></TreeView.ItemContainerStyle>
+                    </TreeView>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="0">
+                <TabControl>
+                    <TabItem Header="Master Details">
+                        <Grid>
+                            <DataGrid ItemsSource="{Binding StockItems}" SelectedItem="{Binding SelectedStockItem}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" IsReadOnly="{Binding IsStockMasterReadOnly}"
+                                      Visibility="{Binding IsStockItemsSection,Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Stock Item" Binding="{Binding Name,UpdateSourceTrigger=LostFocus}" Width="190"/>
+                                    <DataGridTextColumn Header="Part No / SKU" Binding="{Binding PartNumberSku,UpdateSourceTrigger=LostFocus}" Width="120"/>
+                                    <DataGridTextColumn Header="Stock Group" Binding="{Binding StockGroup,UpdateSourceTrigger=LostFocus}" Width="135"/>
+                                    <DataGridTextColumn Header="Stock Category" Binding="{Binding StockCategory,UpdateSourceTrigger=LostFocus}" Width="135"/>
+                                    <DataGridTemplateColumn Header="Inventory / Transaction Unit (Purchase + Sales)" Width="220">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.StockMasterUnitOptions,RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding BaseUnit,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" IsEditable="False" IsSynchronizedWithCurrentItem="False"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Rate Unit" Width="110">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.StockMasterUnitOptions,RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding RateUnit,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" IsEditable="False" IsSynchronizedWithCurrentItem="False"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Tally Alternate (Unit Profile)" Binding="{Binding AdditionalUnit}" IsReadOnly="True" Width="170"/>
+                                    <DataGridTextColumn Header="Default Godown" Binding="{Binding DefaultGodown,UpdateSourceTrigger=LostFocus}" Width="130"/>
+                                    <DataGridTextColumn Header="Default Purchase Ledger" Binding="{Binding DefaultPurchaseLedger,UpdateSourceTrigger=LostFocus}" Width="160"/>
+                                    <DataGridTextColumn Header="Default Sales Ledger" Binding="{Binding DefaultSalesLedger,UpdateSourceTrigger=LostFocus}" Width="150"/>
+                                    <DataGridTextColumn Header="Reorder" Binding="{Binding ReorderPoint,UpdateSourceTrigger=LostFocus,StringFormat=0.###}" Width="85"/>
+                                    <DataGridTextColumn Header="Min Stock" Binding="{Binding MinimumStock,UpdateSourceTrigger=LostFocus,StringFormat=0.###}" Width="85"/>
+                                    <DataGridTextColumn Header="Max Stock" Binding="{Binding MaximumStock,UpdateSourceTrigger=LostFocus,StringFormat=0.###}" Width="85"/>
+                                    <DataGridTextColumn Header="Authority" Binding="{Binding AuthoritySource}" IsReadOnly="True" Width="120"/>
+                                    <DataGridTextColumn Header="Tally MASTERID" Binding="{Binding TallyMasterId}" IsReadOnly="True" Width="110"/>
+                                    <DataGridTextColumn Header="Tally ALTERID" Binding="{Binding TallyAlterId}" IsReadOnly="True" Width="105"/>
+                                    <DataGridTextColumn Header="HSN / SAC" Binding="{Binding HsnSac,UpdateSourceTrigger=LostFocus}" Width="100"/>
+                                    <DataGridTextColumn Header="GST Rate" Binding="{Binding GstRate,UpdateSourceTrigger=LostFocus,StringFormat=0.##}" Width="80"/>
+                                    <DataGridTextColumn Header="Type of Supply" Binding="{Binding GstTypeOfSupply,UpdateSourceTrigger=LostFocus}" Width="115"/>
+                                    <DataGridCheckBoxColumn Header="Batch Wise" Binding="{Binding BatchWise}" Width="85"/>
+                                    <DataGridCheckBoxColumn Header="Perishable" Binding="{Binding Perishable}" Width="85"/>
+                                    <DataGridCheckBoxColumn Header="Mfg Date" Binding="{Binding HasManufacturingDate}" Width="80"/>
+                                    <DataGridTextColumn Header="Costing Method" Binding="{Binding CostingMethod,UpdateSourceTrigger=LostFocus}" Width="125"/>
+                                    <DataGridTextColumn Header="Valuation Method" Binding="{Binding ValuationMethod,UpdateSourceTrigger=LostFocus}" Width="130"/>
+                                    <DataGridTextColumn Header="Company" Binding="{Binding Company,UpdateSourceTrigger=LostFocus}" Width="150"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="115"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <DataGrid ItemsSource="{Binding Units}" SelectedItem="{Binding SelectedUnit}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" IsReadOnly="{Binding IsStockMasterReadOnly}"
+                                      Visibility="{Binding IsUnitsSection,Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Unit Symbol" Binding="{Binding Name,UpdateSourceTrigger=LostFocus}" Width="130"/>
+                                    <DataGridTextColumn Header="Formal Name" Binding="{Binding FormalName,UpdateSourceTrigger=LostFocus}" Width="180"/>
+                                    <DataGridTemplateColumn Header="Decimal Places (0-4)" Width="140">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.DecimalPlaceOptions,RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding DecimalPlaces,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" IsEditable="False" IsSynchronizedWithCurrentItem="False"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Reporting UQC" Binding="{Binding ReportingUqc,UpdateSourceTrigger=LostFocus}" Width="160"/>
+                                    <DataGridTextColumn Header="Conversion" Binding="{Binding Conversion,UpdateSourceTrigger=LostFocus,StringFormat=0.######}" Width="120"/>
+                                    <DataGridTextColumn Header="Company" Binding="{Binding Company,UpdateSourceTrigger=LostFocus}" Width="180"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="150"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <DataGrid ItemsSource="{Binding SimpleMasters}" SelectedItem="{Binding SelectedSimpleMaster}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" IsReadOnly="{Binding IsStockMasterReadOnly}"
+                                      Visibility="{Binding IsSimpleSection,Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Type" Binding="{Binding Type}" IsReadOnly="True" Width="150"/>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name,UpdateSourceTrigger=LostFocus}" Width="220"/>
+                                    <DataGridTextColumn Header="Under / Parent" Binding="{Binding Parent,UpdateSourceTrigger=LostFocus}" Width="190"/>
+                                    <DataGridTextColumn Header="Company" Binding="{Binding Company,UpdateSourceTrigger=LostFocus}" Width="180"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="150"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Stock Item Unit Profiles">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Add Allowed Unit" Command="{Binding AddUnitProfileCommand}" Padding="12,6" Margin="0,0,8,0"/>
+                                <Button Content="Save Unit Profile" Command="{Binding SaveUnitProfileCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="12,6" Margin="0,0,8,0"/>
+                                <Button Content="Remove" Command="{Binding DeleteUnitProfileCommand}" Padding="12,6" Margin="0,0,12,0"/>
+                                <TextBlock Text="Per item: 1 Allowed Unit = Factor × Base Unit. AAH locks deterministic physical factors; package factors are item-specific." VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding StockItemUnitProfiles}" SelectedItem="{Binding SelectedUnitProfile}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" IsReadOnly="{Binding IsStockMasterReadOnly}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Stock Item" Binding="{Binding StockItemName}" IsReadOnly="True" Width="*"/>
+                                    <DataGridTemplateColumn Header="Allowed Unit" Width="150">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.StockMasterUnitOptions,RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding UnitCode,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" IsEditable="False" IsSynchronizedWithCurrentItem="False"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Factor to Base" Binding="{Binding FactorToBase,UpdateSourceTrigger=LostFocus,StringFormat=0.########}" Width="120"/>
+                                    <DataGridCheckBoxColumn Header="Allowed" Binding="{Binding IsAllowed}" Width="80"/>
+                                    <DataGridCheckBoxColumn Header="Tally Alternate" Binding="{Binding IsTallyAlternateUnit}" Width="105"/>
+                                    <DataGridCheckBoxColumn Header="Package Factor" Binding="{Binding IsPackageConversion}" Width="105"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+
+                    <TabItem Header="GST HSN / SAC Directory">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                                <WrapPanel Margin="0,0,0,6">
+                                    <TextBox Width="300" MinHeight="30" Padding="8,5" Text="{Binding GstDirectorySearchText,UpdateSourceTrigger=PropertyChanged}" ToolTip="Search official GSTN code or description" Margin="0,0,8,0"/>
+                                    <Button Content="Apply to Selected Stock Item" Command="{Binding ApplyGstCodeCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="12,6" Margin="0,0,8,0"/>
+                                    <Button Content="Open GST Portal" Command="{Binding OpenGstSearchCommand}" Padding="12,6"/>
+                                </WrapPanel>
+                                <TextBlock Text="{Binding GstDirectorySummary}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                <TextBlock Text="Source: GST Portal HSN/SAC directory. AAH stores the official code/description locally; GST Rate remains Stock Item/Stock Group authority." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding GstHsnSacDirectory}" SelectedItem="{Binding SelectedGstDirectoryRow}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" IsReadOnly="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Type" Binding="{Binding Kind}" Width="70"/>
+                                    <DataGridTextColumn Header="HSN / SAC Code" Binding="{Binding Code}" Width="130"/>
+                                    <DataGridTextColumn Header="Official GSTN Description" Binding="{Binding Description}" Width="*"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="190"/>
+                                    <DataGridTextColumn Header="Updated" Binding="{Binding UpdatedUtc,StringFormat={}{0:dd-MM-yyyy HH:mm}}" Width="145"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+
+                    <TabItem Header="Item Name Mappings">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Add Mapping" Command="{Binding AddAliasCommand}" Padding="12,6" Margin="0,0,8,0"/>
+                                <Button Content="Save Mapping" Command="{Binding SaveAliasCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="12,6"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding ItemAliases}" SelectedItem="{Binding SelectedAlias}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" IsReadOnly="{Binding IsStockMasterReadOnly}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Imported Item Alias" Binding="{Binding ImportedAlias,UpdateSourceTrigger=LostFocus}" Width="*"/>
+                                    <DataGridTextColumn Header="Final Stock Item Name" Binding="{Binding StockItemName,UpdateSourceTrigger=LostFocus}" Width="*"/>
+                                    <DataGridTextColumn Header="Updated" Binding="{Binding UpdatedUtc,StringFormat={}{0:dd-MM-yyyy HH:mm}}" IsReadOnly="True" Width="150"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+
+                    <TabItem Header="Unit Mappings">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Add Mapping" Command="{Binding AddUnitMappingCommand}" Padding="12,6" Margin="0,0,8,0"/>
+                                <Button Content="Save Mapping" Command="{Binding SaveUnitMappingCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="12,6"/>
+                                <TextBlock Text="Choose an AAH standard Unit. Deterministic physical/count conversion is automatic; package conversion remains explicit." VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="12,0,0,0"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding UnitMappings}" SelectedItem="{Binding SelectedUnitMapping}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" IsReadOnly="{Binding IsStockMasterReadOnly}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Stock Item" Binding="{Binding StockItemName,UpdateSourceTrigger=LostFocus}" Width="*"/>
+                                    <DataGridTextColumn Header="Imported Unit" Binding="{Binding ImportedUnit,UpdateSourceTrigger=LostFocus}" Width="150"/>
+                                    <DataGridTemplateColumn Header="Final Unit" Width="170">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox ItemsSource="{Binding DataContext.StandardUnitOptions,RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                          SelectedItem="{Binding FinalUnit,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                                                          IsEditable="False" IsSynchronizedWithCurrentItem="False"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+
+                    <TabItem Header="Quantity Conversion">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Add Conversion" Command="{Binding AddConversionCommand}" Padding="12,6" Margin="0,0,8,0"/>
+                                <Button Content="Save Conversion" Command="{Binding SaveConversionCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="12,6"/>
+                                <TextBlock Text="Only real Imported Unit → Final Unit differences belong here. Confirmed factors are always saved. Rule: 1 Imported Unit = Factor × Final Unit" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="12,0,0,0"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding QuantityConversions}" SelectedItem="{Binding SelectedConversion}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" IsReadOnly="{Binding IsStockMasterReadOnly}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Stock Item (blank = universal)" Binding="{Binding StockItemName,UpdateSourceTrigger=LostFocus}" Width="*"/>
+                                    <DataGridTextColumn Header="Imported Unit" Binding="{Binding ImportedUnit,UpdateSourceTrigger=LostFocus}" Width="140"/>
+                                    <DataGridTemplateColumn Header="Final Unit" Width="160">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox ItemsSource="{Binding DataContext.StandardUnitOptions,RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                          SelectedItem="{Binding FinalUnit,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                                                          IsEditable="False" IsSynchronizedWithCurrentItem="False"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Factor" Binding="{Binding Factor,UpdateSourceTrigger=LostFocus,StringFormat=0.######}" Width="110"/>
+                                    <DataGridCheckBoxColumn Header="Universal" Binding="{Binding IsUniversal}" Width="85"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,8,4,0" TextWrapping="Wrap"/>
+    </Grid>
+</UserControl>

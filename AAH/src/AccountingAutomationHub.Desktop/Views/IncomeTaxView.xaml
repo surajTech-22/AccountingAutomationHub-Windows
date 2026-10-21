@@ -1,0 +1,77 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.IncomeTaxView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="20">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Income Tax" FontSize="25" FontWeight="SemiBold"/>
+                    <TextBlock Text="Form 3CB preparation · designed as the first report in an expandable Income Tax workspace" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,5,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Reload" Command="{Binding ReloadCommand}" Padding="14,8" Margin="0,0,8,0"/>
+                    <Button Content="Save Form 3CB" Command="{Binding SaveCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="14,8"/>
+                </StackPanel>
+            </Grid>
+
+            <Border Style="{StaticResource CardBorderStyle}" Margin="0,16,0,0" Padding="16">
+                <StackPanel>
+                    <TextBlock Text="Assessee / Report identity" FontSize="16" FontWeight="SemiBold"/>
+                    <UniformGrid Columns="2" Margin="0,12,0,0">
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Name of assessee"/><TextBox Text="{Binding AssesseeName, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="PAN"/><TextBox Text="{Binding Pan, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Status / constitution"/><TextBox Text="{Binding Status, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Nature of business / profession"/><TextBox Text="{Binding BusinessProfession, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Previous year"/><TextBox Text="{Binding PreviousYear, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Assessment year"/><TextBox Text="{Binding AssessmentYear, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                    </UniformGrid>
+                    <TextBlock Text="Address"/><TextBox Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="58" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0" Padding="16">
+                <StackPanel>
+                    <TextBlock Text="Form 3CB audit particulars" FontSize="16" FontWeight="SemiBold"/>
+                    <CheckBox Content="Accounts are not required to be audited under any other law" IsChecked="{Binding AccountsNotAuditedUnderOtherLaw}" Margin="0,10,0,6"/>
+                    <UniformGrid Columns="2">
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Tax audit section"/><TextBox Text="{Binding AuditSection, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Location of books of account"/><TextBox Text="{Binding BooksLocation, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Accounts / records examined"/><TextBox Text="{Binding AccountsExamined, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Balance Sheet date"/><TextBox Text="{Binding BalanceSheetDate, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Profit &amp; Loss period"/><TextBox Text="{Binding ProfitLossPeriod, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Profit / (Loss) as per accounts"/><TextBox Text="{Binding ProfitLossAmount, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                    </UniformGrid>
+                    <TextBlock Text="Form 3CD annexure statement"/><TextBox Text="{Binding AnnexureStatement, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0"/>
+                    <StackPanel Margin="0,10,0,0">
+                        <CheckBox Content="All information and explanations necessary for the audit have been obtained" IsChecked="{Binding InformationAndExplanationsObtained}" Margin="0,2"/>
+                        <CheckBox Content="Proper books of account have been kept so far as appears from examination" IsChecked="{Binding ProperBooksKept}" Margin="0,2"/>
+                        <CheckBox Content="Balance Sheet and Profit &amp; Loss account are in agreement with the books of account" IsChecked="{Binding FinancialStatementsAgreeWithBooks}" Margin="0,2"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBorderStyle}" Margin="0,12,0,0" Padding="16">
+                <StackPanel>
+                    <TextBlock Text="Chartered Accountant / signing details" FontSize="16" FontWeight="SemiBold"/>
+                    <UniformGrid Columns="2" Margin="0,12,0,0">
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Audit firm"/><TextBox Text="{Binding AuditFirmName, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Firm Registration Number"/><TextBox Text="{Binding FirmRegistrationNumber, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Signing auditor"/><TextBox Text="{Binding AuditorName, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Membership Number"/><TextBox Text="{Binding MembershipNumber, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="UDIN"/><TextBox Text="{Binding Udin, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,0,10"><TextBlock Text="Report date"/><TextBox Text="{Binding ReportDate, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                        <StackPanel Margin="0,0,10,10"><TextBlock Text="Place"/><TextBox Text="{Binding ReportPlace, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                    </UniformGrid>
+                    <TextBlock Text="Observations / comments"/><TextBox Text="{Binding Observations, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="70" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                    <TextBlock Text="Qualifications / limitations"/><TextBox Text="{Binding Qualifications, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="70" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                    <CheckBox Content="Information and explanations obtained are sufficient and particulars stated are true and correct to the best of the auditor's information" IsChecked="{Binding InformationTrueAndCorrect}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,12,0,20">
+                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

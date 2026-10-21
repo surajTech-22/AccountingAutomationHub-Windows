@@ -1,0 +1,39 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AdvancedReconciliationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Advanced Bank Reconciliation" Width="760" Height="620"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <Grid Margin="18">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="Advanced Bank Reconciliation" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock Text="Preview 1→many, many→1, partial settlements and explicit adjustments before committing. Bank Statement evidence is not overwritten." TextWrapping="Wrap" Margin="0,4,0,12" Foreground="Gray"/>
+        </StackPanel>
+        <Grid Grid.Row="1" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <TextBlock Text="Book Amount" VerticalAlignment="Center"/><TextBox x:Name="BookAmountBox" Grid.Column="1" Margin="4" Padding="7"/>
+            <TextBlock Grid.Row="1" Text="Book References" VerticalAlignment="Top" Margin="0,8,0,0"/><TextBox x:Name="ReferencesBox" Grid.Row="1" Grid.Column="1" Margin="4" Padding="7" Height="70" AcceptsReturn="True" TextWrapping="Wrap" ToolTip="One reference per line, or separate with comma/semicolon."/>
+            <TextBlock Grid.Row="2" Text="Adjustment Amount" VerticalAlignment="Center"/><TextBox x:Name="AdjustmentBox" Grid.Row="2" Grid.Column="1" Margin="4" Padding="7" Text="0"/>
+            <TextBlock Grid.Row="3" Text="Adjustment Ledger" VerticalAlignment="Center"/><ComboBox x:Name="AdjustmentLedgerBox" Grid.Row="3" Grid.Column="1" Margin="4" IsEditable="True"/>
+        </Grid>
+        <Border Grid.Row="2" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="8" Padding="12">
+            <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <TextBlock x:Name="SummaryText" Text="Press Preview to calculate the reconciliation." TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <DataGrid Grid.Row="1" x:Name="TransactionGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, StringFormat=dd-MMM-yyyy}" Width="110"/>
+                        <DataGridTextColumn Header="Bank" Binding="{Binding BankAccountName}" Width="160"/>
+                        <DataGridTextColumn Header="Narration" Binding="{Binding Narration}" Width="*"/>
+                        <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat=N2}" Width="110"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+        <DockPanel Grid.Row="3" Margin="0,12,0,0">
+            <Button Content="Close" Click="Close_Click" Padding="14,7" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+            <Button Content="Commit Match" Click="Commit_Click" Padding="14,7" DockPanel.Dock="Right" IsEnabled="False" x:Name="CommitButton"/>
+            <Button Content="Preview" Click="Preview_Click" Padding="14,7" DockPanel.Dock="Right" Margin="0,0,8,0"/>
+        </DockPanel>
+    </Grid>
+</Window>

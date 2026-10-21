@@ -1,0 +1,86 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AuditRecordLookupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Audit Record Lookup" Width="920" Height="720" MinWidth="760" MinHeight="560"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="Audit Record Lookup" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock Text="Readable voucher, party, amount and retained source evidence" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Margin="0,0,6,0" Padding="15" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                        <StackPanel>
+                            <TextBlock Text="Voucher Information" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="115"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Date" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3"/><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DateText}" Margin="0,3"/>
+                                <TextBlock Grid.Row="1" Text="Voucher" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding VoucherType}" Margin="0,3"/>
+                                <TextBlock Grid.Row="2" Text="Reference" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3"/><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Reference}" Margin="0,3" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Row="3" Text="Authority ID" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3"/><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AuthorityId}" Margin="0,3" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Row="4" Text="Class" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3"/><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding TransactionClass}" Margin="0,3" TextWrapping="Wrap"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Margin="6,0,0,0" Padding="15" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                        <StackPanel>
+                            <TextBlock Text="Party / Ledger" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Account / Party" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock Text="{Binding PartyOrLedger}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,10"/>
+                            <TextBlock Text="Counterparty / Other Ledgers" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock Text="{Binding Counterparty}" TextWrapping="Wrap" Margin="0,3,0,10"/>
+                            <TextBlock Text="Group / Tab" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock Text="{Binding Category}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <Border Padding="15" Margin="0,0,0,12" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel>
+                        <TextBlock Text="Amounts" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Padding="12" Margin="0,0,6,0" Background="{DynamicResource AppBackgroundBrush}" CornerRadius="8"><StackPanel><TextBlock Text="Debit" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding Debit, StringFormat=N2}" FontSize="18" FontWeight="SemiBold" Margin="0,3,0,0"/></StackPanel></Border>
+                            <Border Grid.Column="1" Padding="12" Margin="6,0" Background="{DynamicResource AppBackgroundBrush}" CornerRadius="8"><StackPanel><TextBlock Text="Credit" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding Credit, StringFormat=N2}" FontSize="18" FontWeight="SemiBold" Margin="0,3,0,0"/></StackPanel></Border>
+                            <Border Grid.Column="2" Padding="12" Margin="6,0,0,0" Background="{DynamicResource AppBackgroundBrush}" CornerRadius="8"><StackPanel><TextBlock Text="Amount" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding Amount, StringFormat=N2}" FontSize="18" FontWeight="SemiBold" Margin="0,3,0,0"/></StackPanel></Border>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Margin="0,0,6,0" Padding="15" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                        <StackPanel>
+                            <TextBlock Text="Source Evidence" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Status" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap" Margin="0,3,0,9"/>
+                            <TextBlock Text="Evidence Status" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding EvidenceStatus}" TextWrapping="Wrap" Margin="0,3,0,9"/>
+                            <TextBlock Text="Source Evidence" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding SourceEvidence}" TextWrapping="Wrap" Margin="0,3,0,9"/>
+                            <TextBlock Text="Source" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding Source}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Margin="6,0,0,0" Padding="15" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                        <StackPanel>
+                            <TextBlock Text="Narration / Review" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Original Narration" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding OriginalNarration}" TextWrapping="Wrap" Margin="0,3,0,10"/>
+                            <TextBlock Text="Statutory Rule" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding RuleReference}" TextWrapping="Wrap" Margin="0,3,0,10"/>
+                            <TextBlock Text="Rule Review" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding RuleReview}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="2" Content="Close" Width="90" Padding="12,6" HorizontalAlignment="Right" Margin="0,14,0,0" IsCancel="True"/>
+    </Grid>
+</Window>

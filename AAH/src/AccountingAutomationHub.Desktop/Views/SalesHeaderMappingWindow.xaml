@@ -1,0 +1,54 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.SalesHeaderMappingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Sales Register Mapping" Height="720" Width="980" MinHeight="520" MinWidth="760"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="Manual Sales Register Mapping" FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock Text="Existing built-in Excel mappings were applied first. Review only what is unresolved or incorrect. Confirmed mapping is remembered for this client and Financial Year." Margin="0,4,0,10" TextWrapping="Wrap" Foreground="#475569"/>
+        </StackPanel>
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="200"/><ColumnDefinition Width="24"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="GST Treatment" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <controls:SearchableComboBox OpenOnFocus="True" Grid.Column="1" SourceItems="{Binding GstTreatments,RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding GstTreatment,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" AllowCustomText="False" EnableMouseWheelSelection="False" Margin="8,0,0,0"/>
+            <TextBlock Grid.Column="3" Text="Tax Amount Columns" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <controls:SearchableComboBox OpenOnFocus="True" Grid.Column="4" SourceItems="{Binding TaxColumnModes,RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding TaxColumnMode,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}" AllowCustomText="False" EnableMouseWheelSelection="False" Margin="8,0,0,0"/>
+        </Grid>
+        <DataGrid Grid.Row="2" ItemsSource="{Binding Rows,RelativeSource={RelativeSource AncestorType=Window}}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal"
+                  EnableRowVirtualization="False" EnableColumnVirtualization="False" VirtualizingPanel.IsVirtualizing="False" ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="ORIGINAL FILE HEADER" Binding="{Binding SourceHeader}" IsReadOnly="True" Width="2*"/>
+                <DataGridTextColumn Header="SAMPLE VALUE" Binding="{Binding SampleValue}" IsReadOnly="True" Width="1.5*"/>
+                <DataGridTemplateColumn Header="MAP TO SALES FIELD" Width="2*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Grid.Column="0"
+                                          ItemsSource="{Binding DataContext.TargetFields,RelativeSource={RelativeSource AncestorType=Window}}"
+                                          SelectedItem="{Binding TargetField,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                                          IsEditable="False" IsSynchronizedWithCurrentItem="False"
+                                          MaxDropDownHeight="400"/>
+                                <Button Grid.Column="1" Content="×" Width="28" Height="26" Margin="6,0,0,0"
+                                        Padding="0" ToolTip="Clear only this mapping" Click="ClearMapping_Click"/>
+                            </Grid>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="RULE" Binding="{Binding Rule}" IsReadOnly="True" Width="1.4*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock Grid.Row="3" Text="{Binding ValidationText,RelativeSource={RelativeSource AncestorType=Window}}" Foreground="#B91C1C" Margin="0,8,0,0" TextWrapping="Wrap"/>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Validate" Click="Validate_Click" Padding="18,8" Margin="0,0,8,0"/>
+            <Button Content="Import &amp; Remember Mapping" Click="Import_Click" Padding="18,8" Margin="0,0,8,0" IsDefault="True"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="18,8" Margin="8,0,0,0" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

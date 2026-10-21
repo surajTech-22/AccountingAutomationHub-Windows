@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>AAHNetworkClient</AssemblyName>
+    <Version>4.0.0-phase1-security1</Version>
+    <AssemblyVersion>4.0.0.305</AssemblyVersion>
+    <FileVersion>4.0.0.305</FileVersion>
+    <RootNamespace>AccountingAutomationHub.NetworkClient</RootNamespace>
+  </PropertyGroup>
+</Project>

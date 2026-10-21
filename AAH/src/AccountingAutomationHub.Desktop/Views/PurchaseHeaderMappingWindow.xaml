@@ -1,0 +1,103 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.PurchaseHeaderMappingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Purchase Register Mapping" Height="720" Width="1060" MinHeight="560" MinWidth="820"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="Manual Purchase Register Mapping" FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock Text="This uses the same saved-format process as Sales. Choose the worksheet and exact Header Row only when this Purchase workbook format is not already known. Data Start Row controls where invoice rows begin. Rescan rebuilds the mapping from that exact header row."
+                       Margin="0,4,0,10" TextWrapping="Wrap" Foreground="#475569"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="4" Padding="10" Background="#F8FAFC">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2.2*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="95"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="WORKSHEET" FontSize="10" FontWeight="SemiBold" Foreground="#64748B"/>
+                    <ComboBox ItemsSource="{Binding AvailableSheets,RelativeSource={RelativeSource AncestorType=Window}}"
+                              SelectedItem="{Binding SelectedSheetName,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                              SelectionChanged="Sheet_SelectionChanged" MinWidth="220" Height="30"/>
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="HEADER ROW" FontSize="10" FontWeight="SemiBold" Foreground="#64748B" VerticalAlignment="Center" Margin="18,0,8,0"/>
+                <TextBox Grid.Column="2" Text="{Binding HeaderRowText,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                         VerticalContentAlignment="Center" Height="30"/>
+                <TextBlock Grid.Column="3" Text="DATA START ROW" FontSize="10" FontWeight="SemiBold" Foreground="#64748B" VerticalAlignment="Center" Margin="18,0,8,0"/>
+                <TextBox Grid.Column="4" Text="{Binding DataStartRowText,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                         VerticalContentAlignment="Center" Height="30"/>
+                <Button Grid.Column="5" Content="Rescan Headers" Click="Rescan_Click" Padding="16,7" Margin="12,0,0,0" VerticalAlignment="Bottom"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,8,0,4">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="AUTO IMPORT DEFAULT GST TREATMENT" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#475569"/>
+            <ComboBox Grid.Column="1" Margin="10,0,0,0" Height="30"
+                      ItemsSource="{Binding GstTreatmentOptions,RelativeSource={RelativeSource AncestorType=Window}}"
+                      SelectedItem="{Binding GstTreatment,RelativeSource={RelativeSource AncestorType=Window},Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                      IsEditable="False" IsSynchronizedWithCurrentItem="False"/>
+            <TextBlock Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="#64748B" TextWrapping="Wrap"
+                       Text="Manual Purchase Import bypasses 2B/GST Treatment and is included as normal books input. This default is used only by Auto Import when its source has no GST Treatment; RCM keeps its own claim treatment."/>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding DetectionText,RelativeSource={RelativeSource AncestorType=Window}}"
+                   Margin="0,4,0,8" TextWrapping="Wrap" Foreground="#475569"/>
+
+        <DataGrid Grid.Row="4" ItemsSource="{Binding Rows,RelativeSource={RelativeSource AncestorType=Window}}"
+                  AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal"
+                  CanUserSortColumns="False" EnableRowVirtualization="False" EnableColumnVirtualization="False"
+                  VirtualizingPanel.IsVirtualizing="False" ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="COL" Binding="{Binding SourceColumn}" IsReadOnly="True" Width="55"/>
+                <DataGridTextColumn Header="ORIGINAL FILE HEADER" Binding="{Binding SourceHeader}" IsReadOnly="True" Width="1.8*"/>
+                <DataGridTextColumn Header="SAMPLE VALUE" Binding="{Binding SampleValue}" IsReadOnly="True" Width="1.6*"/>
+                <DataGridTemplateColumn Header="MAP TO PURCHASE FIELD" Width="1.8*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Grid.Column="0"
+                                          ItemsSource="{Binding DataContext.TargetFields,RelativeSource={RelativeSource AncestorType=Window}}"
+                                          SelectedItem="{Binding TargetField,Mode=TwoWay,UpdateSourceTrigger=PropertyChanged}"
+                                          IsEditable="False" IsSynchronizedWithCurrentItem="False"
+                                          MaxDropDownHeight="400"/>
+                                <Button Grid.Column="1" Content="×" Width="28" Height="26" Margin="6,0,0,0"
+                                        Padding="0" ToolTip="Clear only this mapping" Click="ClearMapping_Click"/>
+                            </Grid>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="RULE" Binding="{Binding Rule}" IsReadOnly="True" Width="1.4*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <TextBlock Grid.Row="5" Text="{Binding ValidationText,RelativeSource={RelativeSource AncestorType=Window}}"
+                   Foreground="#B91C1C" Margin="0,8,0,0" TextWrapping="Wrap"/>
+
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Validate" Click="Validate_Click" Padding="18,8" Margin="0,0,8,0"/>
+            <Button Content="Import &amp; Remember Mapping" Click="Import_Click" Padding="18,8" Margin="0,0,8,0" IsDefault="True"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="18,8" Margin="8,0,0,0" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

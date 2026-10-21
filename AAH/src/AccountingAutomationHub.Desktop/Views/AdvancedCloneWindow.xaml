@@ -1,0 +1,98 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AdvancedCloneWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Advanced Clone / Divide" Width="700" Height="720"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource AppBackgroundBrush}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Advanced Clone / Bulk Divide" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,14"/>
+
+            <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="Amount Mode" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <RadioButton x:Name="SpecificMode" Content="Specific Amount Clone" GroupName="Mode" IsChecked="True" Checked="Mode_Changed" Margin="0,0,22,0"/>
+                        <RadioButton x:Name="BulkMode" Content="Bulk Amount Divide" GroupName="Mode" Checked="Mode_Changed"/>
+                    </StackPanel>
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="AmountLabel" Text="Amount per clone" VerticalAlignment="Center"/>
+                        <TextBox x:Name="AmountBox" Grid.Column="1" Padding="8,5"/>
+                        <TextBlock Grid.Column="2" x:Name="AmountHelp" Text="Every generated voucher uses this exact amount." Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="Date Range &amp; Basic Frequency" FontWeight="SemiBold"/>
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="150"/><ColumnDefinition Width="80"/><ColumnDefinition Width="150"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Start" VerticalAlignment="Center"/><DatePicker x:Name="StartDatePicker" Grid.Column="1" SelectedDateChanged="AdvancedRule_Changed"/>
+                        <TextBlock Grid.Column="2" Text="End" VerticalAlignment="Center" Margin="12,0,0,0"/><DatePicker x:Name="EndDatePicker" Grid.Column="3" SelectedDateChanged="AdvancedRule_Changed"/>
+                        <TextBlock Grid.Column="4" Text="Frequency" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        <ComboBox x:Name="FrequencyBox" Grid.Column="5" SelectedIndex="3">
+                            <ComboBoxItem Content="Daily"/><ComboBoxItem Content="Weekly"/><ComboBoxItem Content="15 Days"/><ComboBoxItem Content="Monthly"/><ComboBoxItem Content="Quarterly"/>
+                        </ComboBox>
+                    </Grid>
+                    <TextBlock Text="Saturday, Sunday, 26 January, 15 August, 2 October and this client's manual holidays are moved/skipped according to the schedule rule." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="AdvancedPanel" Grid.Row="3" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="Specific Amount — Advanced Distribution" FontWeight="SemiBold"/>
+                    <TextBlock Text="These controls are independent. Total Transactions can also cap Every N Days or a period distribution." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,3,0,10"/>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <CheckBox x:Name="EveryNCheck" Content="Every N Days" VerticalAlignment="Center" Checked="SchedulingMode_Checked" Unchecked="AdvancedRule_Changed"/>
+                        <TextBox x:Name="EveryNBox" Grid.Column="1" Text="5" Padding="7,4"/>
+                        <TextBlock Grid.Column="2" Text="Creates interval dates until End Date; non-working dates move forward." Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <CheckBox x:Name="TotalCheck" Content="Total No. of Transactions" VerticalAlignment="Center" Checked="AdvancedRule_Changed" Unchecked="AdvancedRule_Changed"/>
+                        <TextBox x:Name="TotalBox" Grid.Column="1" Text="10" Padding="7,4"/>
+                        <TextBlock Grid.Column="2" Text="When used alone, exact count is placed on random working dates spread across different months." Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="130"/><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <CheckBox x:Name="DistributionCheck" Content="Transactions per period" VerticalAlignment="Center" Checked="SchedulingMode_Checked" Unchecked="AdvancedRule_Changed"/>
+                        <ComboBox x:Name="DistributionPeriodBox" Grid.Column="1" SelectedIndex="1" SelectionChanged="AdvancedRule_Changed">
+                            <ComboBoxItem Content="Weekly"/><ComboBoxItem Content="Monthly"/><ComboBoxItem Content="Quarterly"/><ComboBoxItem Content="Half-Yearly"/>
+                        </ComboBox>
+                        <TextBox x:Name="PerPeriodBox" Grid.Column="2" Text="2" Padding="7,4" Margin="8,0,0,0" TextChanged="AdvancedRule_Changed"/>
+                        <TextBlock Grid.Column="3" Text="Random working dates inside each selected period." Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="OverridePanel" Grid.Row="4" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                <StackPanel>
+                    <CheckBox x:Name="OverrideCheck" Content="Override Advanced Rules for this client" FontWeight="SemiBold" Checked="AdvancedRule_Changed" Unchecked="AdvancedRule_Changed"/>
+                    <TextBlock Text="Client-specific. Allows an intentionally impossible distribution (for example more transactions than unique working days in a week). A warning is shown and duplicate dates may be used only when necessary. This option never applies to Bulk Amount Divide." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="22,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="5" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="Client Holiday Calendar" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="HolidaySummary" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Grid.Row="6" x:Name="ValidationText" Foreground="{DynamicResource ActionRequiredBrush}" TextWrapping="Wrap" Margin="2,0,2,10"/>
+            <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" IsCancel="True" MinWidth="90" Margin="0,0,8,0"/>
+                <Button Content="Generate" Click="Generate_Click" IsDefault="True" MinWidth="120" Style="{StaticResource PrimaryButtonStyle}"/>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Window>

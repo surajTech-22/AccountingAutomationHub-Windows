@@ -1,0 +1,27 @@
+{
+  "repair": "R24",
+  "baseline": "R23",
+  "changed_source": [
+    "src/AccountingAutomationHub.Desktop/Services/TallyPrivateCompanySessionService.cs",
+    "src/AccountingAutomationHub.Desktop/Services/AutoTallyImportPreference.cs",
+    "src/AccountingAutomationHub.Desktop/Services/TallyApplicationLaunchService.cs",
+    "src/AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs",
+    "src/AccountingAutomationHub.Desktop/ViewModels/SettingsViewModel.cs",
+    "src/AccountingAutomationHub.Desktop/ViewModels/MainWindowViewModel.cs",
+    "src/AccountingAutomationHub.Desktop/Views/SettingsView.xaml"
+  ],
+  "gates": [
+    "explicit company folder plus confirmed CompanyKey",
+    "no auto open if any tally running",
+    "private working directory Tally.ini",
+    "original installed Tally.ini not modified",
+    "regular Tally coordinator forced FY baseline",
+    "checkpoint before graceful PID-owned auto close",
+    "global initial source preparation respected",
+    "existing Auto Import unchanged",
+    "Auto Open and Auto Close off by default",
+    "ERP9 unaltered"
+  ],
+  "windows_wpf_compiler_test": "NOT RUN: no dotnet/WPF on Linux",
+  "tally_on_pc_test": "NOT RUN after integrating R24: R11 independently proved private startup"
+}

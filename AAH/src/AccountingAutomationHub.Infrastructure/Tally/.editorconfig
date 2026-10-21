@@ -1,0 +1,4 @@
+# Fix137 R5: the fail-closed validator annotates its throwing Fail helper.
+# Keep nullable diagnostics enabled; do not suppress CS8602.
+[TallyBankXmlContractValidator.cs]
+dotnet_diagnostic.CS8602.severity = error

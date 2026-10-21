@@ -1,0 +1,65 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.SalesStockToolsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Sales Stock Tool"
+        Width="520" Height="420"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#F8FAFC">
+    <Border Margin="14" Padding="16" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,14">
+                <TextBlock Text="{Binding Heading}" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding Explanation}" Margin="0,4,0,0" Foreground="#64748B" TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <Grid Grid.Row="1" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Text="Stock Item" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <controls:SearchableComboBox OpenOnFocus="True" Grid.Column="1" SourceItems="{Binding StockItems}" Text="{Binding StockItemName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AllowCustomText="True" EnableMouseWheelSelection="False" MinHeight="30"/>
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="0,0,0,10" Visibility="{Binding SourceValueVisibility}">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding SourceLabel}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <controls:SearchableComboBox OpenOnFocus="True" Grid.Column="1" SourceItems="{Binding SourceValues}" Text="{Binding SourceValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AllowCustomText="True" EnableMouseWheelSelection="False" MinHeight="30"/>
+            </Grid>
+
+            <Grid Grid.Row="3" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding FinalLabel}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <controls:SearchableComboBox OpenOnFocus="True" Grid.Column="1" SourceItems="{Binding FinalValues}" Text="{Binding FinalValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AllowCustomText="True" EnableMouseWheelSelection="False" MinHeight="30"/>
+            </Grid>
+
+            <Grid Grid.Row="4" Margin="0,0,0,10" Visibility="{Binding FactorVisibility}">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Text="Conversion Factor" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <StackPanel Grid.Column="1">
+                    <TextBox Text="{Binding FactorText, UpdateSourceTrigger=PropertyChanged}" MinHeight="30" Padding="6"/>
+                    <TextBlock Text="1 imported unit = Factor × final units. Universal factors are suggested automatically; package factors are never guessed."
+                               Margin="0,4,0,0" FontSize="10" Foreground="#64748B" TextWrapping="Wrap"/>
+                    <CheckBox Content="Remember this item-specific conversion for this client"
+                              IsChecked="{Binding RememberConversion}" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Grid>
+
+            <TextBlock Grid.Row="5" Text="{Binding ValidationText}" Foreground="#B91C1C" TextWrapping="Wrap" Margin="0,8,0,8"/>
+
+            <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" Width="90" Height="32" Margin="0,0,8,0" Click="Cancel_Click"/>
+                <Button Content="Apply" Width="100" Height="32" IsDefault="True" Click="Apply_Click"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,22 @@
+{
+  "repair": "FIXED41 R8 Repair 19",
+  "purpose": "Exact cumulative lineage adapter for the linked-Tally launcher metadata hook added after the approved FIXED41 coordinator source.",
+  "files": [
+    {
+      "name": "coordinator",
+      "path": "src/AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs",
+      "baseline_text_sha256": "6f72e18bd28702ddc9d7874a1e4da07bccbdb5ec40076ab4421aaf923e057408",
+      "current_text_sha256": "b747112553fa743c5164a72493ce4d2c9a161c4de69995011d36fbd3c67773b4",
+      "changes": [
+        {
+          "before": "",
+          "after": "    private readonly TallyApplicationLaunchService _applicationLaunchService = new();\n"
+        },
+        {
+          "before": "            var link = _repository.ConfirmLink(client.Id, company);\n",
+          "after": "            var link = _repository.ConfirmLink(client.Id, company);\n            // Repair 19: a confirmed Client/FY link also captures the bounded local Tally\n            // executable/data-path metadata needed by the Dashboard Open Tally button.\n            // This is metadata-only; it never writes Tally.ini or Tally company data.\n            _applicationLaunchService.CaptureConfirmedLink(client, company);\n"
+        }
+      ]
+    }
+  ]
+}

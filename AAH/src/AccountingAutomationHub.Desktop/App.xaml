@@ -1,0 +1,184 @@
+﻿<Application x:Class="AccountingAutomationHub.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views"
+             xmlns:viewModels="clr-namespace:AccountingAutomationHub.Desktop.ViewModels"
+             xmlns:converters="clr-namespace:AccountingAutomationHub.Desktop.Converters"
+             xmlns:behaviors="clr-namespace:AccountingAutomationHub.Desktop.Behaviors"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Colors.xaml" />
+                <ResourceDictionary Source="Themes/Controls.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+            <converters:ClientDisplayNameConverter x:Key="ClientDisplayNameConverter" />
+            <converters:FinancialStatementBalanceDisplayConverter x:Key="FinancialStatementBalanceDisplayConverter" />
+            <sys:Double x:Key="GridRowHeight">34</sys:Double>
+
+            <!-- Application-wide Excel-style value filtering. Page-specific grids can
+                 still override the visual header style; the attached behavior composes
+                 its predicate with each page's existing ItemsSource/view filter. -->
+            <Style x:Key="GlobalFilterableDataGridColumnHeaderStyle" TargetType="{x:Type DataGridColumnHeader}">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Padding" Value="6,4" />
+                <Setter Property="ContentTemplate">
+                    <Setter.Value>
+                        <DataTemplate>
+                            <Grid ClipToBounds="True" MinWidth="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0" LastChildFill="True" ClipToBounds="True">
+                                    <Button DockPanel.Dock="Right"
+                                            Content="▾" Width="19" Height="20" Padding="0" Margin="5,0,0,0"
+                                            Background="Transparent" BorderThickness="0"
+                                            Foreground="{DynamicResource TextSecondaryBrush}"
+                                            Focusable="False" Cursor="Hand"
+                                            Command="{x:Static behaviors:DataGridColumnFilterBehavior.OpenFilterCommand}"
+                                            CommandParameter="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}}"
+                                            ToolTip="Filter this column by its values" />
+                                    <ContentPresenter Content="{Binding}" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                                </DockPanel>
+                                <TextBlock Grid.Row="1"
+                                           Text="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                           ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                           FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Stretch" TextAlignment="Right"
+                                           TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                           Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </DataTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="{x:Type DataGridColumnHeader}" BasedOn="{StaticResource GlobalFilterableDataGridColumnHeaderStyle}" />
+
+            <Style TargetType="{x:Type DataGrid}">
+                <Setter Property="RowHeight" Value="{DynamicResource GridRowHeight}" />
+                <Setter Property="EnableRowVirtualization" Value="True" />
+                <Setter Property="EnableColumnVirtualization" Value="True" />
+                <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+                <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+                <Setter Property="behaviors:DataGridColumnFilterBehavior.IsEnabled" Value="True" />
+            </Style>
+
+            <DataTemplate DataType="{x:Type viewModels:DashboardViewModel}">
+                <views:DashboardView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:PurchaseImportViewModel}">
+                <views:PurchaseImportView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:SalesImportViewModel}">
+                <views:SalesImportView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:MasterCentreViewModel}">
+                <views:MasterCentreView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:StockMasterViewModel}">
+                <views:StockMasterView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:FixedAssetsViewModel}">
+                <views:FixedAssetsView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:BankingViewModel}">
+                <views:BankingView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:CashEntryViewModel}">
+                <views:CashEntryView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:JournalViewModel}">
+                <views:JournalView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:AccountingStatementViewModel}">
+                <views:AccountingStatementView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:FinancialStatementsViewModel}">
+                <views:FinancialStatementsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:IncomeTaxViewModel}">
+                <views:IncomeTaxView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:GstReconciliationViewModel}">
+                <views:GstReconciliationView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:TaxCreditReconciliationViewModel}">
+                <views:TaxCreditReconciliationView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:PortalLoginsViewModel}">
+                <views:PortalLoginsView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:FinanceControlCenterViewModel}">
+                <views:FinanceControlCenterView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:TallyClientViewModel}">
+                <views:TallyClientView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:MobileLinkViewModel}">
+                <views:MobileLinkView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:ClientManagementViewModel}">
+                <views:ClientManagementView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:SettingsViewModel}">
+                <views:SettingsView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:TeamViewModel}">
+                <views:TeamView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:WorkViewModel}">
+                <views:WorkView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:AdministrationViewModel}">
+                <views:AdministrationView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:NotificationCenterViewModel}">
+                <views:NotificationCenterView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:RemoteAssistViewModel}">
+                <views:RemoteAssistView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:ActionCenterViewModel}">
+                <views:ActionCenterView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type viewModels:PlaceholderPageViewModel}">
+                <views:PlaceholderView />
+            </DataTemplate>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

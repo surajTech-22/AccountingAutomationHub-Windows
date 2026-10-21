@@ -1,0 +1,53 @@
+{
+  "release": "R9 FIXED16 R22 FIXED6 R52 FIXED28 Auto Sync forward extension proof",
+  "files": [
+    {
+      "name": "writer",
+      "path": "src\\AccountingAutomationHub.Infrastructure\\Tally\\TallyAccountingVoucherExportService.cs",
+      "baseline_text_sha256": "acc1be9b7aa0ac53dadfc3057ff80dfac002dd55792fed33835ebc445dfa8303",
+      "current_text_sha256": "c3822d383d27c60b87a6b0ed99e58d73a903271a7c4631072b09591f0c253393",
+      "baseline_file_sha256": "af7e6f515a426c565b7350b8314c37d499a365ddcec201e22f531ba2b0c88f20",
+      "current_file_sha256": "5c635b17a36de56914c81db10683ebb38c110aee62587ad3189692c489555056",
+      "changes": [
+        {
+          "before": "        Func<IReadOnlyList<string>, Task<bool>>? confirmMissingRecovery = null,\n        IReadOnlyCollection<string>? explicitRestoreSourceAnchors = null)\n    {\n",
+          "after": "        Func<IReadOnlyList<string>, Task<bool>>? confirmMissingRecovery = null,\n        IReadOnlyCollection<string>? explicitRestoreSourceAnchors = null,\n        bool includeRecurringCash = true)\n    {\n"
+        },
+        {
+          "before": "        if (cashEntryRanges.Count > 0)\n            AddCashEntryVouchers(client, company, cashEntryRanges, ledgerParents, rawPrepared, result, skipTallyDuplicateChecks: true, explicitRestoreSourceAnchors: restoreSourceAnchors);\n        if (journalRanges.Count > 0)\n",
+          "after": "        if (cashEntryRanges.Count > 0)\n            AddCashEntryVouchers(client, company, cashEntryRanges, ledgerParents, rawPrepared, result, includeRecurringCash: includeRecurringCash, skipTallyDuplicateChecks: true, explicitRestoreSourceAnchors: restoreSourceAnchors);\n        if (journalRanges.Count > 0)\n"
+        },
+        {
+          "before": "        TallyVoucherExportResult result,\n        bool skipTallyDuplicateChecks = false,\n",
+          "after": "        TallyVoucherExportResult result,\n        bool includeRecurringCash = true,\n        bool skipTallyDuplicateChecks = false,\n"
+        },
+        {
+          "before": "        // The legacy single-row route remains unchanged for all other Cash entries.\n        AddRecurringCashVouchers(client, company, ranges, ledgerParents, records, target, result, skipTallyDuplicateChecks, explicitRestoreSourceAnchors);\n\n",
+          "after": "        // The legacy single-row route remains unchanged for all other Cash entries.\n        if (includeRecurringCash)\n            AddRecurringCashVouchers(client, company, ranges, ledgerParents, records, target, result, skipTallyDuplicateChecks, explicitRestoreSourceAnchors);\n\n"
+        }
+      ]
+    },
+    {
+      "name": "coordinator",
+      "path": "src\\AccountingAutomationHub.Desktop\\Services\\TallyLiveConnectionCoordinator.cs",
+      "baseline_text_sha256": "d03182f8ad0f938bc844c5ffb7ddb9a59591572997bb6f21842ccb8e08739a18",
+      "current_text_sha256": "f96912ebc1b95e8ec57c806cf9749782327710cdf876eef1c6db3a1e402ba9d4",
+      "baseline_file_sha256": "83cc87c84749ebe43879886b524c3774b592af1b4b62dc41a313321e3f1eb4fa",
+      "current_file_sha256": "5cafbe57bc15a5d17fafb8c0ac842dc3d7dd606c7c034161077ad42222a46fdb",
+      "changes": [
+        {
+          "before": "                        usePreSynchronizedVoucherAuthority: true, synchronizedAuthorityAlterId: authorityAlterId,\n                        confirmMissingRecovery: async descriptions =>\n                        {\n                            var dispatcher = System.Windows.Application.Current?.Dispatcher;\n                            if (dispatcher is null) return false;\n                            return await dispatcher.InvokeAsync(() =>\n                                System.Windows.MessageBox.Show(\n                                    $\"{descriptions.Count} entries from an earlier incomplete export have no verified Tally identity.\\n\\n\" +\n                                    string.Join(\", \", descriptions) +\n                                    \"\\n\\nRetry these missing entries? AAH will reread Tally and create only entries still absent. Existing vouchers will not be resent. Choose No if these entries were intentionally deleted from Tally.\",\n                                    \"Recover missing accounting vouchers\", System.Windows.MessageBoxButton.YesNo,\n                                    System.Windows.MessageBoxImage.Question, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes);\n                        },\n                        explicitRestoreSourceAnchors: request.RestoreSourceAnchors);\n                    Merge(result, accounting);\n",
+          "after": "                        usePreSynchronizedVoucherAuthority: true, synchronizedAuthorityAlterId: authorityAlterId,\n                        confirmMissingRecovery: request.AllowInteractiveRecoveryPrompt\n                            ? async descriptions =>\n                            {\n                                var dispatcher = System.Windows.Application.Current?.Dispatcher;\n                                if (dispatcher is null) return false;\n                                return await dispatcher.InvokeAsync(() =>\n                                    System.Windows.MessageBox.Show(\n                                        $\"{descriptions.Count} entries from an earlier incomplete export have no verified Tally identity.\\n\\n\" +\n                                        string.Join(\", \", descriptions) +\n                                        \"\\n\\nRetry these missing entries? AAH will reread Tally and create only entries still absent. Existing vouchers will not be resent. Choose No if these entries were intentionally deleted from Tally.\",\n                                        \"Recover missing accounting vouchers\", System.Windows.MessageBoxButton.YesNo,\n                                        System.Windows.MessageBoxImage.Question, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes);\n                            }\n                            : _ => Task.FromResult(false),\n                        explicitRestoreSourceAnchors: request.RestoreSourceAnchors,\n                        includeRecurringCash: request.IncludeRecurringCash);\n                    Merge(result, accounting);\n"
+        },
+        {
+          "before": "\n            // Always generate a diagnostic pack, even when nothing was sent because\n            // every candidate was classified as duplicate. This captures the live\n            // voucher index, local fingerprint history and Tally-style reports needed\n            // to explain exactly why an export was skipped or not recorded.\n            try\n            {\n",
+          "after": "\n            // Manual export keeps the full diagnostic pack. FIXED28 Auto Sync disables\n            // this per-run ZIP because frequent accounting changes must not create a new\n            // diagnostics tree/ZIP for every debounced background sync. The underlying\n            // write path, IMPORTRESULT handling and final authority readback are unchanged.\n            if (request.GenerateDiagnosticPack)\n            {\n"
+        },
+        {
+          "before": "            {\n                LastDiagnosticReportPath = await GenerateDiagnosticPackAsync(\n                    client, company, result, responsePaths, cancellationToken);\n                if (LastDiagnosticReportPath.Length > 0)\n                    result.Status += $\" Diagnostic report: {LastDiagnosticReportPath}\";\n            }\n            catch (Exception diagnosticException) when (diagnosticException is not OperationCanceledException)\n            {\n                result.Status += $\" Diagnostic report could not be generated: {diagnosticException.Message}\";\n            }\n",
+          "after": "            {\n                try\n                {\n                    LastDiagnosticReportPath = await GenerateDiagnosticPackAsync(\n                        client, company, result, responsePaths, cancellationToken);\n                    if (LastDiagnosticReportPath.Length > 0)\n                        result.Status += $\" Diagnostic report: {LastDiagnosticReportPath}\";\n                }\n                catch (Exception diagnosticException) when (diagnosticException is not OperationCanceledException)\n                {\n                    result.Status += $\" Diagnostic report could not be generated: {diagnosticException.Message}\";\n                }\n            }\n"
+        }
+      ]
+    }
+  ]
+}

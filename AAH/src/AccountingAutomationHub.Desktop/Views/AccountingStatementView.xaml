@@ -1,0 +1,200 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.AccountingStatementView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:behaviors="clr-namespace:AccountingAutomationHub.Desktop.Behaviors">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="{Binding StatementName}" FontSize="24" FontWeight="SemiBold"/>
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                    <TextBlock Text="{Binding CompanyCaption}" FontSize="12" FontWeight="SemiBold"/>
+                    <TextBlock Text="  •  " FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding PeriodCaption}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="  •  " FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding NavigationCaption}" FontSize="12" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock Text="{Binding ViewModeCaption}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap"
+                           Visibility="{Binding IsStatementScreen, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <TextBlock Text="{Binding GeneratedText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" Margin="0,3,0,0"/>
+            </StackPanel>
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button Content="Back" Click="Back_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6"
+                        Visibility="{Binding IsDrilldownScreen, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <ComboBox ItemsSource="{Binding ViewModeOptions}" SelectedItem="{Binding SelectedViewMode}" MinWidth="150" Margin="0,0,6,6" Padding="6"
+                          Visibility="{Binding IsStatementScreen, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <Button Content="Open P&amp;L" Click="OpenOtherStatement_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6" Visibility="{Binding IsBalanceSheet, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <Button Content="Open Balance Sheet" Click="OpenOtherStatement_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6" Visibility="{Binding IsProfitAndLoss, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                <Button Content="Reports" Click="Reports_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6" ToolTip="Trial Balance, Day Book, Cash/Bank Book, Registers, Outstandings, Cash/Funds Flow, Ratios, Statistics, Stock and live Tally reports"/>
+                <Button Content="Export" Click="Export_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6" ToolTip="Export the current visible statement to Excel, PDF or CSV"/>
+                <Button Content="Closure Entry" Click="ClosingEntry_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,6" Visibility="{Binding CanCreateClosingEntry, Converter={StaticResource BooleanToVisibilityConverter}}" ToolTip="Open the Advanced Closure Entry panel for multi-ledger closing and transaction-date reverse entries"/>
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,0,6"/>
+            </WrapPanel>
+        </Grid>
+
+        <UniformGrid Grid.Row="1" Columns="5" Margin="0,0,0,12">
+            <Button Click="Groups_Click" Background="Transparent" BorderThickness="0" Padding="0" Margin="0,0,8,0" Cursor="Hand" ToolTip="Open the Groups list in this workspace">
+                <Border Style="{StaticResource CardBorderStyle}" Padding="12">
+                    <StackPanel><TextBlock Text="{Binding GroupRows.Count}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Groups" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/></StackPanel>
+                </Border>
+            </Button>
+            <Border Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding LedgerCount}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Active Ledgers" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+            <Border Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding GrossProfitText}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Gross Result" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+            <Border Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding NetProfitText}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Current P&amp;L Result" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+            <Border Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><TextBlock Text="{Binding BalanceDifference, StringFormat=N2}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="Pre-balance Difference" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+        </UniformGrid>
+
+        <Grid Grid.Row="2">
+            <!-- Normal Balance Sheet / P&L stays clean. Drill-down never shares this surface. -->
+            <Grid Visibility="{Binding ShowTallyStatement, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <TextBlock Text="{Binding LeftTitle}" FontSize="15" FontWeight="SemiBold" Margin="12,10,12,8"/>
+                        <DataGrid x:Name="LeftStatementGrid" PreviewMouseLeftButtonDown="StatementGrid_PreviewMouseLeftButtonDown" PreviewMouseMove="StatementGrid_PreviewMouseMove" PreviewMouseLeftButtonUp="StatementGrid_PreviewMouseLeftButtonUp" behaviors:DataGridColumnFilterBehavior.ShowTotals="False" Grid.Row="1" ItemsSource="{Binding LeftRows}" SelectionChanged="StatementGrid_SelectionChanged" MouseDoubleClick="StatementGrid_MouseDoubleClick" PreviewKeyDown="StatementGrid_PreviewKeyDown" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                            <DataGrid.RowStyle><Style TargetType="DataGridRow"><Style.Triggers>
+                                <DataTrigger Binding="{Binding RowType}" Value="Root"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Group"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Result"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Difference"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource ActionRequiredSoftBrush}"/></DataTrigger>
+                            </Style.Triggers></Style></DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Particulars" Width="2*"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal"><Border Width="{Binding IndentPixels}"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText}" SortMemberPath="OpeningBalance" Width="110"/>
+                                <DataGridTextColumn Header="Debit" Binding="{Binding DebitText}" SortMemberPath="TotalDebit" Width="100"/>
+                                <DataGridTextColumn Header="Credit" Binding="{Binding CreditText}" SortMemberPath="TotalCredit" Width="100"/>
+                                <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="115"/>
+                                <DataGridTextColumn Header="Entries" Binding="{Binding EntriesText}" SortMemberPath="MovementCount" Width="70"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <TextBlock Text="{Binding RightTitle}" FontSize="15" FontWeight="SemiBold" Margin="12,10,12,8"/>
+                        <DataGrid x:Name="RightStatementGrid" PreviewMouseLeftButtonDown="StatementGrid_PreviewMouseLeftButtonDown" PreviewMouseMove="StatementGrid_PreviewMouseMove" PreviewMouseLeftButtonUp="StatementGrid_PreviewMouseLeftButtonUp" behaviors:DataGridColumnFilterBehavior.ShowTotals="False" Grid.Row="1" ItemsSource="{Binding RightRows}" SelectionChanged="StatementGrid_SelectionChanged" MouseDoubleClick="StatementGrid_MouseDoubleClick" PreviewKeyDown="StatementGrid_PreviewKeyDown" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                            <DataGrid.RowStyle><Style TargetType="DataGridRow"><Style.Triggers>
+                                <DataTrigger Binding="{Binding RowType}" Value="Root"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Group"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Result"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding RowType}" Value="Difference"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource ActionRequiredSoftBrush}"/></DataTrigger>
+                            </Style.Triggers></Style></DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Particulars" Width="2*"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal"><Border Width="{Binding IndentPixels}"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText}" SortMemberPath="OpeningBalance" Width="110"/>
+                                <DataGridTextColumn Header="Debit" Binding="{Binding DebitText}" SortMemberPath="TotalDebit" Width="100"/>
+                                <DataGridTextColumn Header="Credit" Binding="{Binding CreditText}" SortMemberPath="TotalCredit" Width="100"/>
+                                <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="115"/>
+                                <DataGridTextColumn Header="Entries" Binding="{Binding EntriesText}" SortMemberPath="MovementCount" Width="70"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Border Style="{StaticResource CardBorderStyle}" Padding="0" Visibility="{Binding ShowScheduleStatement, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="14,10,14,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Schedule III — Vertical Statement" FontSize="15" FontWeight="SemiBold"/><TextBlock Grid.Column="1" Text="Current Financial Year" Foreground="{DynamicResource TextSecondaryBrush}"/></Grid>
+                    <DataGrid x:Name="ScheduleStatementGrid" PreviewMouseLeftButtonDown="StatementGrid_PreviewMouseLeftButtonDown" PreviewMouseMove="StatementGrid_PreviewMouseMove" PreviewMouseLeftButtonUp="StatementGrid_PreviewMouseLeftButtonUp" behaviors:DataGridColumnFilterBehavior.ShowTotals="False" Grid.Row="1" ItemsSource="{Binding ScheduleRows}" SelectionChanged="StatementGrid_SelectionChanged" MouseDoubleClick="StatementGrid_MouseDoubleClick" PreviewKeyDown="StatementGrid_PreviewKeyDown" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                        <DataGrid.RowStyle><Style TargetType="DataGridRow"><Style.Triggers>
+                            <DataTrigger Binding="{Binding RowType}" Value="ScheduleHeader"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/></DataTrigger>
+                            <DataTrigger Binding="{Binding RowType}" Value="Schedule"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/></DataTrigger>
+                            <DataTrigger Binding="{Binding RowType}" Value="Group"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
+                            <DataTrigger Binding="{Binding RowType}" Value="Result"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/></DataTrigger>
+                            <DataTrigger Binding="{Binding RowType}" Value="Difference"><Setter Property="FontWeight" Value="Bold"/><Setter Property="Background" Value="{DynamicResource ActionRequiredSoftBrush}"/></DataTrigger>
+                        </Style.Triggers></Style></DataGrid.RowStyle>
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Particulars" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal"><Border Width="{Binding IndentPixels}"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Amount" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="180"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+
+            <!-- Groups are an in-workspace report, not a popup window. -->
+            <Border Style="{StaticResource CardBorderStyle}" Padding="0" Visibility="{Binding IsGroupsScreen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="14,10,14,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel><TextBlock Text="Groups" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Search/filter the list, then open a Group to see only that Group's hierarchy." Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                        <TextBlock Grid.Column="1" Text="Double-click or press Enter to open" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </Grid>
+                    <DataGrid x:Name="GroupsGrid" Grid.Row="1" ItemsSource="{Binding GroupRows}" MouseDoubleClick="GroupsGrid_MouseDoubleClick" PreviewKeyDown="GroupsGrid_PreviewKeyDown" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Group" Binding="{Binding Label}" Width="*"/>
+                            <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText}" SortMemberPath="OpeningBalance" Width="135"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding DebitText}" SortMemberPath="TotalDebit" Width="120"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding CreditText}" SortMemberPath="TotalCredit" Width="120"/>
+                            <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="135"/>
+                            <DataGridTextColumn Header="Entries" Binding="{Binding EntriesText}" SortMemberPath="MovementCount" Width="90"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+
+            <!-- Opening a Group replaces the statement body instead of leaving an empty BS side visible. -->
+            <Border Style="{StaticResource CardBorderStyle}" Padding="0" Visibility="{Binding IsGroupDetailScreen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="14,10,14,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel><TextBlock Text="{Binding DrilldownTitle}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Sub-groups and Ledgers for the selected Group" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                        <TextBlock Grid.Column="1" Text="Open a Sub-group or Ledger" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </Grid>
+                    <DataGrid x:Name="DrilldownGrid" PreviewMouseLeftButtonDown="StatementGrid_PreviewMouseLeftButtonDown" PreviewMouseMove="StatementGrid_PreviewMouseMove" PreviewMouseLeftButtonUp="StatementGrid_PreviewMouseLeftButtonUp" Grid.Row="1" ItemsSource="{Binding DrilldownRows}" MouseDoubleClick="DrilldownGrid_MouseDoubleClick" PreviewKeyDown="DrilldownGrid_PreviewKeyDown" SelectionChanged="DrilldownGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                        <DataGrid.RowStyle><Style TargetType="DataGridRow"><Style.Triggers>
+                            <DataTrigger Binding="{Binding RowType}" Value="Group"><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/></DataTrigger>
+                        </Style.Triggers></Style></DataGrid.RowStyle>
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Particulars" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal"><Border Width="{Binding IndentPixels}"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText}" SortMemberPath="OpeningBalance" Width="135"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding DebitText}" SortMemberPath="TotalDebit" Width="120"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding CreditText}" SortMemberPath="TotalCredit" Width="120"/>
+                            <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="135"/>
+                            <DataGridTextColumn Header="Entries" Binding="{Binding EntriesText}" SortMemberPath="MovementCount" Width="90"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+
+            <!-- Proper full-workspace Ledger account. -->
+            <Border Style="{StaticResource CardBorderStyle}" Padding="10" Visibility="{Binding IsLedgerScreen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding SelectedLedgerName}" FontSize="19" FontWeight="SemiBold"/><TextBlock Text="Proper Ledger account for the active Financial Year" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal"><Button Content="Delete Selected Entries" Click="DeleteLedgerEntries_Click" IsEnabled="{Binding CanDeleteLedgerEntries}" Visibility="{Binding IsBalanceSheet, Converter={StaticResource BooleanToVisibilityConverter}}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" ToolTip="Ctrl/Shift select Cash/Journal rows. Bank/Sales/Purchase rows stay protected and must be deleted from their source modules."/><Button Content="Back" Click="Back_Click" Style="{StaticResource SecondaryButtonStyle}"/></StackPanel></Grid>
+                    <UniformGrid Grid.Row="1" Columns="4" Margin="0,10,0,10">
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding SelectedLedgerOpeningText}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Opening Balance" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding SelectedLedgerDebit, StringFormat=N2}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Total Debit" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,8,0"><StackPanel><TextBlock Text="{Binding SelectedLedgerCredit, StringFormat=N2}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Total Credit" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                        <Border Style="{StaticResource CardBorderStyle}" Padding="10"><StackPanel><TextBlock Text="{Binding SelectedLedgerClosingText}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Closing Balance" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                    </UniformGrid>
+                    <DataGrid x:Name="LedgerTransactionsGrid" Grid.Row="2" ItemsSource="{Binding LedgerTransactions}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" GridLinesVisibility="Horizontal" SelectionMode="Extended" SelectionUnit="FullRow">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Date" Binding="{Binding Date, StringFormat={}{0:dd.MM.yyyy}}" SortMemberPath="Date" Width="100"/>
+                            <DataGridTextColumn Header="Voucher Type" Binding="{Binding VoucherType}" Width="115"/>
+                            <DataGridTextColumn Header="Voucher / Ref" Binding="{Binding VoucherOrReference}" Width="135"/>
+                            <DataGridTextColumn Header="Particulars" Binding="{Binding Particulars}" Width="*"/>
+                            <DataGridTextColumn Header="Narration" Binding="{Binding Narration}" Width="2*"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding Debit, StringFormat=N2}" SortMemberPath="Debit" Width="110"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding Credit, StringFormat=N2}" SortMemberPath="Credit" Width="110"/>
+                            <DataGridTextColumn Header="Balance" Binding="{Binding RunningBalanceText}" SortMemberPath="RunningBalance" Width="125"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,8,4,0" TextWrapping="Wrap"/>
+    </Grid>
+</UserControl>

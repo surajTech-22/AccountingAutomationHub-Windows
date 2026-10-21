@@ -1,0 +1,205 @@
+﻿<UserControl x:Class="AccountingAutomationHub.Desktop.Views.AuditClientManagementView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" PreviewKeyDown="AuditClientManagementView_PreviewKeyDown">
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Margin="20,20,20,0" Style="{StaticResource CardBorderStyle}">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Audit Client Directory" FontSize="25" FontWeight="SemiBold"/>
+                        <Border Background="#E0EAFF" CornerRadius="8" Padding="7,2" Margin="9,3,0,0" VerticalAlignment="Top">
+                            <TextBlock Text="AUDIT ONLY" Foreground="#2458C6" FontWeight="Bold" FontSize="9"/>
+                        </Border>
+                    </StackPanel>
+                    <TextBlock Text="Same client-profile workflow as Accounting, stored independently in audit-hub.db. Opening or editing an Audit client never changes the Accounting client directory."
+                               Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,20,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Open Selected" Command="{Binding SetCurrentCommand}" Padding="16,9" Margin="0,0,8,0"/>
+                    <Button Content="Client Groups" Command="{Binding OpenGroupManagerCommand}" Padding="16,9" Margin="0,0,8,0" ToolTip="Use the same shared Client Group hierarchy and drag/move procedure as Accounting"/>
+                    <Button Content="Edit Selected" Command="{Binding EditSelectedCommand}" Padding="16,9" Margin="0,0,8,0"/>
+                    <Button Content="＋ Add New Client" Command="{Binding NewCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="20,14,20,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/>
+                <ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="16"><StackPanel><TextBlock Text="TOTAL CLIENTS" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" FontWeight="SemiBold"/><TextBlock Text="{Binding TotalCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel></Border>
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="16"><StackPanel><TextBlock Text="ACTIVE" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" FontWeight="SemiBold"/><TextBlock Text="{Binding ActiveCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel></Border>
+            <Border Grid.Column="4" Style="{StaticResource CardBorderStyle}" Padding="16"><StackPanel><TextBlock Text="GSTIN AVAILABLE" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" FontWeight="SemiBold"/><TextBlock Text="{Binding GstinCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel></Border>
+            <Border Grid.Column="6" Style="{StaticResource CardBorderStyle}" Padding="16"><StackPanel><TextBlock Text="PROFILE REVIEW" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" FontWeight="SemiBold"/><TextBlock Text="{Binding NeedsProfileCount}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel></Border>
+        </Grid>
+
+        <Border Grid.Row="2" Margin="20,14,20,0" Style="{StaticResource CardBorderStyle}" Padding="14">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="2.2*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" Padding="11,8" ToolTip="Search Client Code, names, GSTIN, PAN, State, Phone or Email"/>
+                <ComboBox Grid.Column="2" ItemsSource="{Binding FinancialYearFilters}" SelectedItem="{Binding SelectedFinancialYearFilter}" Padding="8,6"/>
+                <CheckBox Grid.Column="4" Content="Show archived" IsChecked="{Binding IncludeArchived}" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="Client Wise" VerticalAlignment="Center" Margin="0,0,7,0" FontSize="11" Opacity="0.65"/>
+                    <ToggleButton Width="46" Height="24" Margin="0,0,7,0" IsChecked="{Binding IsGroupWiseDirectory, Mode=OneWay}" Command="{Binding ToggleClientDirectoryViewCommand}" ToolTip="Switch between Client Wise and Group Wise">
+                        <ToggleButton.Template>
+                            <ControlTemplate TargetType="{x:Type ToggleButton}">
+                                <Border x:Name="SwitchTrack" Background="{DynamicResource SurfaceAltBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="12">
+                                    <Ellipse x:Name="SwitchThumb" Width="18" Height="18" Margin="2" HorizontalAlignment="Left" VerticalAlignment="Center" Fill="#0F766E" Stroke="{DynamicResource SurfaceBrush}" StrokeThickness="1"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsChecked" Value="True"><Setter TargetName="SwitchThumb" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="SwitchThumb" Property="Fill" Value="#2563EB"/></Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                    </ToggleButton>
+                    <TextBlock Text="Group Wise" VerticalAlignment="Center" FontSize="11" Opacity="0.65"/>
+                </StackPanel>
+                <Button Grid.Column="6" Content="Refresh" Command="{Binding ReloadCommand}" Padding="14,8"/>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Margin="20,14,20,0" Style="{StaticResource CardBorderStyle}" Padding="14"
+                Visibility="{Binding IsGroupWiseDirectory, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Button Content="← Back" Command="{Binding BackGroupCommand}" Padding="10,6" Margin="0,0,10,0"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Group Wise" FontWeight="SemiBold" FontSize="14"/>
+                        <TextBlock Text="  /  " Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock Text="{Binding CurrentGroupPath}" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </Grid>
+                <ListBox ItemsSource="{Binding GroupRows}" SelectedItem="{Binding SelectedGroup, Mode=TwoWay}" MaxHeight="110" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Margin="0,10,0,0">
+                    <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,0,8,6" MinWidth="185" Cursor="Hand">
+                                <StackPanel><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding Summary}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,2,0,0"/></StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <Button Content="Open Selected Group" Command="{Binding OpenGroupCommand}" HorizontalAlignment="Left" Padding="10,6" Margin="0,4,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="4" Margin="20,14,20,0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="12">
+            <DataGrid x:Name="ClientGrid" ItemsSource="{Binding Clients}" SelectedItem="{Binding SelectedClient, Mode=TwoWay}" AutoGenerateColumns="False"
+                      CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="True" CanUserResizeColumns="True" CanUserSortColumns="False"
+                      IsReadOnly="True" SelectionMode="Single" SelectionUnit="FullRow" HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderThickness="0"
+                      RowHeaderWidth="0" HorizontalScrollBarVisibility="Auto" EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" FrozenColumnCount="2" MinColumnWidth="70"
+                      MouseDoubleClick="ClientGrid_MouseDoubleClick">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Width="115" MinWidth="105">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="ClientCode" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="Client Code"/><TextBlock Text="{Binding DataContext.ClientCodeSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ClientCode}" FontWeight="SemiBold"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="240" MinWidth="200">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="Name" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="Client / Trade Name"/><TextBlock Text="{Binding DataContext.NameSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="0,3"><TextBlock Text="{Binding ClientName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding TradeName}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Legal Name" Binding="{Binding LegalName, Mode=OneWay}" Width="220"/>
+                    <DataGridTemplateColumn Width="160" MinWidth="145">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="Gstin" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="GSTIN"/><TextBlock Text="{Binding DataContext.GstinSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Gstin}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="PAN" Binding="{Binding Pan, Mode=OneWay}" Width="120"/>
+                    <DataGridTemplateColumn Width="125">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="State" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="State"/><TextBlock Text="{Binding DataContext.StateSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding State}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="105">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="FinancialYear" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="FY"/><TextBlock Text="{Binding DataContext.FinancialYearSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding FinancialYear}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Phone" Binding="{Binding Phone, Mode=OneWay}" Width="125"/>
+                    <DataGridTextColumn Header="Email" Binding="{Binding Email, Mode=OneWay}" Width="180"/>
+                    <DataGridTemplateColumn Width="130">
+                        <DataGridTemplateColumn.Header><Button Command="{Binding DataContext.ToggleSortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="Updated" Background="Transparent" BorderThickness="0" Padding="2,1"><StackPanel Orientation="Horizontal"><TextBlock Text="Updated"/><TextBlock Text="{Binding DataContext.UpdatedSortIndicator, RelativeSource={RelativeSource AncestorType=DataGrid}}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/></StackPanel></Button></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding UpdatedUtc, StringFormat={}{0:dd-MM-yyyy HH:mm}}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Status" Width="95"><DataGridTemplateColumn.CellTemplate><DataTemplate><Border x:Name="Badge" Background="#DCFCE7" CornerRadius="8" Padding="7,2" HorizontalAlignment="Left"><TextBlock x:Name="BadgeText" Text="Active" Foreground="#166534" FontSize="10" FontWeight="SemiBold"/></Border><DataTemplate.Triggers><DataTrigger Binding="{Binding IsArchived}" Value="True"><Setter TargetName="Badge" Property="Background" Value="#F1F5F9"/><Setter TargetName="BadgeText" Property="Text" Value="Archived"/><Setter TargetName="BadgeText" Property="Foreground" Value="#64748B"/></DataTrigger></DataTemplate.Triggers></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+
+        <Grid Grid.Row="5" Margin="20,10,20,18"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Grid.Column="1" Text="{Binding VisibleCount, StringFormat={}{0} visible}" Foreground="{DynamicResource TextSecondaryBrush}"/></Grid>
+
+        <Border Grid.RowSpan="6" Margin="20" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="12"
+                Visibility="{Binding IsGroupManagerOpen, Converter={StaticResource BooleanToVisibilityConverter}}" Panel.ZIndex="20">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <Border Padding="18,14" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                    <Grid><StackPanel><TextBlock Text="Client Groups" FontSize="21" FontWeight="SemiBold"/><TextBlock Text="Same shared hierarchy and move procedure as Accounting. Audit client assignments remain independent." Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/></StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="＋ Make Group" Command="{Binding BeginAddGroupFolderCommand}" Padding="12,7" Margin="0,0,8,0"/><Button Content="Close" Command="{Binding CloseGroupManagerCommand}" Padding="12,7"/></StackPanel></Grid>
+                </Border>
+                <Grid Grid.Row="1" Margin="14">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="0.9*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="1.5*"/></Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                        <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <Border Padding="11,9" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Background="#FAFBFC"><StackPanel><TextBlock Text="Existing Clients / Groups" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="Select or drag any ungrouped Audit Client or top-level Group." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,2,0,0"/></StackPanel></Border>
+                            <ListBox x:Name="AuditGroupSourceList" Grid.Row="1" ItemsSource="{Binding GroupSourceItems}" SelectedItem="{Binding SelectedGroupSourceItem, Mode=TwoWay}" BorderThickness="0" PreviewMouseLeftButtonDown="GroupSourceList_PreviewMouseLeftButtonDown" PreviewMouseMove="GroupSourceList_PreviewMouseMove">
+                                <ListBox.ItemTemplate><DataTemplate><Grid Margin="8,7"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding PrimaryText}" FontWeight="SemiBold"/><TextBlock Text="{Binding SecondaryText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,2,0,0"/></StackPanel><TextBlock Grid.Column="1" Text="{Binding KindText}" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="12,0,4,0"/></Grid></DataTemplate></ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                        <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border Padding="11,9" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Background="#FAFBFC"><StackPanel><TextBlock Text="Existing Group Structure" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="Expand only what you need. Drag an ungrouped Client or top-level Group into a destination Group." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap"/></StackPanel></Border>
+                            <TreeView x:Name="AuditGroupDestinationTree" Grid.Row="1" ItemsSource="{Binding GroupFolderRoots}" SelectedItemChanged="GroupFolderTree_SelectedItemChanged" AllowDrop="True" PreviewMouseLeftButtonDown="GroupDestinationTree_PreviewMouseLeftButtonDown" PreviewMouseMove="GroupDestinationTree_PreviewMouseMove" DragOver="GroupDestinationTree_DragOver" Drop="GroupDestinationTree_Drop" BorderThickness="0" Padding="8">
+                                <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem"><Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/><Setter Property="Padding" Value="2"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></TreeView.ItemContainerStyle>
+                                <TreeView.ItemTemplate><HierarchicalDataTemplate ItemsSource="{Binding Children}"><StackPanel Margin="2,2"><TextBlock Text="{Binding DisplayText}"/><TextBlock Text="{Binding SecondaryText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/></StackPanel></HierarchicalDataTemplate></TreeView.ItemTemplate>
+                            </TreeView>
+                            <Border Grid.Row="2" Padding="10,8" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Background="#FAFBFC"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding SelectedGroupPath, StringFormat=Destination: {0}}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><Button Grid.Column="1" Content="Delete Group" Command="{Binding DeleteGroupFolderCommand}" Padding="10,6" Margin="8,0,0,0"/><Button Grid.Column="2" Content="Move Selected Into →" Command="{Binding MoveSelectedGroupSourceCommand}" Padding="12,6" Margin="8,0,0,0"/></Grid></Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+                <Border Grid.Row="2" Padding="14,9" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Background="#FAFBFC"><TextBlock Text="{Binding GroupManagerStatus}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/></Border>
+
+                <Border Grid.RowSpan="3" Width="440" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="18" Visibility="{Binding IsGroupFolderEditorOpen, Converter={StaticResource BooleanToVisibilityConverter}}" Panel.ZIndex="25">
+                    <StackPanel><TextBlock Text="Make Group" FontSize="19" FontWeight="SemiBold"/><TextBlock Text="New Groups are created at the top level, exactly like Accounting. Nest afterward by drag/move." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,14"/><TextBlock Text="Group Name" FontWeight="SemiBold"/><TextBox Text="{Binding GroupNameDraft, UpdateSourceTrigger=PropertyChanged}" Padding="9,6" Margin="0,5,0,10"/><TextBlock Text="Group Type" FontWeight="SemiBold"/><ComboBox ItemsSource="{Binding GroupTypes}" SelectedItem="{Binding SelectedGroupType}" Padding="7,5" Margin="0,5,0,14"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Cancel" Command="{Binding CancelGroupFolderCommand}" Padding="12,7" Margin="0,0,8,0"/><Button Content="Create Group" Command="{Binding SaveGroupFolderCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="14,7"/></StackPanel></StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Border Grid.RowSpan="6" HorizontalAlignment="Right" Width="500" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0"
+                Visibility="{Binding IsEditorOpen, Converter={StaticResource BooleanToVisibilityConverter}}" Panel.ZIndex="10">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <Border Padding="22,18" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"><Grid><StackPanel><TextBlock Text="{Binding EditorModeText}" FontSize="21" FontWeight="SemiBold"/><TextBlock Text="{Binding EditorStatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/></StackPanel><Button Content="✕" Command="{Binding CloseEditorCommand}" HorizontalAlignment="Right" VerticalAlignment="Top" Padding="10,5"/></Grid></Border>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="22,18">
+                        <TextBlock Text="Client Code" FontWeight="SemiBold"/><TextBox Text="{Binding ClientCode, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/>
+                        <TextBlock Text="Client Name" FontWeight="SemiBold"/><TextBox Text="{Binding ClientName, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/>
+                        <TextBlock Text="GSTIN" FontWeight="SemiBold"/><TextBox Text="{Binding Gstin, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Padding="10,7" Margin="0,5,0,5"/><TextBlock Text="GSTIN auto-derives PAN and State when possible. Audit remains independent; Accounting module UI is available through the Audit-local workbench without linking an Accounting client." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,13"/>
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="PAN" FontWeight="SemiBold"/><TextBox Text="{Binding Pan, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/></StackPanel><StackPanel Grid.Column="2"><TextBlock Text="State" FontWeight="SemiBold"/><TextBox Text="{Binding State, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/></StackPanel></Grid>
+                        <TextBlock Text="Financial Year" FontWeight="SemiBold"/><ComboBox ItemsSource="{Binding FinancialYearOptions}" Text="{Binding FinancialYear, UpdateSourceTrigger=PropertyChanged}" IsEditable="True" Padding="8,6" Margin="0,5,0,13"/>
+                        <TextBlock Text="Trade Name" FontWeight="SemiBold"/><TextBox Text="{Binding TradeName, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/>
+                        <TextBlock Text="Legal Name" FontWeight="SemiBold"/><TextBox Text="{Binding LegalName, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/>
+                        <TextBlock Text="Address" FontWeight="SemiBold"/><TextBox Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="72" TextWrapping="Wrap" Padding="10,7" Margin="0,5,0,13"/>
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Phone" FontWeight="SemiBold"/><TextBox Text="{Binding Phone, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/></StackPanel><StackPanel Grid.Column="2"><TextBlock Text="Email" FontWeight="SemiBold"/><TextBox Text="{Binding Email, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,13"/></StackPanel></Grid>
+                        <TextBlock Text="Notes" FontWeight="SemiBold"/><TextBox Text="{Binding Notes, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="80" TextWrapping="Wrap" Padding="10,7" Margin="0,5,0,13"/>
+                        <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="12" Margin="0,4,0,10"><TextBlock Text="Audit accounting remains independent. Sources &amp; Links is only for Audit-owned evidence and the optional independent Tally company authority; no Accounting client link is required." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/></Border>
+                        <TextBlock Text="{Binding ValidationText}" Foreground="#B91C1C" TextWrapping="Wrap" Visibility="{Binding HasValidationError, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                    </StackPanel>
+                </ScrollViewer>
+                <Border Grid.Row="2" Padding="18" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"><Grid><StackPanel Orientation="Horizontal"><Button Content="Archive" Command="{Binding ArchiveCommand}" Padding="12,7" Margin="0,0,8,0"/><Button Content="Restore" Command="{Binding RestoreCommand}" Padding="12,7"/></StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Cancel" Command="{Binding CloseEditorCommand}" Padding="14,8" Margin="0,0,8,0"/><Button Content="Save Client" Command="{Binding SaveCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="16,8"/></StackPanel></Grid></Border>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

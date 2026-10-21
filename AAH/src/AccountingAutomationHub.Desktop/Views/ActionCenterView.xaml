@@ -1,0 +1,120 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.ActionCenterView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Action Required" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock Text="Only files that were not imported successfully are listed here. Normal Ledger Mapping, Suspense, reconciliation and Stock review stay inside their own modules."
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding CurrentClientScopeText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,3,0,0" />
+            </StackPanel>
+            <Button Grid.Column="1" Content="Refresh" Command="{Binding RefreshCommand}" Padding="12,7" />
+        </Grid>
+
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="80"/><ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="70"/><ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Module" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="1" ItemsSource="{Binding ModuleOptions}" SelectedItem="{Binding SelectedModule}" Padding="6" />
+                <TextBlock Grid.Column="2" Text="Search" Margin="12,0,0,0" VerticalAlignment="Center" />
+                <TextBox Grid.Column="3" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" Padding="8,6"
+                         ToolTip="Search module, action type, file, title or reason" />
+                <WrapPanel Grid.Column="4" Margin="10,0,0,0">
+                    <Button Content="Reimport All" Command="{Binding ReimportAllCommand}" Padding="12,7"
+                            ToolTip="Retry every available failed/blocked source file for the current client and Financial Year" />
+                    <Button Content="Clear All" Command="{Binding ClearAllCommand}" Padding="12,7" Margin="8,0,0,0"
+                            ToolTip="Mark every Action Required item for the current Client/FY resolved. Accounting data, source files and notification history are retained." />
+                </WrapPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
+            <DataGrid Grid.Column="0" ItemsSource="{Binding Actions}" SelectedItem="{Binding SelectedAction}" AutoGenerateColumns="False" IsReadOnly="True"
+                      SelectionMode="Single" SelectionUnit="FullRow">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Created" Binding="{Binding CreatedUtc, StringFormat={}{0:dd.MM.yyyy HH:mm}}" Width="125" />
+                    <DataGridTextColumn Header="Module" Binding="{Binding Module}" Width="95" />
+                    <DataGridTextColumn Header="Action" Binding="{Binding ActionType}" Width="135" />
+                    <DataGridTextColumn Header="What needs attention" Binding="{Binding Title}" Width="*" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="Selected action" Style="{StaticResource SectionTitleStyle}" />
+                    <StackPanel Grid.Row="1" Margin="0,10,0,8">
+                        <TextBlock Text="{Binding SelectedAction.Title}" FontWeight="SemiBold" FontSize="14" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding SelectedClientText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding SelectedAction.ActionType}" Foreground="{DynamicResource ActionRequiredBrush}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SelectedDetail}" TextWrapping="Wrap" />
+                            <TextBlock Text="Source" FontWeight="SemiBold" Margin="0,14,0,3"
+                                       Visibility="{Binding HasSelectedSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <TextBlock Text="{Binding SelectedSourcePath}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Visibility="{Binding HasSelectedSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <Border Style="{StaticResource CardBorderStyle}" Margin="0,14,0,0" Visibility="{Binding HasHeaderMappingPanel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock Text="Header Mapping · This Import Only" FontWeight="SemiBold" FontSize="14"/>
+                                    <TextBlock Text="Matched headers are shown for confirmation. Map only the unmatched source columns. These Action Required mappings are temporary and are disposed after this import attempt; permanent global mappings are added only in Settings → Mapping." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                                    <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><ComboBox ItemsSource="{Binding HeaderMappingModuleOptions}" SelectedItem="{Binding SelectedHeaderMappingModule}" Padding="6,4"/><TextBox Grid.Column="2" Text="{Binding ActionHeaderSearchText, UpdateSourceTrigger=PropertyChanged}" Padding="7,5" ToolTip="Filter the AAH header choices used by the unmatched-column mapping lists"/></Grid>
+                                    <Grid MinHeight="220">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <DataGrid Grid.Column="0" ItemsSource="{Binding MatchedHeaders}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Matched Source" Binding="{Binding SourceHeader}" Width="*"/>
+                                                <DataGridTextColumn Header="AAH Header" Binding="{Binding CanonicalDisplay}" Width="*"/>
+                                                <DataGridTextColumn Header="Via" Binding="{Binding MatchType}" Width="95"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <DataGrid Grid.Column="2" ItemsSource="{Binding UnmatchedHeaders}" AutoGenerateColumns="False" CanUserAddRows="False" RowHeaderWidth="0">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Unmatched Source / Column" Binding="{Binding SourceHeader}" IsReadOnly="True" Width="*"/>
+                                                <DataGridTemplateColumn Header="Map To AAH Header" Width="1.2*">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <ComboBox ItemsSource="{Binding DataContext.HeaderCanonicalOptions, RelativeSource={RelativeSource AncestorType=DataGrid}}" SelectedItem="{Binding SelectedCanonical, UpdateSourceTrigger=PropertyChanged}" DisplayMemberPath="Display" Padding="4,2"/>
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </Grid>
+                                    <TextBlock Text="{Binding HeaderMappingStatus}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                    <WrapPanel Grid.Row="3" Margin="0,12,0,0">
+                        <Button Content="Open Module" Command="{Binding OpenModuleCommand}" Padding="11,6" Margin="0,0,8,0" />
+                        <Button Content="Open Source" Command="{Binding OpenSourceCommand}" Padding="11,6" Margin="0,0,8,0" />
+                        <Button Content="Retry Import" Command="{Binding RetryCommand}" Padding="11,6" Margin="0,0,8,0" />
+                        <Button Content="Retry as Bank" Command="{Binding RetryAsBankCommand}" Padding="11,6" Margin="0,0,8,0" ToolTip="Remember this file/header format as Bank and retry" />
+                        <Button Content="Retry as Sales" Command="{Binding RetryAsSalesCommand}" Padding="11,6" Margin="0,0,8,0" ToolTip="Remember this file/header format as Sales and retry" />
+                        <Button Content="Retry as Purchase" Command="{Binding RetryAsPurchaseCommand}" Padding="11,6" Margin="0,0,8,0" ToolTip="Remember this file/header format as Purchase and retry" />
+                        <Button Content="Mark Resolved" Command="{Binding ResolveCommand}" Padding="11,6" />
+                    </WrapPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,10,0,0" />
+    </Grid>
+</UserControl>

@@ -1,0 +1,1331 @@
+using System.Globalization;
+using AccountingAutomationHub.Application.Clients;
+using AccountingAutomationHub.Domain.Clients;
+using AccountingAutomationHub.Domain.Common;
+using AccountingAutomationHub.Infrastructure.Persistence;
+using Microsoft.Data.Sqlite;
+
+namespace AccountingAutomationHub.Infrastructure.Clients;
+
+public sealed class SqliteClientRepository :
+    IClientRepository
+{
+    private const string CurrentClientSetting =
+        "CurrentClientId";
+
+    private readonly string _connectionString;
+
+    public SqliteClientRepository()
+    {
+        ApplicationDataPaths.EnsureFolders();
+
+        var builder =
+            new SqliteConnectionStringBuilder
+            {
+                DataSource =
+                    ApplicationDataPaths.DatabasePath,
+                Mode =
+                    SqliteOpenMode.ReadWriteCreate,
+                Cache =
+                    SqliteCacheMode.Private
+            };
+
+        _connectionString =
+            builder.ToString();
+    }
+
+    public void Initialize() =>
+
+        SqliteSchemaInitializationGate.RunOnce(nameof(SqliteClientRepository), _connectionString, InitializeCore);
+
+
+    private void InitializeCore()
+    {
+        using var connection =
+            OpenConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+
+            CREATE TABLE IF NOT EXISTS Clients
+            (
+                Id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                ClientCode      TEXT NOT NULL COLLATE NOCASE,
+                ClientName      TEXT NOT NULL,
+                LegalName       TEXT NOT NULL DEFAULT '',
+                TradeName       TEXT NOT NULL DEFAULT '',
+                LegalNameIsManual INTEGER NOT NULL DEFAULT 0,
+                TradeNameIsManual INTEGER NOT NULL DEFAULT 0,
+                Gstin           TEXT NOT NULL DEFAULT '',
+                Pan             TEXT NOT NULL DEFAULT '',
+                State           TEXT NOT NULL DEFAULT '',
+                FinancialYear   TEXT NOT NULL DEFAULT '',
+                Address         TEXT NOT NULL DEFAULT '',
+                Phone           TEXT NOT NULL DEFAULT '',
+                Email           TEXT NOT NULL DEFAULT '',
+                Notes           TEXT NOT NULL DEFAULT '',
+                GstProfileSourceType TEXT NOT NULL DEFAULT '',
+                GstProfileSourcePath TEXT NOT NULL DEFAULT '',
+                LatestGstr3bPeriod TEXT NOT NULL DEFAULT '',
+                LatestGstr3bPeriodEndKey TEXT NOT NULL DEFAULT '',
+                LatestGstr3bArn TEXT NOT NULL DEFAULT '',
+                LatestGstr3bArnDate TEXT NOT NULL DEFAULT '',
+                GstProfileUpdatedUtc TEXT NOT NULL DEFAULT '',
+                IsArchived      INTEGER NOT NULL DEFAULT 0,
+                CreatedUtc      TEXT NOT NULL,
+                UpdatedUtc      TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                UX_Clients_ClientCode
+            ON Clients(ClientCode COLLATE NOCASE);
+
+            CREATE INDEX IF NOT EXISTS
+                IX_Clients_ClientName
+            ON Clients(ClientName COLLATE NOCASE);
+
+            CREATE INDEX IF NOT EXISTS
+                IX_Clients_Gstin
+            ON Clients(Gstin COLLATE NOCASE);
+
+            CREATE TABLE IF NOT EXISTS AppSettings
+            (
+                SettingKey      TEXT PRIMARY KEY COLLATE NOCASE,
+                SettingValue    TEXT NOT NULL DEFAULT ''
+            );
+            """;
+
+        command.ExecuteNonQuery();
+
+        var manualFlagAdded = EnsureColumn(
+            connection,
+            "Clients",
+            "LegalNameIsManual",
+            "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "Clients", "TradeName", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "TradeNameIsManual", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "Clients", "GstProfileSourceType", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "GstProfileSourcePath", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "LatestGstr3bPeriod", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "LatestGstr3bPeriodEndKey", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "LatestGstr3bArn", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "LatestGstr3bArnDate", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, "Clients", "GstProfileUpdatedUtc", "TEXT NOT NULL DEFAULT ''");
+
+        if (manualFlagAdded)
+        {
+            using var protectExisting = connection.CreateCommand();
+            protectExisting.CommandText =
+                "UPDATE Clients SET LegalNameIsManual = 1 WHERE TRIM(LegalName) <> '';";
+            protectExisting.ExecuteNonQuery();
+        }
+    }
+
+
+    private const string WorkspaceLastOpenedPrefix = "Workspace.LastOpened.";
+    private const string WorkspaceValidationPrefix = "Workspace.CacheValidation.";
+    private const string WorkspaceFrozenPrefix = "Workspace.FrozenSnapshot.";
+
+    public DateTime GetWorkspaceLastOpenedUtc(long clientId, string financialYear)
+    {
+        using var connection = OpenConnection();
+        return ParseUtc(ReadSetting(connection, WorkspaceSettingKey(WorkspaceLastOpenedPrefix, clientId, financialYear)));
+    }
+
+    public void RecordWorkspaceOpened(long clientId, string financialYear)
+    {
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        WriteSetting(connection, transaction, WorkspaceSettingKey(WorkspaceLastOpenedPrefix, clientId, financialYear), DateTime.UtcNow.ToString("O"));
+        WriteSetting(connection, transaction, WorkspaceSettingKey(WorkspaceValidationPrefix, clientId, financialYear), "1");
+        DeleteSetting(connection, transaction, WorkspaceSettingKey(WorkspaceFrozenPrefix, clientId, financialYear));
+        transaction.Commit();
+    }
+
+    public bool IsWorkspaceCacheValidationActive(long clientId, string financialYear)
+    {
+        using var connection = OpenConnection();
+        var value = ReadSetting(connection, WorkspaceSettingKey(WorkspaceValidationPrefix, clientId, financialYear));
+        return !value.Equals("0", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public void SetWorkspaceCacheValidationActive(long clientId, string financialYear, bool active)
+    {
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        WriteSetting(connection, transaction, WorkspaceSettingKey(WorkspaceValidationPrefix, clientId, financialYear), active ? "1" : "0");
+        if (!active)
+            WriteSetting(connection, transaction, WorkspaceSettingKey(WorkspaceFrozenPrefix, clientId, financialYear), DateTime.UtcNow.ToString("O"));
+        transaction.Commit();
+    }
+
+    public DateTime GetWorkspaceFrozenSnapshotUtc(long clientId, string financialYear)
+    {
+        using var connection = OpenConnection();
+        return ParseUtc(ReadSetting(connection, WorkspaceSettingKey(WorkspaceFrozenPrefix, clientId, financialYear)));
+    }
+
+    private static string WorkspaceSettingKey(string prefix, long clientId, string financialYear) =>
+        $"{prefix}{clientId}.{(financialYear ?? string.Empty).Trim().ToUpperInvariant()}";
+
+    private static string ReadSetting(SqliteConnection connection, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT SettingValue FROM AppSettings WHERE SettingKey = $SettingKey;";
+        command.Parameters.AddWithValue("$SettingKey", key);
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private static void WriteSetting(SqliteConnection connection, SqliteTransaction transaction, string key, string value)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO AppSettings(SettingKey, SettingValue) VALUES($SettingKey, $SettingValue)
+            ON CONFLICT(SettingKey) DO UPDATE SET SettingValue = excluded.SettingValue;
+            """;
+        command.Parameters.AddWithValue("$SettingKey", key);
+        command.Parameters.AddWithValue("$SettingValue", value ?? string.Empty);
+        command.ExecuteNonQuery();
+    }
+
+
+    private static void DeleteSetting(SqliteConnection connection, SqliteTransaction transaction, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM AppSettings WHERE SettingKey = $SettingKey;";
+        command.Parameters.AddWithValue("$SettingKey", key);
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<ClientProfile> GetAll(
+        bool includeArchived)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            SELECT
+                Id,
+                ClientCode,
+                ClientName,
+                LegalName,
+                TradeName,
+                LegalNameIsManual,
+                TradeNameIsManual,
+                Gstin,
+                Pan,
+                State,
+                FinancialYear,
+                Address,
+                Phone,
+                Email,
+                Notes,
+                GstProfileSourceType,
+                GstProfileSourcePath,
+                LatestGstr3bPeriod,
+                LatestGstr3bPeriodEndKey,
+                LatestGstr3bArn,
+                LatestGstr3bArnDate,
+                GstProfileUpdatedUtc,
+                IsArchived,
+                CreatedUtc,
+                UpdatedUtc
+            FROM Clients
+            WHERE
+                $IncludeArchived = 1
+                OR IsArchived = 0
+            ORDER BY
+                IsArchived,
+                ClientCode COLLATE NOCASE,
+                ClientName COLLATE NOCASE;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$IncludeArchived",
+            includeArchived
+                ? 1
+                : 0);
+
+        var currentClientId =
+            GetCurrentClientId(
+                connection);
+
+        using var reader =
+            command.ExecuteReader();
+
+        var clients =
+            new List<ClientProfile>();
+
+        while (reader.Read())
+        {
+            var client =
+                ReadClient(reader);
+
+            client.IsCurrent =
+                currentClientId.HasValue &&
+                client.Id ==
+                currentClientId.Value;
+
+            clients.Add(client);
+        }
+
+        return clients;
+    }
+
+    public ClientProfile? GetById(
+        long clientId)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            SELECT
+                Id,
+                ClientCode,
+                ClientName,
+                LegalName,
+                TradeName,
+                LegalNameIsManual,
+                TradeNameIsManual,
+                Gstin,
+                Pan,
+                State,
+                FinancialYear,
+                Address,
+                Phone,
+                Email,
+                Notes,
+                GstProfileSourceType,
+                GstProfileSourcePath,
+                LatestGstr3bPeriod,
+                LatestGstr3bPeriodEndKey,
+                LatestGstr3bArn,
+                LatestGstr3bArnDate,
+                GstProfileUpdatedUtc,
+                IsArchived,
+                CreatedUtc,
+                UpdatedUtc
+            FROM Clients
+            WHERE Id = $ClientId;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$ClientId",
+            clientId);
+
+        using var reader =
+            command.ExecuteReader();
+
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        var client =
+            ReadClient(reader);
+
+        reader.Close();
+
+        var currentClientId =
+            GetCurrentClientId(
+                connection);
+
+        client.IsCurrent =
+            currentClientId.HasValue &&
+            client.Id ==
+            currentClientId.Value;
+
+        return client;
+    }
+
+    public ClientProfile? GetCurrent()
+    {
+        using var connection =
+            OpenConnection();
+
+        var currentClientId =
+            GetCurrentClientId(
+                connection);
+
+        if (!currentClientId.HasValue)
+        {
+            return null;
+        }
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            SELECT
+                Id,
+                ClientCode,
+                ClientName,
+                LegalName,
+                TradeName,
+                LegalNameIsManual,
+                TradeNameIsManual,
+                Gstin,
+                Pan,
+                State,
+                FinancialYear,
+                Address,
+                Phone,
+                Email,
+                Notes,
+                GstProfileSourceType,
+                GstProfileSourcePath,
+                LatestGstr3bPeriod,
+                LatestGstr3bPeriodEndKey,
+                LatestGstr3bArn,
+                LatestGstr3bArnDate,
+                GstProfileUpdatedUtc,
+                IsArchived,
+                CreatedUtc,
+                UpdatedUtc
+            FROM Clients
+            WHERE
+                Id = $ClientId
+                AND IsArchived = 0;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$ClientId",
+            currentClientId.Value);
+
+        using var reader =
+            command.ExecuteReader();
+
+        if (!reader.Read())
+        {
+            reader.Close();
+
+            ClearCurrentClient(
+                connection);
+
+            return null;
+        }
+
+        var client =
+            ReadClient(reader);
+
+        client.IsCurrent = true;
+
+        return client;
+    }
+
+    public ClientProfile Save(
+        ClientProfile client)
+    {
+        ArgumentNullException.ThrowIfNull(
+            client);
+
+        var normalized =
+            Normalize(client);
+
+        using var connection =
+            OpenConnection();
+
+        using var transaction =
+            connection.BeginTransaction();
+
+        var now =
+            DateTime.UtcNow;
+
+        if (normalized.Id == 0)
+        {
+            using var insert =
+                connection.CreateCommand();
+
+            insert.Transaction =
+                transaction;
+
+            insert.CommandText =
+                """
+                INSERT INTO Clients
+                (
+                    ClientCode,
+                    ClientName,
+                    LegalName,
+                    TradeName,
+                    LegalNameIsManual,
+                    TradeNameIsManual,
+                    Gstin,
+                    Pan,
+                    State,
+                    FinancialYear,
+                    Address,
+                    Phone,
+                    Email,
+                    Notes,
+                    GstProfileSourceType,
+                    GstProfileSourcePath,
+                    LatestGstr3bPeriod,
+                    LatestGstr3bPeriodEndKey,
+                    LatestGstr3bArn,
+                    LatestGstr3bArnDate,
+                    GstProfileUpdatedUtc,
+                    IsArchived,
+                    CreatedUtc,
+                    UpdatedUtc
+                )
+                VALUES
+                (
+                    $ClientCode,
+                    $ClientName,
+                    $LegalName,
+                    $TradeName,
+                    $LegalNameIsManual,
+                    $TradeNameIsManual,
+                    $Gstin,
+                    $Pan,
+                    $State,
+                    $FinancialYear,
+                    $Address,
+                    $Phone,
+                    $Email,
+                    $Notes,
+                    $GstProfileSourceType,
+                    $GstProfileSourcePath,
+                    $LatestGstr3bPeriod,
+                    $LatestGstr3bPeriodEndKey,
+                    $LatestGstr3bArn,
+                    $LatestGstr3bArnDate,
+                    $GstProfileUpdatedUtc,
+                    $IsArchived,
+                    $CreatedUtc,
+                    $UpdatedUtc
+                );
+
+                SELECT last_insert_rowid();
+                """;
+
+            AddClientParameters(
+                insert,
+                normalized,
+                now,
+                now);
+
+            normalized.Id =
+                Convert.ToInt64(
+                    insert.ExecuteScalar(),
+                    CultureInfo.InvariantCulture);
+
+            normalized.CreatedUtc =
+                now;
+
+            normalized.UpdatedUtc =
+                now;
+        }
+        else
+        {
+            using var update =
+                connection.CreateCommand();
+
+            update.Transaction =
+                transaction;
+
+            update.CommandText =
+                """
+                UPDATE Clients
+                SET
+                    ClientCode = $ClientCode,
+                    ClientName = $ClientName,
+                    LegalName = $LegalName,
+                    TradeName = $TradeName,
+                    LegalNameIsManual = $LegalNameIsManual,
+                    TradeNameIsManual = $TradeNameIsManual,
+                    Gstin = $Gstin,
+                    Pan = $Pan,
+                    State = $State,
+                    FinancialYear = $FinancialYear,
+                    Address = $Address,
+                    Phone = $Phone,
+                    Email = $Email,
+                    Notes = $Notes,
+                    GstProfileSourceType = $GstProfileSourceType,
+                    GstProfileSourcePath = $GstProfileSourcePath,
+                    LatestGstr3bPeriod = $LatestGstr3bPeriod,
+                    LatestGstr3bPeriodEndKey = $LatestGstr3bPeriodEndKey,
+                    LatestGstr3bArn = $LatestGstr3bArn,
+                    LatestGstr3bArnDate = $LatestGstr3bArnDate,
+                    GstProfileUpdatedUtc = $GstProfileUpdatedUtc,
+                    IsArchived = $IsArchived,
+                    UpdatedUtc = $UpdatedUtc
+                WHERE Id = $ClientId;
+                """;
+
+            AddClientParameters(
+                update,
+                normalized,
+                normalized.CreatedUtc == default
+                    ? now
+                    : normalized.CreatedUtc,
+                now);
+
+            update.Parameters.AddWithValue(
+                "$ClientId",
+                normalized.Id);
+
+            var affected =
+                update.ExecuteNonQuery();
+
+            if (affected == 0)
+            {
+                throw new InvalidOperationException(
+                    "The selected client no longer exists.");
+            }
+
+            normalized.UpdatedUtc =
+                now;
+        }
+
+        transaction.Commit();
+
+        return normalized;
+    }
+
+
+    public ClientProfile ApplyImportedGstProfile(
+        long clientId,
+        GstinProfileLookupResult profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var client = GetById(clientId)
+            ?? throw new InvalidOperationException(
+                "The selected client no longer exists.");
+
+        var changed = false;
+
+        var preferredClientName = AccountingText.DisplayName(
+            profile.TradeName.Length > 0 ? profile.TradeName : profile.LegalName);
+        var normalizedClientIdentity = string.Concat(client.ClientName.Where(char.IsLetterOrDigit)).ToUpperInvariant();
+        var normalizedClientGstin = string.Concat(client.Gstin.Where(char.IsLetterOrDigit)).ToUpperInvariant();
+        if (preferredClientName.Length > 0 &&
+            (client.ClientName.Trim().Length == 0 ||
+             (normalizedClientGstin.Length == 15 && normalizedClientIdentity == normalizedClientGstin)))
+        {
+            client.ClientName = preferredClientName;
+            changed = true;
+        }
+
+        if (!client.LegalNameIsManual &&
+            profile.LegalName.Length > 0 &&
+            !client.LegalName.Equals(profile.LegalName, StringComparison.Ordinal))
+        {
+            client.LegalName = profile.LegalName;
+            changed = true;
+        }
+
+        if (!client.TradeNameIsManual &&
+            profile.TradeName.Length > 0 &&
+            !client.TradeName.Equals(profile.TradeName, StringComparison.Ordinal))
+        {
+            client.TradeName = profile.TradeName;
+            changed = true;
+        }
+
+        if (profile.Pan.Length > 0 && client.Pan.Length == 0)
+        {
+            client.Pan = profile.Pan;
+            changed = true;
+        }
+
+        if (profile.State.Length > 0 && client.State.Length == 0)
+        {
+            client.State = profile.State;
+            changed = true;
+        }
+
+        if (profile.SourcePath.Length > 0)
+        {
+            changed |= !client.GstProfileSourceType.Equals(profile.SourceType, StringComparison.Ordinal);
+            changed |= !client.GstProfileSourcePath.Equals(profile.SourcePath, StringComparison.Ordinal);
+            changed |= !client.LatestGstr3bPeriod.Equals(profile.Gstr3bPeriod, StringComparison.Ordinal);
+            changed |= !client.LatestGstr3bPeriodEndKey.Equals(profile.PeriodEndKey, StringComparison.Ordinal);
+            changed |= !client.LatestGstr3bArn.Equals(profile.Arn, StringComparison.Ordinal);
+            changed |= !client.LatestGstr3bArnDate.Equals(profile.ArnDate, StringComparison.Ordinal);
+
+            client.GstProfileSourceType = profile.SourceType;
+            client.GstProfileSourcePath = profile.SourcePath;
+            client.LatestGstr3bPeriod = profile.Gstr3bPeriod;
+            client.LatestGstr3bPeriodEndKey = profile.PeriodEndKey;
+            client.LatestGstr3bArn = profile.Arn;
+            client.LatestGstr3bArnDate = profile.ArnDate;
+            client.GstProfileUpdatedUtc = DateTime.UtcNow;
+        }
+
+        return changed ? Save(client) : client;
+    }
+
+    public void SetCurrent(
+        long clientId)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var transaction =
+            connection.BeginTransaction();
+
+        using var verify =
+            connection.CreateCommand();
+
+        verify.Transaction =
+            transaction;
+
+        verify.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM Clients
+            WHERE
+                Id = $ClientId
+                AND IsArchived = 0;
+            """;
+
+        verify.Parameters.AddWithValue(
+            "$ClientId",
+            clientId);
+
+        var exists =
+            Convert.ToInt32(
+                verify.ExecuteScalar(),
+                CultureInfo.InvariantCulture) >
+            0;
+
+        if (!exists)
+        {
+            throw new InvalidOperationException(
+                "Only a saved, non-archived client can be selected.");
+        }
+
+        using var setting =
+            connection.CreateCommand();
+
+        setting.Transaction =
+            transaction;
+
+        setting.CommandText =
+            """
+            INSERT INTO AppSettings
+            (
+                SettingKey,
+                SettingValue
+            )
+            VALUES
+            (
+                $SettingKey,
+                $SettingValue
+            )
+            ON CONFLICT(SettingKey)
+            DO UPDATE SET
+                SettingValue = excluded.SettingValue;
+            """;
+
+        setting.Parameters.AddWithValue(
+            "$SettingKey",
+            CurrentClientSetting);
+
+        setting.Parameters.AddWithValue(
+            "$SettingValue",
+            clientId.ToString(
+                CultureInfo.InvariantCulture));
+
+        setting.ExecuteNonQuery();
+
+        transaction.Commit();
+    }
+
+    public void ClearCurrent()
+    {
+        using var connection =
+            OpenConnection();
+
+        ClearCurrentClient(connection);
+    }
+
+    public void Archive(
+        long clientId)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var transaction =
+            connection.BeginTransaction();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.Transaction =
+            transaction;
+
+        command.CommandText =
+            """
+            UPDATE Clients
+            SET
+                IsArchived = 1,
+                UpdatedUtc = $UpdatedUtc
+            WHERE Id = $ClientId;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$ClientId",
+            clientId);
+
+        command.Parameters.AddWithValue(
+            "$UpdatedUtc",
+            DateTime.UtcNow.ToString("O"));
+
+        command.ExecuteNonQuery();
+
+        if (GetCurrentClientId(
+                connection,
+                transaction) ==
+            clientId)
+        {
+            ClearCurrentClient(
+                connection,
+                transaction);
+        }
+
+        transaction.Commit();
+    }
+
+    public void Restore(
+        long clientId)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            UPDATE Clients
+            SET
+                IsArchived = 0,
+                UpdatedUtc = $UpdatedUtc
+            WHERE Id = $ClientId;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$ClientId",
+            clientId);
+
+        command.Parameters.AddWithValue(
+            "$UpdatedUtc",
+            DateTime.UtcNow.ToString("O"));
+
+        command.ExecuteNonQuery();
+    }
+
+    public void Delete(
+        long clientId)
+    {
+        if (clientId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(clientId));
+        }
+
+        using var connection = OpenConnection();
+
+        using (var verify = connection.CreateCommand())
+        {
+            verify.CommandText =
+                "SELECT IsArchived FROM Clients WHERE Id = $ClientId;";
+            verify.Parameters.AddWithValue("$ClientId", clientId);
+
+            var value = verify.ExecuteScalar();
+            if (value is null || value is DBNull)
+            {
+                throw new InvalidOperationException("The selected client no longer exists.");
+            }
+
+            if (Convert.ToInt32(value, CultureInfo.InvariantCulture) == 0)
+            {
+                throw new InvalidOperationException("Archive the client before permanent deletion.");
+            }
+        }
+
+        // R39: keep SQLite foreign keys enabled so the existing ON DELETE CASCADE
+        // contracts remove indirect child rows (for example JournalLines and mapping members).
+        // Only legacy/client-owned tables that expose ClientId without an ON DELETE CASCADE
+        // link to Clients are cleared explicitly before the archived Client/FY row is deleted.
+        using var transaction = connection.BeginTransaction();
+        var directCleanupTables = new List<string>();
+
+        using (var list = connection.CreateCommand())
+        {
+            list.Transaction = transaction;
+            list.CommandText =
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
+
+            using var reader = list.ExecuteReader();
+            while (reader.Read())
+            {
+                var table = reader.GetString(0);
+                if (table.Equals("Clients", StringComparison.OrdinalIgnoreCase) ||
+                    table.Equals("AppSettings", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                directCleanupTables.Add(table);
+            }
+        }
+
+        foreach (var table in directCleanupTables)
+        {
+            var quoted = '"' + table.Replace("\"", "\"\"") + '"';
+            var ownsClient = false;
+
+            using (var columns = connection.CreateCommand())
+            {
+                columns.Transaction = transaction;
+                columns.CommandText = $"PRAGMA table_info({quoted});";
+
+                using var reader = columns.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (reader.GetString(1).Equals("ClientId", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ownsClient = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!ownsClient)
+            {
+                continue;
+            }
+
+            var cascadesFromClient = false;
+            using (var foreignKeys = connection.CreateCommand())
+            {
+                foreignKeys.Transaction = transaction;
+                foreignKeys.CommandText = $"PRAGMA foreign_key_list({quoted});";
+
+                using var reader = foreignKeys.ExecuteReader();
+                while (reader.Read())
+                {
+                    var targetTable = reader.GetString(2);
+                    var sourceColumn = reader.GetString(3);
+                    var targetColumn = reader.GetString(4);
+                    var onDelete = reader.GetString(6);
+                    if (targetTable.Equals("Clients", StringComparison.OrdinalIgnoreCase) &&
+                        sourceColumn.Equals("ClientId", StringComparison.OrdinalIgnoreCase) &&
+                        targetColumn.Equals("Id", StringComparison.OrdinalIgnoreCase) &&
+                        onDelete.Equals("CASCADE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cascadesFromClient = true;
+                        break;
+                    }
+                }
+            }
+
+            if (cascadesFromClient)
+            {
+                continue;
+            }
+
+            using var deleteRows = connection.CreateCommand();
+            deleteRows.Transaction = transaction;
+            deleteRows.CommandText = $"DELETE FROM {quoted} WHERE ClientId = $ClientId;";
+            deleteRows.Parameters.AddWithValue("$ClientId", clientId);
+            deleteRows.ExecuteNonQuery();
+        }
+
+        using (var deleteWorkspaceSettings = connection.CreateCommand())
+        {
+            deleteWorkspaceSettings.Transaction = transaction;
+            deleteWorkspaceSettings.CommandText =
+                "DELETE FROM AppSettings WHERE SettingKey LIKE $WorkspacePattern;";
+            deleteWorkspaceSettings.Parameters.AddWithValue(
+                "$WorkspacePattern",
+                $"Workspace.%.{clientId}.%");
+            deleteWorkspaceSettings.ExecuteNonQuery();
+        }
+
+        using (var clearCurrent = connection.CreateCommand())
+        {
+            clearCurrent.Transaction = transaction;
+            clearCurrent.CommandText =
+                "DELETE FROM AppSettings WHERE SettingKey = $Key AND SettingValue = $ClientIdText;";
+            clearCurrent.Parameters.AddWithValue("$Key", CurrentClientSetting);
+            clearCurrent.Parameters.AddWithValue(
+                "$ClientIdText",
+                clientId.ToString(CultureInfo.InvariantCulture));
+            clearCurrent.ExecuteNonQuery();
+        }
+
+        using (var deleteClient = connection.CreateCommand())
+        {
+            deleteClient.Transaction = transaction;
+            deleteClient.CommandText =
+                "DELETE FROM Clients WHERE Id = $ClientId AND IsArchived = 1;";
+            deleteClient.Parameters.AddWithValue("$ClientId", clientId);
+
+            if (deleteClient.ExecuteNonQuery() != 1)
+            {
+                throw new InvalidOperationException(
+                    "Client deletion did not remove exactly one archived Client/FY record.");
+            }
+        }
+
+        transaction.Commit();
+    }
+
+    public bool ClientCodeExists(
+        string clientCode,
+        long excludingClientId = 0)
+    {
+        using var connection =
+            OpenConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM Clients
+            WHERE
+                ClientCode = $ClientCode
+                AND Id <> $ExcludingClientId;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$ClientCode",
+            clientCode.Trim());
+
+        command.Parameters.AddWithValue(
+            "$ExcludingClientId",
+            excludingClientId);
+
+        return Convert.ToInt32(
+            command.ExecuteScalar(),
+            CultureInfo.InvariantCulture) >
+            0;
+    }
+
+    private SqliteConnection OpenConnection()
+    {
+        return SqliteConnectionPolicy.Open(_connectionString);
+    }
+
+    private static ClientProfile Normalize(
+        ClientProfile source) =>
+        new()
+        {
+            Id = source.Id,
+            ClientCode =
+                source.ClientCode
+                    .Trim()
+                    .ToUpperInvariant(),
+            ClientName =
+                source.ClientName.Trim(),
+            LegalName =
+                source.LegalName.Trim(),
+            TradeName =
+                source.TradeName.Trim(),
+            LegalNameIsManual =
+                source.LegalNameIsManual,
+            TradeNameIsManual =
+                source.TradeNameIsManual,
+            Gstin =
+                string.Concat(
+                        source.Gstin.Where(
+                            char.IsLetterOrDigit))
+                    .ToUpperInvariant(),
+            Pan =
+                string.Concat(
+                        source.Pan.Where(
+                            char.IsLetterOrDigit))
+                    .ToUpperInvariant(),
+            State =
+                source.State.Trim(),
+            FinancialYear =
+                source.FinancialYear.Trim(),
+            Address =
+                source.Address.Trim(),
+            Phone =
+                source.Phone.Trim(),
+            Email =
+                source.Email
+                    .Trim()
+                    .ToLowerInvariant(),
+            Notes =
+                source.Notes.Trim(),
+            GstProfileSourceType =
+                source.GstProfileSourceType.Trim(),
+            GstProfileSourcePath =
+                source.GstProfileSourcePath.Trim(),
+            LatestGstr3bPeriod =
+                source.LatestGstr3bPeriod.Trim(),
+            LatestGstr3bPeriodEndKey =
+                source.LatestGstr3bPeriodEndKey.Trim(),
+            LatestGstr3bArn =
+                source.LatestGstr3bArn.Trim(),
+            LatestGstr3bArnDate =
+                source.LatestGstr3bArnDate.Trim(),
+            GstProfileUpdatedUtc =
+                source.GstProfileUpdatedUtc,
+            IsArchived =
+                source.IsArchived,
+            CreatedUtc =
+                source.CreatedUtc,
+            UpdatedUtc =
+                source.UpdatedUtc
+        };
+
+    private static void AddClientParameters(
+        SqliteCommand command,
+        ClientProfile client,
+        DateTime createdUtc,
+        DateTime updatedUtc)
+    {
+        command.Parameters.AddWithValue(
+            "$ClientCode",
+            client.ClientCode);
+
+        command.Parameters.AddWithValue(
+            "$ClientName",
+            client.ClientName);
+
+        command.Parameters.AddWithValue(
+            "$LegalName",
+            client.LegalName);
+
+        command.Parameters.AddWithValue(
+            "$TradeName",
+            client.TradeName);
+
+        command.Parameters.AddWithValue(
+            "$LegalNameIsManual",
+            client.LegalNameIsManual ? 1 : 0);
+
+        command.Parameters.AddWithValue(
+            "$TradeNameIsManual",
+            client.TradeNameIsManual ? 1 : 0);
+
+        command.Parameters.AddWithValue(
+            "$Gstin",
+            client.Gstin);
+
+        command.Parameters.AddWithValue(
+            "$Pan",
+            client.Pan);
+
+        command.Parameters.AddWithValue(
+            "$State",
+            client.State);
+
+        command.Parameters.AddWithValue(
+            "$FinancialYear",
+            client.FinancialYear);
+
+        command.Parameters.AddWithValue(
+            "$Address",
+            client.Address);
+
+        command.Parameters.AddWithValue(
+            "$Phone",
+            client.Phone);
+
+        command.Parameters.AddWithValue(
+            "$Email",
+            client.Email);
+
+        command.Parameters.AddWithValue(
+            "$Notes",
+            client.Notes);
+
+        command.Parameters.AddWithValue(
+            "$GstProfileSourceType",
+            client.GstProfileSourceType);
+
+        command.Parameters.AddWithValue(
+            "$GstProfileSourcePath",
+            client.GstProfileSourcePath);
+
+        command.Parameters.AddWithValue(
+            "$LatestGstr3bPeriod",
+            client.LatestGstr3bPeriod);
+
+        command.Parameters.AddWithValue(
+            "$LatestGstr3bPeriodEndKey",
+            client.LatestGstr3bPeriodEndKey);
+
+        command.Parameters.AddWithValue(
+            "$LatestGstr3bArn",
+            client.LatestGstr3bArn);
+
+        command.Parameters.AddWithValue(
+            "$LatestGstr3bArnDate",
+            client.LatestGstr3bArnDate);
+
+        command.Parameters.AddWithValue(
+            "$GstProfileUpdatedUtc",
+            client.GstProfileUpdatedUtc == DateTime.MinValue
+                ? string.Empty
+                : client.GstProfileUpdatedUtc.ToString("O"));
+
+        command.Parameters.AddWithValue(
+            "$IsArchived",
+            client.IsArchived
+                ? 1
+                : 0);
+
+        command.Parameters.AddWithValue(
+            "$CreatedUtc",
+            createdUtc.ToString("O"));
+
+        command.Parameters.AddWithValue(
+            "$UpdatedUtc",
+            updatedUtc.ToString("O"));
+    }
+
+    private static ClientProfile ReadClient(
+        SqliteDataReader reader) =>
+        new()
+        {
+            Id = reader.GetInt64(0),
+            ClientCode = reader.GetString(1),
+            ClientName = reader.GetString(2),
+            LegalName = reader.GetString(3),
+            TradeName = reader.GetString(4),
+            LegalNameIsManual = reader.GetInt64(5) != 0,
+            TradeNameIsManual = reader.GetInt64(6) != 0,
+            Gstin = reader.GetString(7),
+            Pan = reader.GetString(8),
+            State = reader.GetString(9),
+            FinancialYear = reader.GetString(10),
+            Address = reader.GetString(11),
+            Phone = reader.GetString(12),
+            Email = reader.GetString(13),
+            Notes = reader.GetString(14),
+            GstProfileSourceType = reader.GetString(15),
+            GstProfileSourcePath = reader.GetString(16),
+            LatestGstr3bPeriod = reader.GetString(17),
+            LatestGstr3bPeriodEndKey = reader.GetString(18),
+            LatestGstr3bArn = reader.GetString(19),
+            LatestGstr3bArnDate = reader.GetString(20),
+            GstProfileUpdatedUtc = ParseUtc(reader.GetString(21)),
+            IsArchived = reader.GetInt64(22) != 0,
+            CreatedUtc = ParseUtc(reader.GetString(23)),
+            UpdatedUtc = ParseUtc(reader.GetString(24))
+        };
+
+    private static DateTime ParseUtc(
+        string value) =>
+        DateTime.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var result)
+            ? result
+            : DateTime.MinValue;
+
+    private static bool EnsureColumn(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string definition)
+    {
+        using var inspect = connection.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({tableName});";
+
+        using var reader = inspect.ExecuteReader();
+
+        while (reader.Read())
+        {
+            if (reader.GetString(1).Equals(columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        reader.Close();
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        alter.ExecuteNonQuery();
+        return true;
+    }
+
+    private static long? GetCurrentClientId(
+        SqliteConnection connection,
+        SqliteTransaction? transaction = null)
+    {
+        using var command =
+            connection.CreateCommand();
+
+        command.Transaction =
+            transaction;
+
+        command.CommandText =
+            """
+            SELECT SettingValue
+            FROM AppSettings
+            WHERE SettingKey = $SettingKey;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$SettingKey",
+            CurrentClientSetting);
+
+        var value =
+            Convert.ToString(
+                command.ExecuteScalar(),
+                CultureInfo.InvariantCulture);
+
+        return long.TryParse(
+            value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var clientId)
+            ? clientId
+            : null;
+    }
+
+    private static void ClearCurrentClient(
+        SqliteConnection connection,
+        SqliteTransaction? transaction = null)
+    {
+        using var command =
+            connection.CreateCommand();
+
+        command.Transaction =
+            transaction;
+
+        command.CommandText =
+            """
+            DELETE FROM AppSettings
+            WHERE SettingKey = $SettingKey;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$SettingKey",
+            CurrentClientSetting);
+
+        command.ExecuteNonQuery();
+    }
+}

@@ -1,0 +1,95 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.FolderRegistrationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Link Accounting Automation Folder"
+        Width="680"
+        Height="610"
+        MinWidth="580"
+        MinHeight="500"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResizeWithGrip"
+        ShowInTaskbar="True"
+        Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="Link Automation Folder" FontSize="21" FontWeight="SemiBold" />
+            <TextBlock Text="Choose the existing client/FY that this folder belongs to. If this folder was previously linked to the wrong client, saving here will re-link it to the selected existing client. Create a new client only when it truly does not already exist."
+                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,7,0,10" />
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="9">
+                <TextBlock Text="{Binding FolderPath}" TextWrapping="Wrap" />
+            </Border>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="0,0,8,0">
+                <RadioButton x:Name="ExistingModeRadio" Content="Link to an existing client / Financial Year" FontWeight="SemiBold"
+                             Checked="Mode_Checked" Margin="0,4,0,8" />
+                <ComboBox x:Name="ExistingClientBox" ItemsSource="{Binding ExistingClients}" SelectionChanged="ExistingClientBox_SelectionChanged"
+                          Padding="8,7" Margin="22,0,0,12" MinHeight="36">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding ClientName}" FontWeight="SemiBold" />
+                                <TextBlock Text=" • FY " Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding FinancialYear}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text=" • " Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding Gstin}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <RadioButton x:Name="NewModeRadio" Content="Create a new client and link this folder" FontWeight="SemiBold"
+                             Checked="Mode_Checked" Margin="0,7,0,8" />
+                <Border x:Name="NewClientPanel" Margin="22,0,0,0" Padding="12" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <TextBlock Text="Name (or GSTIN)" VerticalAlignment="Center" Margin="0,8" />
+                            <TextBox x:Name="NameBox" Grid.Column="1" Text="{Binding ClientName, UpdateSourceTrigger=PropertyChanged}" Padding="9,7" Margin="0,4" />
+                            <TextBlock Grid.Row="1" Text="GSTIN (or Name)" VerticalAlignment="Center" Margin="0,8" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Gstin, UpdateSourceTrigger=PropertyChanged}" Padding="9,7" Margin="0,4" MaxLength="15" />
+                            <TextBlock Grid.Row="2" Text="Financial Year" VerticalAlignment="Center" Margin="0,8" />
+                            <ComboBox x:Name="FinancialYearBox" Grid.Row="2" Grid.Column="1" ItemsSource="{Binding FinancialYears}"
+                                      Text="{Binding FinancialYear, UpdateSourceTrigger=PropertyChanged}" IsEditable="True"
+                                      IsTextSearchEnabled="True" StaysOpenOnEdit="True" Padding="7,6" Margin="0,4" />
+                            <TextBlock Grid.Row="3" Text="Group Selection" VerticalAlignment="Center" Margin="0,8" />
+                            <Button Grid.Row="3" Grid.Column="1" Click="GroupPicker_Click" HorizontalContentAlignment="Left" Padding="9,7" Margin="0,4">
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Right" Text="▶" Margin="10,0,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding SelectedGroupPath}" TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Text="Enter either Name or GSTIN. AAH first checks the configured E-returns root for this FY's exact GSTIN folder, then matching GSTR-3B files, and fills Client Name automatically from Trade/Legal Name. Group Selection uses the same cascading hierarchy as Client Groups; Create New Group is available at every menu level. Duplicate client/FY creation remains blocked."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="145,7,0,0" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding LookupStatusText}" Foreground="{DynamicResource AccentBrush}" Margin="145,5,0,0" TextWrapping="Wrap" FontSize="10" />
+                    </StackPanel>
+                </Border>
+
+                <Border Margin="0,12,0,0" Padding="10" Background="{DynamicResource ActionRequiredSoftBrush}"
+                        Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock Text="{Binding ErrorText}" Foreground="{DynamicResource ActionRequiredBrush}" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Margin="0,16,0,0" Padding="0,12,0,0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="The Hub writes a unique folder marker and periodically reconciles the complete folder tree, so missed Windows file events are recovered automatically."
+                           VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,0,12,0" />
+                <Button Grid.Column="1" Content="Cancel" Click="Cancel_Click" Padding="16,8" Margin="0,0,8,0" MinWidth="90" />
+                <Button Grid.Column="2" Content="Save &amp; Link Folder" Click="Create_Click" Style="{StaticResource PrimaryButtonStyle}"
+                        Padding="18,9" MinWidth="175" IsDefault="True" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

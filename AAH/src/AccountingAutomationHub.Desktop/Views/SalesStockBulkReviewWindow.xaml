@@ -1,0 +1,85 @@
+﻿<Window x:Class="AccountingAutomationHub.Desktop.Views.SalesStockBulkReviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Stock Review" Width="1040" Height="620"
+        MinWidth="760" MinHeight="460" WindowStartupLocation="CenterOwner"
+        Background="#F8FAFC" PreviewKeyDown="Window_PreviewKeyDown" Closing="Window_Closing">
+    <Border Margin="14" Padding="14" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                <TextBlock Text="{Binding Heading}" FontSize="19" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding Explanation}" Margin="0,4,0,0" Foreground="#64748B" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding SummaryText}" Margin="0,6,0,0" FontWeight="SemiBold"/>
+            </StackPanel>
+
+            <DataGrid x:Name="ReviewGrid" Grid.Row="1" ItemsSource="{Binding Rows}" AutoGenerateColumns="False"
+                      CanUserAddRows="False" CanUserDeleteRows="False" HeadersVisibility="Column"
+                      GridLinesVisibility="Horizontal" RowHeaderWidth="0" SelectionUnit="CellOrRowHeader"
+                      EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                      ScrollViewer.CanContentScroll="True">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="70" IsReadOnly="True"/>
+                    <DataGridTextColumn x:Name="CurrentValueColumn" Header="Stock Item" Binding="{Binding StockItemName}" Width="2*" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Master Source" Binding="{Binding MasterSource}" Width="110" IsReadOnly="True"/>
+                    <DataGridTextColumn x:Name="ImportedValueColumn" Header="Imported Unit" Binding="{Binding SourceValue}" Width="2*" IsReadOnly="True"/>
+                    <DataGridTemplateColumn x:Name="FinalValueColumn" Header="Final Unit" Width="2*">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <!-- Fix121: keep the chooser visible in normal display mode.
+                                     The old editing-only template looked locked because it
+                                     showed only the current value until the cell entered edit mode. -->
+                                <ComboBox ItemsSource="{Binding DataContext.FinalChoices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                          Text="{Binding FinalValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          TextSearch.TextPath="Name"
+                                          IsEditable="True" IsTextSearchEnabled="True"
+                                          IsSynchronizedWithCurrentItem="False"
+                                          MaxDropDownHeight="420" MinHeight="28">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid MinWidth="300" Margin="2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0,0,0">
+                                                    <TextBlock Text="{Binding Authority}" FontWeight="SemiBold" Foreground="#475569"/>
+                                                    <TextBlock Text="{Binding Detail}" Margin="8,0,0,0" Foreground="#94A3B8"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn x:Name="FactorColumn" Header="Factor" Width="120">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBox Text="{Binding FactorText,UpdateSourceTrigger=PropertyChanged}"
+                                         IsReadOnly="{Binding IsDeterministicFactor}"
+                                         ToolTip="AAH locks deterministic physical/count conversions. For package relationships such as Box to Pieces, enter the item-specific factor."/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <Grid Grid.Row="2" Margin="0,12,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding ValidationText}" Foreground="#B91C1C" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="CancelButton" Content="Cancel" Width="90" Height="32" Margin="0,0,8,0" Click="Cancel_Click"/>
+                    <Button x:Name="ApplyAllButton" Content="{Binding ApplyButtonText}" MinWidth="120" Height="32" IsDefault="True" Click="ApplyAll_Click"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

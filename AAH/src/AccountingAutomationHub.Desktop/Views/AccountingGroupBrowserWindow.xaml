@@ -1,0 +1,24 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AccountingGroupBrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:behaviors="clr-namespace:AccountingAutomationHub.Desktop.Behaviors"
+        Title="Groups" Width="760" Height="620" MinWidth="620" MinHeight="460" WindowStartupLocation="CenterOwner">
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="Groups" FontSize="20" FontWeight="SemiBold"/>
+        <TextBox x:Name="SearchBox" Grid.Row="1" Margin="0,10,0,8" TextChanged="SearchBox_TextChanged" ToolTip="Search groups"/>
+        <DataGrid x:Name="GroupsGrid" behaviors:DataGridColumnFilterBehavior.ShowTotals="False" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" MouseDoubleClick="GroupsGrid_MouseDoubleClick">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Group" Binding="{Binding Label}" Width="*"/>
+                <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalanceText}" SortMemberPath="OpeningBalance" Width="120"/>
+                <DataGridTextColumn Header="Debit" Binding="{Binding DebitText}" SortMemberPath="TotalDebit" Width="105"/>
+                <DataGridTextColumn Header="Credit" Binding="{Binding CreditText}" SortMemberPath="TotalCredit" Width="105"/>
+                <DataGridTextColumn Header="Closing" Binding="{Binding ClosingBalanceText}" SortMemberPath="ClosingBalance" Width="120"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="All Groups" Click="AllGroups_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+            <Button Content="Open Group" Click="OpenGroup_Click" Style="{StaticResource PrimaryButtonStyle}"/>
+        </StackPanel>
+    </Grid>
+</Window>

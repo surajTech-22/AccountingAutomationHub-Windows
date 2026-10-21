@@ -1,0 +1,12 @@
+{
+  "name": "FIXED41 R3 startup/runtime heartbeat interlock exact source proof",
+  "file": "src/AccountingAutomationHub.Desktop/ViewModels/MainWindowViewModel.cs",
+  "baseline_text_sha256": "b5284be795482b6f9dee8be9b4b5a0caf6e79c144a34c2de22eb656aa0ab6b3a",
+  "current_text_sha256": "2e7e5904283370d66163087abe4bb406feca43d6eac993939db5f6e7eb73b3f9",
+  "changes": [
+    {
+      "before": "        _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);\n        _tallyCoordinator.AttachLocalPreparationReadyProvider(() =>\n            _workspaceStateCache.IsStartupPreparationComplete && _automationService.IsLocalPreparationComplete);",
+      "after": "        _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);\n        // FIXED41 R3: the 5-second Tally authority loop has a one-time startup latch of its own.\n        // Release that latch when startup cache scheduling is complete; do not tie it to the\n        // continuously changing Auto Import/Bank/source queues. Those queues may remain active\n        // or refill for the entire application session and must never starve ALTERID authority.\n        _tallyCoordinator.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);"
+    }
+  ]
+}

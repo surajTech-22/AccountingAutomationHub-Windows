@@ -1,0 +1,306 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.TaxCreditReconciliationView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="26AS Reconciliation" FontSize="18" FontWeight="SemiBold"/>
+                    <TextBlock Text="The main tabs now follow the Parts actually present in the 26AS source. Setup and matching tools open as separate panels; final accounting/reconciliation rules remain gated."
+                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,18,0"/>
+                </StackPanel>
+                <WrapPanel Grid.Column="1" VerticalAlignment="Top">
+                    <Button Content="Import PDF" Command="{Binding Import26AsCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="13,8" Margin="0,0,7,0"/>
+                    <Button Content="TXT / ZIP / CSV" Command="{Binding ImportStructuredSourceCommand}" Padding="13,8" Margin="0,0,7,0"/>
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="13,8"/>
+                </WrapPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="5,0"><TextBlock Text="1 · SOURCE" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding SourceCompleteness, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="1" Margin="5,0"><TextBlock Text="2 · CLIENT" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding ClientMatchStatus, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="2" Margin="5,0"><TextBlock Text="3 · PARTIES" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding PartySetupStatus, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="3" Margin="5,0"><TextBlock Text="4 · TDS LEDGER" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding TdsLedgerSetupStatus, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="4" Margin="5,0"><TextBlock Text="5 · ACCOUNTING RULES" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding AccountingRulesStatus, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                <StackPanel Grid.Column="5" Margin="5,0"><TextBlock Text="6 · RECONCILIATION" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding ReconciliationStatus, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- These are tools/panels, not tabs. -->
+        <Border Grid.Row="2" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,0,0,8">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right" Text="Fully matched clients/deductors are automatically hidden from the working Part tabs." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                <WrapPanel>
+                    <Button Content="Source &amp; Intake" Command="{Binding OpenSourcePanelCommand}" Padding="11,6" Margin="0,0,7,0"/>
+                    <Button Content="Client Matching" Command="{Binding OpenClientMatchPanelCommand}" Padding="11,6" Margin="0,0,7,0"/>
+                    <Button Content="TDS Receivable" Command="{Binding OpenTdsLedgerPanelCommand}" Padding="11,6" Margin="0,0,7,0"/>
+                    <Button Content="Entry Matching" Command="{Binding OpenEntryMatchPanelCommand}" Padding="11,6"/>
+                </WrapPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Main TabControl is exclusively 26AS Parts. -->
+        <TabControl Grid.Row="3" ItemsSource="{Binding AvailablePartTabs}" SelectedItem="{Binding SelectedPartTab}">
+            <TabControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding TabHeader, Mode=OneWay}" FontWeight="SemiBold"/>
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate>
+                    <Grid Margin="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,0,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Header, Mode=OneWay}" FontSize="16" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Description, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                                    <TextBlock Text="Parsed source rows" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right"/>
+                                    <TextBlock Text="{Binding ParsedRowCount, StringFormat=N0, Mode=OneWay}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Search and client selection live inside the active Part tab. There is deliberately no global/universal search bar. -->
+                        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="10" Margin="0,0,0,8">
+                            <Grid DataContext="{Binding RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Path=DataContext}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="300"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="380"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Search this Part" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                                <TextBox Grid.Column="1" Text="{Binding PartySearchText, UpdateSourceTrigger=PropertyChanged}" Padding="8,6" Margin="0,0,12,0" ToolTip="Search only the currently selected Part + client/deductor rows"/>
+                                <TextBlock Grid.Column="2" Text="Selected Client / Deductor" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                                <ComboBox Grid.Column="3" ItemsSource="{Binding PartyFilterOptions}" SelectedItem="{Binding SelectedPartyFilter}" DisplayMemberPath="Display" MinHeight="31" Margin="0,0,8,0"/>
+                                <Button Grid.Column="4" Content="Clear Search" Command="{Binding ClearPartyFilterCommand}" Padding="9,5" Margin="0,0,10,0"/>
+                                <TextBlock Grid.Column="5" Text="Only this selected client/deductor is shown below. There is no All-clients view in a Part tab." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="2" Margin="0,0,0,8" DataContext="{Binding RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Path=DataContext}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="7"><StackPanel><TextBlock Text="{Binding StatementRows, Mode=OneWay}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Selected rows" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="7"><StackPanel><TextBlock Text="{Binding Matched, Mode=OneWay}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Preliminary exact" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                            <Border Grid.Column="4" Style="{StaticResource CardBorderStyle}" Padding="7"><StackPanel><TextBlock Text="{Binding Probable, Mode=OneWay}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Preliminary probable" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                            <Border Grid.Column="6" Style="{StaticResource CardBorderStyle}" Padding="7"><StackPanel><TextBlock Text="{Binding MissingInBooks, Mode=OneWay}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="No Books suggestion" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                            <Border Grid.Column="8" Style="{StaticResource CardBorderStyle}" Padding="7"><StackPanel><TextBlock Text="{Binding Review, Mode=OneWay}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Review" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></Border>
+                        </Grid>
+
+                        <Border Grid.Row="3" Style="{StaticResource CardBorderStyle}" Padding="7" DataContext="{Binding RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Path=DataContext}">
+                            <Grid>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <TextBlock Text="SELECTED CLIENT / DEDUCTOR TRANSACTIONS" FontWeight="SemiBold" Margin="2,0,0,6"/>
+                                <DataGrid Grid.Row="1" ItemsSource="{Binding Rows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Part" Binding="{Binding Part, Mode=OneWay}" Width="55"/>
+                                        <DataGridTextColumn Header="Kind" Binding="{Binding TaxKind, Mode=OneWay}" Width="55"/>
+                                        <DataGridTextColumn Header="Section" Binding="{Binding Section, Mode=OneWay}" Width="75"/>
+                                        <DataGridTextColumn Header="Deductor" Binding="{Binding DeductorName, Mode=OneWay}" Width="210"/>
+                                        <DataGridTextColumn Header="TAN" Binding="{Binding DeductorTan, Mode=OneWay}" Width="105"/>
+                                        <DataGridTextColumn Header="Transaction Date" Binding="{Binding StatementDate, StringFormat=dd-MMM-yyyy, Mode=OneWay}" Width="110"/>
+                                        <DataGridTextColumn Header="Gross" Binding="{Binding StatementAmount, StringFormat=N2, Mode=OneWay}" Width="105"/>
+                                        <DataGridTextColumn Header="TDS/TCS" Binding="{Binding StatementTds, StringFormat=N2, Mode=OneWay}" Width="95"/>
+                                        <DataGridTextColumn Header="Deposited" Binding="{Binding StatementDeposited, StringFormat=N2, Mode=OneWay}" Width="95"/>
+                                        <DataGridTextColumn Header="Booking" Binding="{Binding BookingStatus, Mode=OneWay}" Width="70"/>
+                                        <DataGridTextColumn Header="Suggestion" Binding="{Binding Status, Mode=OneWay}" Width="110"/>
+                                        <DataGridTextColumn Header="Books Party" Binding="{Binding BooksParty, Mode=OneWay}" Width="190"/>
+                                        <DataGridTextColumn Header="Books Reference" Binding="{Binding BooksReference, Mode=OneWay}" Width="125"/>
+                                        <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat={}{0}%, Mode=OneWay}" Width="80"/>
+                                        <DataGridTextColumn Header="Reason" Binding="{Binding Reason, Mode=OneWay}" Width="320"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="4" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,8,0,0" DataContext="{Binding RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Path=DataContext}">
+                            <DockPanel>
+                                <WrapPanel DockPanel.Dock="Right">
+                                    <Button Content="Client Matching" Command="{Binding OpenClientMatchPanelCommand}" Padding="10,5" Margin="0,0,6,0"/>
+                                    <Button Content="Entry Matching" Command="{Binding OpenEntryMatchPanelCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="10,5"/>
+                                </WrapPanel>
+                                <TextBlock><Run Text="Selected Gross: "/><Run Text="{Binding StatementGross, StringFormat=N2, Mode=OneWay}" FontWeight="SemiBold"/><Run Text="   TDS: "/><Run Text="{Binding StatementTds, StringFormat=N2, Mode=OneWay}" FontWeight="SemiBold"/><Run Text="   TCS: "/><Run Text="{Binding StatementTcs, StringFormat=N2, Mode=OneWay}" FontWeight="SemiBold"/><Run Text="   Deposited: "/><Run Text="{Binding StatementDeposited, StringFormat=N2, Mode=OneWay}" FontWeight="SemiBold"/></TextBlock>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+
+        <Border Grid.Row="4" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,8,0,0">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right" Text="Accounting Rules: PENDING  ·  Final Reconciliation: NOT STARTED" FontWeight="SemiBold" Margin="14,0,0,0"/>
+                <TextBlock Text="{Binding StatusText, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+            </DockPanel>
+        </Border>
+
+        <!-- SOURCE & INTAKE PANEL -->
+        <Border Grid.Row="0" Grid.RowSpan="5" Panel.ZIndex="50" Background="#66000000" Visibility="{Binding IsSourcePanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Style="{StaticResource CardBorderStyle}" Margin="36" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10">
+                        <Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseWorkspacePanelCommand}" Padding="12,6"/>
+                        <StackPanel><TextBlock Text="Source &amp; Intake" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Source validation, Downloads intake and the Winman/password foundation are kept outside the Part tabs." Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                    </DockPanel>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <Border Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="1.4*"/><ColumnDefinition Width="0.8*"/><ColumnDefinition Width="0.8*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0"><TextBlock Text="PAN" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/><TextBlock Text="{Binding StatementPan, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="Assessee" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/><TextBlock Text="{Binding StatementAssessee, Mode=OneWay}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/></StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock Text="AY" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/><TextBlock Text="{Binding StatementAssessmentYear, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                                    <StackPanel Grid.Column="3"><TextBlock Text="Source Type" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/><TextBlock Text="{Binding SourceType, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                                    <StackPanel Grid.Column="4"><TextBlock Text="Source" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/><TextBlock Text="{Binding SourcePath, Mode=OneWay}" FontSize="10" TextTrimming="CharacterEllipsis" ToolTip="{Binding SourcePath, Mode=OneWay}"/></StackPanel>
+                                </Grid>
+                            </Border>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="12">
+                                    <StackPanel>
+                                        <TextBlock Text="Downloads Intake" FontSize="16" FontWeight="SemiBold"/>
+                                        <TextBlock Text="AAH checks Windows Downloads first. A candidate moves only after its Client PAN + FY can be proved; otherwise it stays in Downloads." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,9"/>
+                                        <CheckBox Content="Watch Downloads for 26AS PDF / TXT / ZIP / CSV" IsChecked="{Binding WatchDownloads}" Margin="0,0,0,5"/>
+                                        <CheckBox Content="Move verified files into the linked Client + FY Automation Folder" IsChecked="{Binding MoveVerifiedDownloads}" Margin="0,0,0,9"/>
+                                        <Button Content="Scan Downloads Now" Command="{Binding ScanDownloadsCommand}" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Left" Padding="12,6"/>
+                                        <TextBlock Text="{Binding DownloadsIntakeStatus, Mode=OneWay}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="12">
+                                    <StackPanel>
+                                        <TextBlock Text="TRACES Password · Winman Link Foundation" FontSize="16" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Winman remains foundation-only. Link the file now; full Winman reading/password discovery will be wired later. Manual TRACES password fallback remains available for the current Client." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,8"/>
+                                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding WinmanFilePath, Mode=OneWay}" IsReadOnly="True" Padding="7,5" Margin="0,0,7,0"/>
+                                            <Button Grid.Column="1" Content="Link Winman" Command="{Binding LinkWinmanCommand}" Padding="10,5" Margin="0,0,7,0"/>
+                                            <Button Grid.Column="2" Content="Auto Detect (Later)" IsEnabled="False" Padding="10,5"/>
+                                        </Grid>
+                                        <TextBlock Text="{Binding WinmanStatus, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,0,8"/>
+                                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <PasswordBox x:Name="TracesPasswordBox" PasswordChanged="TracesPasswordBox_PasswordChanged" Padding="7,5" Margin="0,0,7,0"/>
+                                            <Button Grid.Column="1" Content="Save for Current Client" Command="{Binding SavePasswordCommand}" Padding="10,5" Margin="0,0,7,0"/>
+                                            <Button Grid.Column="2" Content="Forget" Click="ForgetPassword_Click" Padding="10,5"/>
+                                        </Grid>
+                                        <TextBlock Text="{Binding PasswordStatus, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.25*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="0.75*"/></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="10">
+                                    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="220"/></Grid.RowDefinitions>
+                                        <TextBlock Text="Source Validation" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                        <DataGrid Grid.Row="1" ItemsSource="{Binding SourceValidationRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0">
+                                            <DataGrid.Columns><DataGridTextColumn Header="Check" Binding="{Binding Check, Mode=OneWay}" Width="150"/><DataGridTextColumn Header="Value" Binding="{Binding Value, Mode=OneWay}" Width="*"/><DataGridTextColumn Header="State" Binding="{Binding State, Mode=OneWay}" Width="90"/></DataGrid.Columns>
+                                        </DataGrid>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="10">
+                                    <StackPanel><TextBlock Text="Cross-format Authority" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="PDF / TRACES TXT / ZIP / CSV normalize into one authority. Supplying two formats should corroborate the same transactions, not duplicate them." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10"/><TextBlock Text="Current comparison" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding SourceComparisonStatus, Mode=OneWay}" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,2,0,10"/><TextBlock Text="Updated till" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding StatementUpdatedTill, Mode=OneWay}" FontWeight="SemiBold"/></StackPanel>
+                                </Border>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Border>
+
+        <!-- CLIENT MATCHING PANEL: separate, opened only by button. -->
+        <Border Grid.Row="0" Grid.RowSpan="5" Panel.ZIndex="50" Background="#66000000" Visibility="{Binding IsClientMatchPanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Style="{StaticResource CardBorderStyle}" Margin="36" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10">
+                        <Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseWorkspacePanelCommand}" Padding="12,6"/>
+                        <StackPanel><TextBlock Text="Client / Deductor Matching" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Client matching is no longer a main tab. Auto suggestions and manual selection share this one panel." Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,0,0,8">
+                        <DockPanel>
+                            <WrapPanel DockPanel.Dock="Right"><TextBlock Text="{Binding PartyDetectedMatchShape, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/><Button Content="Prepare Link Draft" Command="{Binding PreparePartyMatchCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="10,5"/></WrapPanel>
+                            <TextBlock Text="Passive relationship: AAH derives One-to-One / One-to-Many / Many-to-One / Many-to-Many from how many rows are selected on each side; there is no mode dropdown." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                        </DockPanel>
+                    </Border>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="1.05*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="0.95*"/></Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="7">
+                            <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <TextBlock Text="26AS CLIENT / DEDUCTOR SIDE" FontWeight="SemiBold" Margin="2,0,0,6"/>
+                                <DataGrid Grid.Row="1" x:Name="PartyStatementGrid" PreviewKeyDown="PartyStatementGrid_PreviewKeyDown" ItemsSource="{Binding PartyMappings}" SelectedItem="{Binding SelectedPartyMapping}" SelectionMode="Extended" SelectionUnit="FullRow" SelectionChanged="PartyStatementGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                    <DataGrid.Columns><DataGridTextColumn Header="26AS Client / Deductor" Binding="{Binding DeductorName, Mode=OneWay}" Width="220"/><DataGridTextColumn Header="TAN" Binding="{Binding Tan, Mode=OneWay}" Width="105"/><DataGridTextColumn Header="Rows" Binding="{Binding TransactionCount, Mode=OneWay}" Width="55"/><DataGridTextColumn Header="26AS Gross" Binding="{Binding Gross, StringFormat=N2, Mode=OneWay}" Width="105"/><DataGridTextColumn Header="26AS TDS/TCS" Binding="{Binding Tax, StringFormat=N2, Mode=OneWay}" Width="105"/><DataGridTextColumn Header="Match State" Binding="{Binding MatchState, Mode=OneWay}" Width="150"/></DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="7">
+                            <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <TextBlock Text="BOOKS LEDGER SIDE · ACTIVE DEBTORS + SEARCH ALL" FontWeight="SemiBold" Margin="2,0,0,6"/>
+                                <TextBox x:Name="BooksPartySearchBox" Grid.Row="1" Text="{Binding BooksPartySearchText, UpdateSourceTrigger=PropertyChanged}" Padding="7,5" Margin="0,0,0,6" ToolTip="Blank: only Sundry Debtors with entries in this Client/FY. Search: finds every Sundry Debtor, including zero-entry ledgers."/>
+                                <DataGrid Grid.Row="2" x:Name="PartyBooksGrid" PreviewKeyDown="PartyBooksGrid_PreviewKeyDown" ItemsSource="{Binding BooksPartySuggestions}" SelectedItem="{Binding SelectedBooksPartySuggestion}" SelectionMode="Extended" SelectionUnit="FullRow" SelectionChanged="PartyBooksGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                    <DataGrid.Columns><DataGridTextColumn Header="Books Ledger" Binding="{Binding Name, Mode=OneWay}" Width="220"/><DataGridTextColumn Header="MASTERID" Binding="{Binding MasterId, Mode=OneWay}" Width="90"/><DataGridTextColumn Header="Parent" Binding="{Binding Parent, Mode=OneWay}" Width="145"/><DataGridTextColumn Header="Entries" Binding="{Binding EntryCount, Mode=OneWay}" Width="65"/><DataGridTextColumn Header="Suggestion" Binding="{Binding SuggestionState, Mode=OneWay}" Width="100"/><DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat={}{0}%, Mode=OneWay}" Width="80"/></DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                    <Border Grid.Row="3" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,8,0,0">
+                        <DockPanel>
+                            <WrapPanel DockPanel.Dock="Right"><Button Content="Accept Suggested" Command="{Binding AcceptPartySuggestionCommand}" Padding="10,5" Margin="0,0,6,0"/><Button Content="Link Selected" Command="{Binding LinkSelectedPartyCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="10,5" Margin="0,0,6,0"/><Button Content="Hold / Review" Command="{Binding HoldPartyCommand}" Padding="10,5" Margin="0,0,6,0"/><Button Content="Clear Draft Link" Command="{Binding ClearPartyLinkCommand}" Padding="10,5"/></WrapPanel>
+                            <StackPanel><TextBlock Text="{Binding PartyMappingStatus, Mode=OneWay}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding PartySelectionStatus, Mode=OneWay}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/></StackPanel>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Border>
+
+        <!-- TDS RECEIVABLE PANEL -->
+        <Border Grid.Row="0" Grid.RowSpan="5" Panel.ZIndex="50" Background="#66000000" Visibility="{Binding IsTdsLedgerPanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Style="{StaticResource CardBorderStyle}" Margin="90,70" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10"><Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseWorkspacePanelCommand}" Padding="12,6"/><StackPanel><TextBlock Text="TDS Receivable Setup" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="TDS Receivable remains an FY-specific asset ledger under Loans &amp; Advances (Asset)." Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></DockPanel>
+                    <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><RadioButton Content="Link Existing TDS Receivable Ledger" IsChecked="{Binding UseExistingTdsLedger}" FontWeight="SemiBold"/><TextBlock Text="Only existing ledgers directly under Loans &amp; Advances (Asset) are offered." Foreground="{DynamicResource TextSecondaryBrush}" Margin="22,3,0,10"/><ComboBox ItemsSource="{Binding ExistingTdsLedgerOptions}" SelectedItem="{Binding SelectedExistingTdsLedger}" DisplayMemberPath="Display" MinHeight="32"/><Button Content="Link Existing" Command="{Binding LinkExistingTdsLedgerCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="11,6" HorizontalAlignment="Left" Margin="0,10,0,0"/></StackPanel></Border>
+                        <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="12"><StackPanel><RadioButton Content="Create New TDS Receivable Ledger" IsChecked="{Binding CreateNewTdsLedger}" FontWeight="SemiBold"/><TextBlock Text="Name" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,10,0,2"/><TextBox Text="{Binding NewTdsLedgerName}" Padding="7,5"/><TextBlock Text="Parent" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,2"/><TextBox Text="{Binding NewTdsLedgerParent, Mode=OneWay}" IsReadOnly="True" Padding="7,5"/><TextBlock Text="TDS Receivable is fixed under Loans &amp; Advances (Asset); final accounting behavior will be defined later." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,0,0"/><Button Content="Prepare Create Draft" Command="{Binding CreateTdsLedgerDraftCommand}" Padding="11,6" HorizontalAlignment="Left" Margin="0,10,0,0"/></StackPanel></Border>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Border>
+
+        <!-- ENTRY MATCHING PANEL: only selected Part + selected client/deductor rows are present. -->
+        <Border Grid.Row="0" Grid.RowSpan="5" Panel.ZIndex="50" Background="#66000000" Visibility="{Binding IsEntryMatchPanelOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border Style="{StaticResource CardBorderStyle}" Margin="36" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10"><Button DockPanel.Dock="Right" Content="Close" Command="{Binding CloseWorkspacePanelCommand}" Padding="12,6"/><StackPanel><TextBlock Text="Entry Matching" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="This panel uses only the active Part tab and its selected client/deductor. Suggestions and manual entry selection stay together." Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel></DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,0,0,8"><DockPanel><WrapPanel DockPanel.Dock="Right"><TextBlock Text="{Binding EntryDetectedMatchShape, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/><Button Content="Prepare Entry Link Draft" Command="{Binding PrepareEntryMatchCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="10,5" Margin="0,0,6,0"/><Button Content="Clear Draft" Command="{Binding ClearEntryMatchCommand}" Padding="10,5"/></WrapPanel><TextBlock Text="Passive relationship: the selected row counts automatically determine One-to-One, One-to-Many, Many-to-One or Many-to-Many." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/></DockPanel></Border>
+                    <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="1.08*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="0.92*"/></Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}" Padding="7"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="26AS ENTRY SIDE · SELECTED PART + CLIENT" FontWeight="SemiBold" Margin="2,0,0,6"/><DataGrid Grid.Row="1" x:Name="EntryStatementGrid" PreviewKeyDown="EntryStatementGrid_PreviewKeyDown" ItemsSource="{Binding Rows}" SelectionMode="Extended" SelectionUnit="FullRow" SelectionChanged="EntryStatementGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" ScrollViewer.HorizontalScrollBarVisibility="Auto"><DataGrid.Columns><DataGridTextColumn Header="Part" Binding="{Binding Part, Mode=OneWay}" Width="50"/><DataGridTextColumn Header="Section" Binding="{Binding Section, Mode=OneWay}" Width="70"/><DataGridTextColumn Header="Date" Binding="{Binding StatementDate, StringFormat=dd-MMM-yyyy, Mode=OneWay}" Width="100"/><DataGridTextColumn Header="Gross" Binding="{Binding StatementAmount, StringFormat=N2, Mode=OneWay}" Width="100"/><DataGridTextColumn Header="TDS/TCS" Binding="{Binding StatementTds, StringFormat=N2, Mode=OneWay}" Width="90"/><DataGridTextColumn Header="Booking" Binding="{Binding BookingStatus, Mode=OneWay}" Width="70"/><DataGridTextColumn Header="Suggestion State" Binding="{Binding Status, Mode=OneWay}" Width="115"/></DataGrid.Columns></DataGrid></Grid></Border>
+                        <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}" Padding="7"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="BOOKS ENTRY SUGGESTION / MANUAL SIDE" FontWeight="SemiBold" Margin="2,0,0,6"/><DataGrid Grid.Row="1" x:Name="EntryBooksGrid" PreviewKeyDown="EntryBooksGrid_PreviewKeyDown" ItemsSource="{Binding EntryBooksSuggestions}" SelectionMode="Extended" SelectionUnit="FullRow" SelectionChanged="EntryBooksGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" ScrollViewer.HorizontalScrollBarVisibility="Auto"><DataGrid.Columns><DataGridTextColumn Header="Source" Binding="{Binding BooksSourceType, Mode=OneWay}" Width="75"/><DataGridTextColumn Header="Date" Binding="{Binding BooksDate, StringFormat=dd-MMM-yyyy, Mode=OneWay}" Width="100"/><DataGridTextColumn Header="Reference" Binding="{Binding BooksReference, Mode=OneWay}" Width="115"/><DataGridTextColumn Header="Books Party" Binding="{Binding BooksParty, Mode=OneWay}" Width="190"/><DataGridTextColumn Header="Amount" Binding="{Binding BooksAmount, StringFormat=N2, Mode=OneWay}" Width="100"/><DataGridTextColumn Header="Tax" Binding="{Binding BooksTds, StringFormat=N2, Mode=OneWay}" Width="90"/><DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat={}{0}%, Mode=OneWay}" Width="80"/><DataGridTextColumn Header="Reason" Binding="{Binding Reason, Mode=OneWay}" Width="300"/></DataGrid.Columns></DataGrid></Grid></Border>
+                    </Grid>
+                    <Border Grid.Row="3" Style="{StaticResource CardBorderStyle}" Padding="9" Margin="0,8,0,0"><StackPanel><TextBlock Text="{Binding EntryMatchStatus, Mode=OneWay}" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding EntrySelectionStatus, Mode=OneWay}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/></StackPanel></Border>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>

@@ -1,0 +1,26 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.UniversalCalculatorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Universal Calculator" Height="470" Width="360"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanMinimize"
+        Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBox x:Name="ExpressionBox" Grid.Row="0" FontSize="20" Padding="10,8"
+                 TextChanged="ExpressionBox_TextChanged"
+                 KeyDown="ExpressionBox_KeyDown"
+                 PreviewTextInput="ExpressionBox_PreviewTextInput"
+                 ToolTip="Type an expression, for example (1250+450)*18%. Grid selections stay live while Calculator is open: selected numeric values are added automatically; press another allowed operator to replace the selection operator."/>
+        <Border Grid.Row="1" Margin="0,8,0,10" Padding="10" CornerRadius="8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+            <DockPanel><TextBlock DockPanel.Dock="Left" Text="=" FontSize="20" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0"/><TextBlock x:Name="ResultText" Text="0" FontSize="22" FontWeight="SemiBold" TextAlignment="Right"/></DockPanel>
+        </Border>
+        <UniformGrid Grid.Row="2" Columns="4" Rows="5">
+            <Button Content="(" Click="Input_Click" Margin="3"/><Button Content=")" Click="Input_Click" Margin="3"/><Button x:Name="PercentButton" Content="%" Click="Input_Click" Margin="3"/><Button x:Name="DivideButton" Content="÷" Click="Input_Click" Margin="3"/>
+            <Button Content="7" Click="Input_Click" Margin="3"/><Button Content="8" Click="Input_Click" Margin="3"/><Button Content="9" Click="Input_Click" Margin="3"/><Button x:Name="MultiplyButton" Content="×" Click="Input_Click" Margin="3"/>
+            <Button Content="4" Click="Input_Click" Margin="3"/><Button Content="5" Click="Input_Click" Margin="3"/><Button Content="6" Click="Input_Click" Margin="3"/><Button x:Name="SubtractButton" Content="-" Click="Input_Click" Margin="3"/>
+            <Button Content="1" Click="Input_Click" Margin="3"/><Button Content="2" Click="Input_Click" Margin="3"/><Button Content="3" Click="Input_Click" Margin="3"/><Button x:Name="AddButton" Content="+" Click="Input_Click" Margin="3"/>
+            <Button Content="0" Click="Input_Click" Margin="3"/><Button Content="." Click="Input_Click" Margin="3"/><Button Content="⌫" Click="Backspace_Click" Margin="3"/><Button Content="=" Click="Equals_Click" Margin="3" Style="{StaticResource PrimaryButtonStyle}"/>
+        </UniformGrid>
+        <DockPanel Grid.Row="3" Margin="0,10,0,0"><Button DockPanel.Dock="Left" Content="Clear" Click="Clear_Click" Padding="12,7" Margin="0,0,8,0"/><Button DockPanel.Dock="Left" Content="Copy Result" Click="Copy_Click" Padding="12,7"/><TextBlock DockPanel.Dock="Right" Text="Ctrl+Alt+C" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/></DockPanel>
+    </Grid>
+</Window>

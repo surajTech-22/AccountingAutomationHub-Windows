@@ -1,0 +1,77 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.NotificationCenterView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="16">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="0,0,0,8">
+            <StackPanel DockPanel.Dock="Left"><TextBlock Text="Notifications" FontSize="26" FontWeight="SemiBold"/><TextBlock Text="Security · Messages · Tasks · Approvals · Imports · Tally · Updates · Backup · System" Foreground="{DynamicResource TextSecondaryBrush}"/></StackPanel>
+            <WrapPanel DockPanel.Dock="Right"><Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/><Button Content="Clear Local History" Command="{Binding ClearCommand}" Style="{StaticResource SecondaryButtonStyle}"/></WrapPanel>
+        </DockPanel>
+        <Grid Grid.Row="1" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" ToolTip="Search notification text"/><TextBlock Grid.Column="1" Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/></Grid>
+
+        <Border Grid.Row="2" Margin="0,0,0,10" Padding="12" Background="{DynamicResource AccentSoftBrush}" CornerRadius="8"
+                Visibility="{Binding HasPendingEnrollmentApprovals, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel>
+                <TextBlock Text="Phone Enrollment Approval" FontWeight="SemiBold" FontSize="15"/>
+                <TextBlock Text="These are notification-driven requests. Approve or deny here; AAH never interrupts the current screen with an enrollment popup." Margin="0,4,0,8" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <ItemsControl ItemsSource="{Binding PendingEnrollmentApprovals}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,6" Padding="10" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold"><Run Text="{Binding DeviceName, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding DisplayName, Mode=OneWay}"/><Run Text=" ("/><Run Text="{Binding UserName, Mode=OneWay}"/><Run Text=")"/></TextBlock>
+                                        <TextBlock Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}"><Run Text="Source "/><Run Text="{Binding RemoteAddress, Mode=OneWay}"/><Run Text=" · expires "/><Run Text="{Binding ExpiresUtc, Mode=OneWay, StringFormat={}{0:T}}"/></TextBlock>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                        <Button Content="Deny" Padding="12,7" Margin="0,0,8,0"
+                                                Command="{Binding DataContext.DenyEnrollmentCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding RequestId}"/>
+                                        <Button Content="Approve" Padding="12,7" Style="{StaticResource PrimaryButtonStyle}"
+                                                Command="{Binding DataContext.ApproveEnrollmentCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding RequestId}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" Margin="0,0,0,10" Padding="12" Background="{DynamicResource AccentSoftBrush}" CornerRadius="8"
+                Visibility="{Binding HasPendingRegistryConflicts, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel>
+                <TextBlock Text="Import Registry Conflict · Administrator Review" FontWeight="SemiBold" FontSize="15"/>
+                <TextBlock Text="AAH did not overwrite the authoritative registry. Accept the Windows-node change or keep the current Main Server entry. Normal registry synchronization remains silent." Margin="0,4,0,8" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <ItemsControl ItemsSource="{Binding PendingRegistryConflicts}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,6" Padding="10" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold"><Run Text="{Binding Incoming.RegistryName, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding Incoming.EntryKey, Mode=OneWay}"/></TextBlock>
+                                        <TextBlock Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"><Run Text="Source device "/><Run Text="{Binding Incoming.SourceDeviceId, Mode=OneWay}"/><Run Text=" · detected "/><Run Text="{Binding DetectedUtc, Mode=OneWay, StringFormat={}{0:g}}"/></TextBlock>
+                                        <TextBlock Margin="0,2,0,0" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"><Run Text="Main hash "/><Run Text="{Binding Current.Hash, Mode=OneWay}"/><Run Text=" · incoming hash "/><Run Text="{Binding Incoming.NewHash, Mode=OneWay}"/></TextBlock>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                        <Button Content="Keep Main" Padding="12,7" Margin="0,0,8,0"
+                                                Command="{Binding DataContext.KeepRegistryConflictCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding ConflictId}"/>
+                                        <Button Content="Accept Windows Change" Padding="12,7" Style="{StaticResource PrimaryButtonStyle}"
+                                                Command="{Binding DataContext.AcceptRegistryConflictCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding ConflictId}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <DataGrid Grid.Row="4" ItemsSource="{Binding Items}" AutoGenerateColumns="False" IsReadOnly="True"><DataGrid.Columns><DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat={}{0:G}}" Width="155"/><DataGridTextColumn Header="Client" Binding="{Binding Client}" Width="120"/><DataGridTextColumn Header="Module" Binding="{Binding Module}" Width="130"/><DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="130"/><DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/><DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="2*"/></DataGrid.Columns></DataGrid>
+    </Grid>
+</UserControl>

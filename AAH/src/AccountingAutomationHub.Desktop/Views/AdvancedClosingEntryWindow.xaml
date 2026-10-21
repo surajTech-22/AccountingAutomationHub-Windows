@@ -1,0 +1,126 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AdvancedClosingEntryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Advanced Closure Entry" Width="1420" Height="840" MinWidth="1180" MinHeight="680"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Advanced Closure Entry" FontSize="24" FontWeight="SemiBold"/>
+                <TextBlock x:Name="ClientCaption" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </StackPanel>
+            <TextBlock Grid.Column="1" Text="Select ledgers after filtering. Nothing is created until Create Selected Entries is pressed." VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" MaxWidth="440"/>
+        </Grid>
+
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,14,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="215"/><ColumnDefinition Width="175"/><ColumnDefinition Width="200"/><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                    <TextBlock Text="Closure Method" FontWeight="SemiBold"/>
+                    <ComboBox x:Name="MethodBox" Margin="0,5,0,0" MinHeight="34" SelectionChanged="PlanSetting_Changed">
+                        <ComboBoxItem Content="Year End"/>
+                        <ComboBoxItem Content="Manual Date"/>
+                        <ComboBoxItem Content="As Per Transaction Dates"/>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                    <TextBlock Text="Manual Date" FontWeight="SemiBold"/>
+                    <DatePicker x:Name="ManualDatePicker" Margin="0,5,0,0" MinHeight="34" SelectedDateChanged="PlanSetting_Changed"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Margin="0,0,12,0">
+                    <TextBlock Text="Maximum Amount / Day" FontWeight="SemiBold"/>
+                    <TextBox x:Name="MaximumAmountBox" Margin="0,5,0,0" MinHeight="34" VerticalContentAlignment="Center" LostFocus="MaximumAmountBox_LostFocus" ToolTip="Leave blank for no daily amount limit."/>
+                    <TextBlock Text="Blank = no limit" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="3" Margin="0,0,12,0">
+                    <TextBlock Text="Entry Type" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <RadioButton x:Name="CashMode" Content="Cash" GroupName="EntryMode" IsChecked="True" Checked="EntryMode_Changed" Margin="0,0,18,0"/>
+                        <RadioButton x:Name="JournalMode" Content="Journal" GroupName="EntryMode" Checked="EntryMode_Changed"/>
+                    </StackPanel>
+                    <TextBlock x:Name="CashModeHint" Text="Cash safety: Debtor Dr → Sales Receipt; Creditor Cr → Purchase Payment; abnormal balances are skipped." FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,5,0,0"/>
+                </StackPanel>
+                <StackPanel x:Name="JournalDefaultPanel" Grid.Column="4" Visibility="Collapsed">
+                    <TextBlock Text="Default Journal Opposite Ledger" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                        <ComboBox x:Name="DefaultOppositeLedgerBox" IsEditable="True" IsTextSearchEnabled="True" MinHeight="34" MinWidth="260" SelectionChanged="DefaultOppositeLedgerBox_SelectionChanged" LostFocus="DefaultOppositeLedgerBox_LostFocus"/>
+                        <Button Content="Apply to Selected" Margin="8,0,0,0" Padding="10,5" Click="ApplyOppositeToSelected_Click"/>
+                    </StackPanel>
+                    <TextBlock Text="Each ledger can override this in its Details popup." FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <controls:MultiSearchFilterBar x:Name="SearchFilterBar" Grid.Column="0" MinWidth="360"/>
+            <ComboBox x:Name="GroupFilterBox" Grid.Column="1" Margin="8,0,0,0" MinHeight="38" SelectionChanged="GroupFilter_Changed" ToolTip="Filter Closure Entry ledgers by Master Group."/>
+            <Button Grid.Column="2" Content="Select Filtered" Margin="8,0,0,0" Padding="10,5" Click="SelectFiltered_Click"/>
+            <Button Grid.Column="3" Content="Clear Selection" Margin="8,0,0,0" Padding="10,5" Click="ClearSelection_Click"/>
+            <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="12,0,0,0">
+                <Button Content="Preview Selected" Padding="12,6" Margin="0,0,8,0" Click="PreviewSelected_Click"/>
+                <TextBlock x:Name="SelectionCaption" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </StackPanel>
+        </Grid>
+
+        <DataGrid x:Name="LedgerGrid" Grid.Row="3" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                  IsReadOnly="True" RowHeaderWidth="0" SelectionMode="Extended" SelectionUnit="FullRow" GridLinesVisibility="Horizontal"
+                  PreviewKeyDown="LedgerGrid_PreviewKeyDown" ToolTip="Ctrl/Shift selects rows; Space toggles the Closure checkbox for all highlighted rows.">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="Select" SortMemberPath="IsSelected" Width="65">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Ledger" Binding="{Binding LedgerName}" Width="2*" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Group" Binding="{Binding GroupName}" Width="1.4*" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Opening" Binding="{Binding OpeningBalance, StringFormat=N2}" Width="105" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Debit" Binding="{Binding TotalDebit, StringFormat=N2}" Width="105" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Credit" Binding="{Binding TotalCredit, StringFormat=N2}" Width="105" IsReadOnly="True"/>
+                <DataGridTemplateColumn Header="Closing" SortMemberPath="ClosingBalance" Width="125">
+                    <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding ClosingText}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Source Entries" Binding="{Binding MovementCount}" Width="95" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Reverse Entries" Binding="{Binding PlannedEntryCount}" Width="100" IsReadOnly="True"/>
+                <DataGridTemplateColumn Header="Planned Amount" SortMemberPath="PlannedAmount" Width="125">
+                    <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding PlannedAmountText}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="150" IsReadOnly="True"/>
+                <DataGridTemplateColumn Header="" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate><Button Content="Details" Padding="7,3" Click="Details_Click"/></DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="Cancel" IsCancel="True" Padding="12,7" Margin="0,0,8,0"/>
+                <Button Content="Create Selected Entries" Style="{StaticResource PrimaryButtonStyle}" Padding="14,7" Click="CreateSelected_Click"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

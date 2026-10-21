@@ -1,0 +1,240 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.MobileLinkView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:behaviors="clr-namespace:AccountingAutomationHub.Desktop.Behaviors"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- R94 one-line mobile controls; historical authenticated Client/FY authority unchanged. -->
+        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,7" Padding="8,5">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Mobile Link" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <Button Content="ⓘ" Width="24" Height="22" Padding="0" VerticalAlignment="Center"
+                            Tag="Client/FY-specific phone link and FIFO invoice verification. Mobile presence uses the existing authenticated heartbeat; this page does not start another refresh loop."
+                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                </StackPanel>
+                <CheckBox Grid.Column="1" Content="Show Mapping Here" IsChecked="{Binding ShowMappingHere}"
+                          FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0,8,0"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="9" Height="9" Fill="{Binding PresenceBrush}" Margin="0,0,6,0"/>
+                    <TextBlock Text="{Binding PresenceDotText}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding AutomaticMobileIdentityText}" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
+                    <Button Content="ⓘ" Width="22" Height="22" Padding="0" Margin="7,0,0,0" VerticalAlignment="Center"
+                            Tag="Authenticated mobile session: AAH automatically matches the signed-in Android heartbeat to this authorised Client/FY. No manual User ID link is required. When Show Mapping Here is enabled, scans go to the authenticated FIFO queue."
+                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                </StackPanel>
+                <Button Grid.Column="3" Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,5" Margin="10,0,6,0"/>
+                <Button Grid.Column="4" Content="Retry OCR" Command="{Binding RetryOcrCommand}" Padding="10,5"
+                        ToolTip="Retry the selected queued scan using the existing independent ONNX invoice OCR runtime; no duplicate import."/>
+                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="7,0,0,0">
+                    <Button Content="Run Child Stage 1" Command="{Binding RetryChildStage1Command}" Padding="9,5" Margin="0,0,6,0"
+                            ToolTip="Backfill Stage 1 on an existing Phone Link scan without reuploading or rerunning AAH accounting OCR."/>
+                    <Button Content="View in Invoice OCR Child" Command="{Binding OpenInInvoiceOcrCommand}" Padding="9,5"
+                            ToolTip="Open the original AAH Phone Link photo in the existing Invoice OCR Child for Stage 1 review."/>
+                    <Button Content="ⓘ" Width="22" Height="22" Padding="0" Margin="6,0,0,0"
+                            Tag="AAH sends the authenticated original image to Invoice OCR Child first. Child Stage 1 is provisional; existing ONNX OCR remains the verified accounting review fallback until Stages 2–4 pass."
+                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="235"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,8">
+                        <TextBlock Text="Invoice Queue" FontSize="16" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding QueueSummary}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                    </StackPanel>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Queue}" SelectedItem="{Binding SelectedScan}" BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="2,5">
+                                    <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding RecognitionMode}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    <TextBlock Text="{Binding ReceivedUtc, StringFormat={}{0:dd.MM.yyyy HH:mm:ss}}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Top" Background="#EDF4FF" CornerRadius="5" Padding="8,5" Margin="0,0,0,7">
+                        <TextBlock Text="{Binding ChildStage1StatusText}" FontWeight="SemiBold" Foreground="#194A76"
+                                   FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChildStage1StatusText}"/>
+                    </Border>
+                <TabControl>
+                    <TabItem Header="Mapping">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="3">
+                                <!-- R94 compact mapping: actual editable fields first, guides behind info. -->
+                                <Grid Margin="0,0,0,5">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Direction:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="SemiBold"/>
+                                    <ComboBox Grid.Column="1" Width="132" ItemsSource="{Binding InvoiceDirectionOptions}"
+                                              SelectedItem="{Binding VerifiedDirection, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,12,0"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding InvoiceSourceParties}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    <Button Grid.Column="3" Content="ⓘ" Width="25" Height="23" Padding="0" Margin="6,0,0,0"
+                                            Tag="Android camera → authorised Client/FY queue → Windows invoice OCR → manual verification → existing Purchase/Sales import. No Excel staging or alternate accounting exit."
+                                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                    <TextBlock Text="OCR status" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <Button Content="ⓘ" Width="24" Height="22" Padding="0" Tag="{Binding DocumentOcrStatusText}"
+                                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                    <TextBlock Text="Source review required" Foreground="DarkRed" VerticalAlignment="Center"
+                                               Margin="12,0,5,0" Visibility="{Binding OcrDiscrepancyVisibility}"/>
+                                    <Button Content="ⓘ" Width="24" Height="22" Padding="0" Tag="{Binding OcrDiscrepancyText}"
+                                            Visibility="{Binding OcrDiscrepancyVisibility}"
+                                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                    <Button Content="ⓘ" Width="24" Height="22" Padding="0" Margin="8,0,0,0"
+                                            Tag="Each field is populated from OCR candidates. Windows document OCR authority is the independent RapidOCR/ONNX pipeline, not Banking OCR. The phone text is secondary preview evidence only. Select original-image evidence and review unverified values. Item and Ledger allocation remains deferred to Sales/Purchase."
+                                            Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                    <!-- R46 historical proof: PP-StructureV3/PP-DocLayout preserve 2D words; real wired/wireless table cells; Banking OCR is not used; Phone ML Kit remains secondary preview/text-repair evidence only. -->
+                                </StackPanel>
+                                <ItemsControl ItemsSource="{Binding HeaderFields}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                                <ComboBox Grid.Column="1" IsEditable="True" ItemsSource="{Binding Candidates}" Text="{Binding SelectedValue, UpdateSourceTrigger=PropertyChanged}" Padding="6"/>
+                                                <Button Grid.Column="2" Content="ⓘ" Width="28" Height="24" Padding="0" Margin="6,0,0,0" VerticalAlignment="Center" Tag="{Binding RelationshipText}" Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10" Visibility="{Binding AccountingRowsVisibility}">
+                                    <StackPanel>
+                                        <TextBlock Text="GST slab verification - compulsory" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <Button Content="ⓘ" Width="28" Height="24" Padding="0" HorizontalAlignment="Left" Margin="0,0,0,6"
+                                                Tag="Recognized GST slabs remain separately verified. Taxable × GST % must reconcile with CGST/SGST/IGST; item and Ledger allocation remains deferred to Sales/Purchase." Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                        <DataGrid ItemsSource="{Binding TaxSlabs}" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" MinHeight="66" MaxHeight="115">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="GST %" Binding="{Binding GstRateDisplay}" Width="80"/>
+                                                <DataGridTextColumn Header="Taxable" Binding="{Binding Taxable, StringFormat=N2}" Width="105"/>
+                                                <DataGridTextColumn Header="CGST" Binding="{Binding Cgst, StringFormat=N2}" Width="90"/>
+                                                <DataGridTextColumn Header="SGST / UTGST" Binding="{Binding Sgst, StringFormat=N2}" Width="110"/>
+                                                <DataGridTextColumn Header="IGST" Binding="{Binding Igst, StringFormat=N2}" Width="90"/>
+                                                <DataGridTextColumn Header="Validation" Binding="{Binding Status}" Width="*"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </Border>
+                                <DataGrid ItemsSource="{Binding Lines}" AutoGenerateColumns="False" CanUserAddRows="False" Visibility="{Binding AccountingRowsVisibility}" MinHeight="150" MaxHeight="260">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Item / Description" Binding="{Binding Description, UpdateSourceTrigger=PropertyChanged}" Width="2*"/>
+                                        <DataGridTextColumn Header="HSN/SAC" Binding="{Binding HsnSac, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                                        <DataGridTextColumn Header="Taxable" Binding="{Binding Taxable, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                                        <DataGridTextColumn Header="GST % *" Binding="{Binding GstRate, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="CGST" Binding="{Binding Cgst, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                                        <DataGridTextColumn Header="SGST / UTGST" Binding="{Binding Sgst, UpdateSourceTrigger=PropertyChanged}" Width="110"/>
+                                        <DataGridTextColumn Header="IGST" Binding="{Binding Igst, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                                        <DataGridTextColumn Header="Cess" Binding="{Binding Cess, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="Total" Binding="{Binding LineTotal, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+
+                                <TextBlock Text="Inventory invoice lines" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,6" Visibility="{Binding InventoryRowsVisibility}"/>
+                                <DataGrid ItemsSource="{Binding Lines}" AutoGenerateColumns="False" CanUserAddRows="False" Visibility="{Binding InventoryRowsVisibility}" MinHeight="180">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Item / Description" Binding="{Binding Description, UpdateSourceTrigger=PropertyChanged}" Width="2*"/>
+                                        <DataGridTextColumn Header="HSN/SAC" Binding="{Binding HsnSac, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="Qty" Binding="{Binding Quantity, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                                        <DataGridTemplateColumn Header="Unit" Width="90"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" Text="{Binding Unit, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{Binding DataContext.UnitOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="Rate" Binding="{Binding Rate, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                                        <DataGridTextColumn Header="Discount" Binding="{Binding Discount, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="Taxable" Binding="{Binding Taxable, UpdateSourceTrigger=PropertyChanged}" Width="95"/>
+                                        <DataGridTextColumn Header="GST % *" Binding="{Binding GstRate, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="CGST" Binding="{Binding Cgst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="SGST" Binding="{Binding Sgst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="IGST" Binding="{Binding Igst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                                        <DataGridTextColumn Header="Total" Binding="{Binding LineTotal, UpdateSourceTrigger=PropertyChanged}" Width="95"/>
+                                        <DataGridTemplateColumn Header="Stock Item" Width="170"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" Text="{Binding StockItem, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{Binding DataContext.StockItemOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="Scan Image">
+                        <!-- R93: preserve/source-display original pixels. Fit does not downsample
+                             the stored file; Actual pixels permits checking small characters. -->
+                        <TabControl Background="#111827">
+                            <TabItem Header="Fit page">
+                                <Grid Background="#111827">
+                                    <TextBlock Text="No image evidence is available for this queued scan." Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Image Source="{Binding ScanImagePath}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
+                                </Grid>
+                            </TabItem>
+                            <TabItem Header="Actual pixels (100%)">
+                                <ScrollViewer Background="#111827" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                    <Image Source="{Binding ScanImagePath}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                           RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
+                                </ScrollViewer>
+                            </TabItem>
+                        </TabControl>
+                    </TabItem>
+                    <TabItem Header="Raw OCR">
+                        <TextBox Text="{Binding RawOcr, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" ContextMenu="{x:Null}" ToolTipService.IsEnabled="False" behaviors:OverflowToolTipManager.SuppressAutoToolTip="True"/>
+                    </TabItem>
+                    <TabItem Header="Structured Payload">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <Button Grid.Row="0" Content="Copy JSON" Click="CopyPayload_Click" HorizontalAlignment="Right" Padding="12,5" Margin="0,0,0,6"/>
+                            <TextBox Grid.Row="1" x:Name="StructuredPayloadTextBox" Text="{Binding PayloadPreview, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas"
+                                     ContextMenu="{x:Null}" ToolTipService.IsEnabled="False" behaviors:OverflowToolTipManager.SuppressAutoToolTip="True"/>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="0,5,0,0">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <!-- R93: review authority is always visible immediately above Confirm. The
+                 checkbox still triggers the original validation and server-side gates. -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,7"
+                        Visibility="{Binding OcrDiscrepancyVisibility}">
+                <CheckBox Content="I checked the original invoice photograph and manually resolved the R89 discrepancies"
+                          IsChecked="{Binding ReviewedOcrDiscrepancies, UpdateSourceTrigger=PropertyChanged}" FontWeight="SemiBold"
+                          VerticalAlignment="Center"/>
+                <Button Content="ⓘ" Width="26" Height="24" Padding="0" Margin="8,0,0,0"
+                        Tag="Acknowledgement applies only to the exact selected source scan. It cannot override missing fields, invalid identity, unreconciled GST/totals or server validation." Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+            </StackPanel>
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding MappingValidationText}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" Margin="0,0,0,3"/>
+                    <TextBlock Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Reject &amp; Next" Command="{Binding RejectAndNextCommand}" Padding="13,7" Margin="0,0,8,0"/>
+                    <Button Content="Confirm Mapping &amp; Next" Command="{Binding ConfirmAndNextCommand}" Padding="13,7"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

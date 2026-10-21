@@ -1,0 +1,121 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.TallyClientView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Tally · Client Connection" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="Client/FY-specific Tally authority and explicit recovery. The 5-second heartbeat updates in the background without repainting this page."
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding CurrentClientScopeText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,4,0,0"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="Refresh Tally" Command="{Binding RefreshCommand}" Padding="14,7"
+                    ToolTip="Foreground refresh: update the visible module/transaction view now."/>
+        </Grid>
+
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="2*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="3*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Connection" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding ConnectionStatus}" FontSize="15" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding LastTallyOperation}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Linked company" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding LinkedCompanyText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding AuthorityText}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="4">
+                    <TextBlock Text="Link / Change company" FontWeight="SemiBold"/>
+                    <ComboBox ItemsSource="{Binding OpenCompanies}" SelectedItem="{Binding SelectedCompany}" DisplayMemberPath="DisplayText" Padding="6" Margin="0,5,0,6"/>
+                    <WrapPanel>
+                        <Button Content="{Binding LinkActionText}" Command="{Binding LinkSelectedCompanyCommand}" Padding="11,6" Margin="0,0,8,0"
+                                Visibility="{Binding ShowLinkAction, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        <Button Content="Unlink" Command="{Binding UnlinkCommand}" Padding="11,6"
+                                Visibility="{Binding HasLinkedCompany, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Deleted / Missing in Tally · Module View" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding RecoverySummary}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="Select a module to open its transactions. Identity-rebuild rows are available only after explicit approval and a fresh full-FY duplicate/rebind check; conflict or pending-change rows stay blocked."
+                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" Content="Re-import All Eligible" Command="{Binding ReimportAllDeletedCommand}" Padding="12,7" Margin="12,0,0,0"
+                        ToolTip="Explicitly restore eligible missing/deleted sources across all affected modules after one fresh Tally authority check."/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DataGrid Grid.Row="0" ItemsSource="{Binding RecoveryModules}" SelectedItem="{Binding SelectedRecoveryModule}"
+                      AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single" SelectionUnit="FullRow"
+                      CanUserAddRows="False" MaxHeight="220" MinHeight="110">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Module" Binding="{Binding Module}" Width="180"/>
+                    <DataGridTextColumn Header="Missing / Deleted" Binding="{Binding MissingCount, StringFormat=N0}" Width="140"/>
+                    <DataGridTextColumn Header="Re-import Available" Binding="{Binding ReimportableCount, StringFormat=N0}" Width="150"/>
+                    <DataGridTextColumn Header="Blocked / Conflict" Binding="{Binding ReviewBlockedCount, StringFormat=N0}" Width="140"/>
+                    <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat=N2}" Width="140"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <Grid Grid.Row="2" Margin="0,0,0,7">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="{Binding SelectedModuleTitle}" FontSize="15" FontWeight="SemiBold"/>
+                    <TextBlock Text="Selecting a module opens only that module's recovery transactions." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10"/>
+                </StackPanel>
+                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                    <Button Content="Re-import Selected Transaction" Command="{Binding ReimportSelectedCommand}" Padding="11,6" Margin="0,0,8,0"/>
+                    <Button Content="Re-import Entire Module" Command="{Binding ReimportSelectedModuleCommand}" Padding="11,6"/>
+                </WrapPanel>
+            </Grid>
+
+            <DataGrid Grid.Row="3" ItemsSource="{Binding SelectedModuleTransactions}" SelectedItem="{Binding SelectedRecoveryItem}"
+                      AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single" SelectionUnit="FullRow" CanUserAddRows="False">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="185"/>
+                    <DataGridTextColumn Header="Date" Binding="{Binding VoucherDate, StringFormat={}{0:dd.MM.yyyy}}" Width="100"/>
+                    <DataGridTextColumn Header="Voucher Type" Binding="{Binding VoucherType}" Width="115"/>
+                    <DataGridTextColumn Header="Reference" Binding="{Binding Reference}" Width="160"/>
+                    <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat=N2}" Width="115"/>
+                    <DataGridTextColumn Header="Previous MASTERID" Binding="{Binding PreviousMasterId}" Width="145"/>
+                    <DataGridTextColumn Header="Detected" Binding="{Binding UpdatedUtc, StringFormat={}{0:dd.MM.yyyy HH:mm}}" Width="130"/>
+                    <DataGridTextColumn Header="Details" Binding="{Binding LastResponse}" Width="*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
+
+        <StackPanel Grid.Row="4" Margin="0,10,0,0">
+            <TextBlock Text="{Binding SelectedRecoveryDetail}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding StatusText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

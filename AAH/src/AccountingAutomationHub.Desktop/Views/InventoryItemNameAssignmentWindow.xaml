@@ -1,0 +1,71 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.InventoryItemNameAssignmentWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AccountingAutomationHub.Desktop.Controls"
+        Title="Item Name Assignment" Width="1080" Height="690"
+        MinWidth="820" MinHeight="520" WindowStartupLocation="CenterOwner"
+        Background="#F8FAFC" PreviewKeyDown="Window_PreviewKeyDown">
+    <Border Margin="14" Padding="14" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                <TextBlock Text="{Binding Heading}" FontSize="19" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding Explanation}" Margin="0,4,0,0" Foreground="#64748B" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding SummaryText}" Margin="0,6,0,0" FontWeight="SemiBold"/>
+            </StackPanel>
+
+            <Grid Grid.Row="1" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="125"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Item Name" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <controls:SearchableComboBox Grid.Column="1" OpenOnFocus="True"
+                                             SourceItems="{Binding StockItems}"
+                                             Text="{Binding ItemName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                             AllowCustomText="True"
+                                             EnableMouseWheelSelection="False"
+                                             MinHeight="32"/>
+            </Grid>
+
+            <TextBlock Grid.Row="2"
+                       Text="Select rows with Ctrl/Shift. Apply Selected changes only those entries. Apply All changes every inventory-eligible entry shown below. A typed new Item Name is created as a Client + FY Stock Item when applied."
+                       Foreground="#64748B" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+            <DataGrid x:Name="EntriesGrid" Grid.Row="3" ItemsSource="{Binding Entries}" AutoGenerateColumns="False"
+                      CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeaderWidth="0"
+                      AlternatingRowBackground="#F8FAFC" SelectionMode="Extended" SelectionUnit="FullRow"
+                      EnableRowVirtualization="True" EnableColumnVirtualization="True">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Date" Binding="{Binding DateText}" Width="95"/>
+                    <DataGridTextColumn Header="Document No." Binding="{Binding DocumentNumber}" Width="125"/>
+                    <DataGridTextColumn Header="Party" Binding="{Binding PartyName}" Width="2*"/>
+                    <DataGridTextColumn Header="Current Item" Binding="{Binding CurrentItemName}" Width="1.6*"/>
+                    <DataGridTextColumn Header="Qty" Binding="{Binding Quantity, StringFormat=N3}" Width="90"/>
+                    <DataGridTextColumn Header="Unit" Binding="{Binding Unit}" Width="80"/>
+                    <DataGridTextColumn Header="Item Rate" Binding="{Binding ItemRate, StringFormat=N2}" Width="100"/>
+                    <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat=N2}" Width="110"/>
+                    <DataGridTextColumn Header="Destination" Binding="{Binding Destination}" Width="125"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <Grid Grid.Row="4" Margin="0,12,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding ValidationText}" Foreground="#B91C1C" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Cancel" Width="90" Height="32" Margin="0,0,8,0" Click="Cancel_Click"/>
+                    <Button Content="Apply Selected" Width="125" Height="32" Margin="0,0,8,0" Click="ApplySelected_Click"/>
+                    <Button Content="Apply All" Width="105" Height="32" IsDefault="True" Click="ApplyAll_Click"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

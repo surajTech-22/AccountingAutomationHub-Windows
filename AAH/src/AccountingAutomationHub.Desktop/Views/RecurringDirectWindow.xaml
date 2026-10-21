@@ -1,0 +1,207 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.RecurringDirectWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Recurring Entry" Width="1180" Height="860" MinWidth="820" MinHeight="620"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0">
+            <TextBlock x:Name="Heading" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock Text="Independent generation — select ledgers, real calendar periods, dates and amounts. Existing entries are not required." TextWrapping="Wrap" Margin="0,4,0,10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+        </StackPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="Amount and date selection" FontWeight="SemiBold"/>
+                        <WrapPanel Margin="0,8,0,0">
+                            <StackPanel Width="185" Margin="0,0,12,8">
+                                <TextBlock Text="Amount type"/>
+                                <ComboBox x:Name="AmountModeBox" SelectedIndex="0" SelectionChanged="AmountMode_Changed">
+                                    <ComboBoxItem Content="Fixed Amount"/><ComboBoxItem Content="Lump Sum"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Width="145" Margin="0,0,12,8">
+                                <TextBlock Text="Start"/><DatePicker x:Name="StartPicker" SelectedDateChanged="DateRule_Changed"/>
+                            </StackPanel>
+                            <StackPanel Width="145" Margin="0,0,12,8">
+                                <TextBlock Text="End"/><DatePicker x:Name="EndPicker" SelectedDateChanged="DateRule_Changed"/>
+                            </StackPanel>
+                            <StackPanel Width="155" Margin="0,0,12,8">
+                                <TextBlock Text="Frequency"/>
+                                <ComboBox x:Name="FrequencyBox" ItemsSource="{Binding FrequencyChoices}" SelectionChanged="Frequency_Changed"/>
+                            </StackPanel>
+                            <StackPanel x:Name="TimesPanel" Width="125" Margin="0,0,12,8" Visibility="Collapsed">
+                                <TextBlock Text="Times / period"/>
+                                <ComboBox x:Name="TimesBox" ItemsSource="{Binding TimesChoices}" SelectionChanged="Times_Changed"/>
+                            </StackPanel>
+                            <StackPanel x:Name="DateModePanel" Width="135" Margin="0,0,12,8" Visibility="Collapsed">
+                                <TextBlock Text="Date selection"/>
+                                <ComboBox x:Name="DateModeBox" SelectedIndex="0" SelectionChanged="DateMode_Changed">
+                                    <ComboBoxItem Content="Fixed"/><ComboBoxItem Content="Random"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </WrapPanel>
+
+                        <StackPanel x:Name="PatternDatesPanel" Visibility="Collapsed" Margin="0,2,0,6">
+                            <TextBlock Text="Fixed date pattern" FontWeight="SemiBold"/>
+                            <ItemsControl ItemsSource="{Binding PatternDates}" Margin="0,5,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Width="175" Margin="0,0,10,6">
+                                            <TextBlock Text="{Binding Label}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                            <DatePicker SelectedDate="{Binding Date, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" DisplayDateStart="{Binding Minimum}" DisplayDateEnd="{Binding Maximum}" SelectedDateChanged="PatternDate_Changed"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="PatternHelp" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+
+                        <Border x:Name="MaximumPanel" Visibility="Collapsed" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="10" Margin="0,3,0,8">
+                            <StackPanel>
+                                <TextBlock Text="Lump Sum maximum allocation" FontWeight="SemiBold"/>
+                                <WrapPanel Margin="0,6,0,0">
+                                    <StackPanel Width="180" Margin="0,0,12,4">
+                                        <TextBlock Text="Maximum Amount"/>
+                                        <TextBox x:Name="MaximumAmountBox" TextChanged="Maximum_Changed" ToolTip="Leave blank for no maximum."/>
+                                    </StackPanel>
+                                    <StackPanel Width="180" Margin="0,0,12,4">
+                                        <TextBlock Text="Maximum applies"/>
+                                        <ComboBox x:Name="MaximumModeBox" SelectedIndex="0" SelectionChanged="MaximumMode_Changed">
+                                            <ComboBoxItem Content="Per Voucher"/><ComboBoxItem Content="Per Day"/><ComboBoxItem Content="Per Month"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                </WrapPanel>
+                                <TextBlock Text="Per Voucher may create several equally-split vouchers on the same date and spreads them across generated dates. Per Day and Per Month stop automatic allocation at the selected capacity; any balance remains visible in Preview for manual allocation." TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <WrapPanel Margin="0,2,0,0">
+                            <Button Content="Generate Dates" Click="GenerateDates_Click" Padding="12,6" Margin="0,0,8,6"/>
+                            <Button Content="Show Dates" Click="ShowDates_Click" Padding="12,6" Margin="0,0,8,6"/>
+                            <TextBlock x:Name="DateSummary" VerticalAlignment="Center" Text="No dates selected" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="ScheduleHelp" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock x:Name="AmountHelp" Margin="0,5,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="Accounting lines" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                        <DataGrid x:Name="LinesGrid" ItemsSource="{Binding Lines}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" RowHeaderWidth="0" Height="210" SelectionMode="Single" SelectionUnit="FullRow" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Ledger" Width="260" MinWidth="190">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox ItemsSource="{Binding DataContext.LedgerChoices, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Display" SelectedValuePath="Id" SelectedValue="{Binding MasterId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SelectionChanged="Ledger_Changed" IsTextSearchEnabled="True"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="170" IsReadOnly="True"/>
+                                <DataGridTemplateColumn Header="Dr / Cr" Width="85">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedValuePath="Content" SelectedValue="{Binding DrCr, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                                <ComboBox.Style>
+                                                    <Style TargetType="ComboBox"><Style.Triggers><DataTrigger Binding="{Binding IsBalanceLine}" Value="True"><Setter Property="IsEnabled" Value="False"/></DataTrigger></Style.Triggers></Style>
+                                                </ComboBox.Style>
+                                                <ComboBoxItem Content="Dr"/><ComboBoxItem Content="Cr"/>
+                                            </ComboBox>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn x:Name="LineAmountColumn" Header="Amount per date" Width="150">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding AmountText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" HorizontalContentAlignment="Right">
+                                                <TextBox.Style><Style TargetType="TextBox"><Style.Triggers><DataTrigger Binding="{Binding IsBalanceLine}" Value="True"><Setter Property="IsReadOnly" Value="True"/><Setter Property="Background" Value="{DynamicResource AppBackgroundBrush}"/></DataTrigger></Style.Triggers></Style></TextBox.Style>
+                                            </TextBox>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn x:Name="CommonColumn" Header="Cash / Common Ledger" Width="230" MinWidth="160">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox ItemsSource="{Binding DataContext.LedgerChoices, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Display" SelectedValuePath="Id" SelectedValue="{Binding CommonMasterId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SelectionChanged="Common_Changed" IsTextSearchEnabled="True"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button Content="Add Line" Click="AddLine_Click" Padding="10,6" Margin="0,0,8,6"/>
+                            <Button Content="Delete Selected" Click="DeleteLine_Click" Padding="10,6" Margin="0,0,8,6"/>
+                            <Button Content="New Ledger" Click="NewLedger_Click" Padding="10,6" Margin="0,0,8,6"/>
+                            <Button x:Name="BalanceButton" Content="Balance Voucher" Click="Balance_Click" Padding="10,6" Margin="0,0,8,6"/>
+                            <Button x:Name="RemoveBalanceButton" Content="Remove Balance" Click="RemoveBalance_Click" Padding="10,6" Margin="0,0,8,6"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="LineHelp" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock x:Name="TotalsText" Margin="0,8,0,0" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="Narration" FontWeight="SemiBold"/>
+                        <TextBox x:Name="NarrationBox" Margin="0,6,0,8" Text="Recurring Entry" TextChanged="Plan_Changed"/>
+                        <WrapPanel>
+                            <Button Content="Preview Entries" Click="Preview_Click" Padding="12,6" Margin="0,0,8,6"/>
+                            <Button Content="Regenerate Amounts" Click="Regenerate_Click" Padding="12,6" Margin="0,0,8,6"/>
+                            <Button Content="Resume Incomplete Run" Click="Resume_Click" Padding="12,6" Margin="0,0,8,6"/>
+                        </WrapPanel>
+
+                        <StackPanel x:Name="AllocationPanel" Visibility="Collapsed" Margin="0,7,0,7">
+                            <TextBlock Text="Lump Sum allocation preview" FontWeight="SemiBold"/>
+                            <WrapPanel Margin="0,5,0,5">
+                                <TextBlock x:Name="TargetAmountText" Margin="0,0,18,0" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="AllocatedAmountText" Margin="0,0,18,0" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="RemainingAmountText" FontWeight="SemiBold" Foreground="{DynamicResource ActionRequiredBrush}"/>
+                            </WrapPanel>
+                            <DataGrid x:Name="AllocationGrid" ItemsSource="{Binding AllocationRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" Height="145" SelectionMode="Single">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Date" Binding="{Binding Date, StringFormat={}{0:dd-MMM-yyyy}}" Width="130"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="90"/>
+                                    <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat={}{0:N2}}" Width="125"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <WrapPanel x:Name="ManualAllocationPanel" Margin="0,7,0,0">
+                                <TextBlock Text="Manual override" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <DatePicker x:Name="ManualAllocationDatePicker" Width="150" Margin="0,0,8,0"/>
+                                <TextBox x:Name="ManualAllocationAmountBox" Width="130" Margin="0,0,8,0" ToolTip="Enter an amount up to the currently Remaining value."/>
+                                <Button Content="Add Manual" Click="AddManualAllocation_Click" Padding="10,5" Margin="0,0,8,0"/>
+                                <Button Content="Delete Selected Manual" Click="DeleteManualAllocation_Click" Padding="10,5"/>
+                            </WrapPanel>
+                            <TextBlock Text="Manual allocations can use any date inside Start/End and intentionally override automatic holiday/weekend rules. They remain unchanged until you edit or delete them." TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock x:Name="PreviewSummary" TextWrapping="Wrap" Margin="0,5,0,6" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <DataGrid x:Name="PreviewGrid" Visibility="Collapsed" ItemsSource="{Binding PreviewRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" RowHeaderWidth="0" Height="180">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Date" Binding="{Binding Date, StringFormat={}{0:dd-MMM-yyyy}}" Width="115"/>
+                                <DataGridTextColumn Header="Voucher" Binding="{Binding VoucherType}" Width="95"/>
+                                <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat={}{0:N2}}" Width="110"/>
+                                <DataGridTextColumn Header="Ledger postings" Binding="{Binding Details}" Width="*" MinWidth="240"/>
+                                <DataGridTextColumn Header="Cash closing" Binding="{Binding Closing}" Width="135"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+        <Grid Grid.Row="2" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource ActionRequiredBrush}" Margin="0,0,12,0"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="Close" IsCancel="True" Padding="15,7" Margin="0,0,8,0"/>
+                <Button x:Name="CreateButton" Content="Create Entries" Click="Create_Click" IsEnabled="False" Padding="18,7" Style="{StaticResource PrimaryButtonStyle}"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

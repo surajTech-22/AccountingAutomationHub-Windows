@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccountingAutomationHub.Domain", "src\AccountingAutomationHub.Domain\AccountingAutomationHub.Domain.csproj", "{1B8D0793-6AF2-4E45-A09F-371B46AF0830}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccountingAutomationHub.Application", "src\AccountingAutomationHub.Application\AccountingAutomationHub.Application.csproj", "{4AB30158-E38D-433F-8DAF-B8F72177E2BC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccountingAutomationHub.Infrastructure", "src\AccountingAutomationHub.Infrastructure\AccountingAutomationHub.Infrastructure.csproj", "{ED134C4F-D971-41B9-A3EA-16D5350AAB55}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccountingAutomationHub.Desktop", "src\AccountingAutomationHub.Desktop\AccountingAutomationHub.Desktop.csproj", "{F423778A-B511-4AD8-ACAA-8542C93EF6C0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccountingAutomationHub.NetworkClient", "src\AccountingAutomationHub.NetworkClient\AccountingAutomationHub.NetworkClient.csproj", "{7B6F4A11-9A78-4E60-B5B3-22A1F2C0D941}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|Any CPU = Debug|Any CPU
+        Release|Any CPU = Release|Any CPU
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {1B8D0793-6AF2-4E45-A09F-371B46AF0830}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {1B8D0793-6AF2-4E45-A09F-371B46AF0830}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {1B8D0793-6AF2-4E45-A09F-371B46AF0830}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {1B8D0793-6AF2-4E45-A09F-371B46AF0830}.Release|Any CPU.Build.0 = Release|Any CPU
+        {4AB30158-E38D-433F-8DAF-B8F72177E2BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {4AB30158-E38D-433F-8DAF-B8F72177E2BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {4AB30158-E38D-433F-8DAF-B8F72177E2BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {4AB30158-E38D-433F-8DAF-B8F72177E2BC}.Release|Any CPU.Build.0 = Release|Any CPU
+        {ED134C4F-D971-41B9-A3EA-16D5350AAB55}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {ED134C4F-D971-41B9-A3EA-16D5350AAB55}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {ED134C4F-D971-41B9-A3EA-16D5350AAB55}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {ED134C4F-D971-41B9-A3EA-16D5350AAB55}.Release|Any CPU.Build.0 = Release|Any CPU
+        {F423778A-B511-4AD8-ACAA-8542C93EF6C0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {F423778A-B511-4AD8-ACAA-8542C93EF6C0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {F423778A-B511-4AD8-ACAA-8542C93EF6C0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {F423778A-B511-4AD8-ACAA-8542C93EF6C0}.Release|Any CPU.Build.0 = Release|Any CPU
+        {7B6F4A11-9A78-4E60-B5B3-22A1F2C0D941}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {7B6F4A11-9A78-4E60-B5B3-22A1F2C0D941}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {7B6F4A11-9A78-4E60-B5B3-22A1F2C0D941}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {7B6F4A11-9A78-4E60-B5B3-22A1F2C0D941}.Release|Any CPU.Build.0 = Release|Any CPU
+    EndGlobalSection
+EndGlobal

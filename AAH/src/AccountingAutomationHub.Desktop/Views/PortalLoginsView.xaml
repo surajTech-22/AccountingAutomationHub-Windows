@@ -1,0 +1,95 @@
+<UserControl x:Class="AccountingAutomationHub.Desktop.Views.PortalLoginsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20">
+            <Grid Margin="0,0,0,14">
+                <StackPanel>
+                    <TextBlock Text="Portal Logins" FontSize="25" FontWeight="SemiBold"/>
+                    <TextBlock Text="GST and Income Tax assisted Chrome login. AAH fills credentials and stops before the final portal authentication action." Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Content="Open linked-folder credentials" Command="{Binding OpenCredentialFileCommand}" Padding="12,7" Margin="0,0,8,0"/>
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="12,7"/>
+                </StackPanel>
+            </Grid>
+
+            <Border Style="{StaticResource CardBorderStyle}" Padding="18" Margin="0,0,0,14">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="320"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="GST Portal" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="User ID" FontWeight="SemiBold" Margin="0,14,0,0"/>
+                        <TextBox Text="{Binding GstUserId, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,0"/>
+                        <TextBlock Text="Password" FontWeight="SemiBold" Margin="0,12,0,0"/>
+                        <TextBox Text="{Binding GstPassword, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Content="Save" Command="{Binding SaveGstCommand}" Padding="14,8" Margin="0,0,8,0"/>
+                            <Button Content="Login in Chrome" Command="{Binding LoginGstCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="14,8"/>
+                        </StackPanel>
+                        <TextBlock Text="AAH opens the official GST page, fills User ID + Password and waits for you to complete CAPTCHA/2-step authentication and press Login." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,9,0,0"/>
+                    </StackPanel>
+                    <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding GstStatusSymbol}" Foreground="{Binding GstStatusBrush}" FontSize="28" FontWeight="Bold" VerticalAlignment="Center"/>
+                                <StackPanel Margin="10,0,0,0">
+                                    <TextBlock Text="{Binding GstResultCaption}" Foreground="{Binding GstStatusBrush}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding GstMessage}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <Border Background="#ECFDF5" CornerRadius="6" Padding="9" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Password beside successful login" FontSize="10" Foreground="#166534"/>
+                                    <TextBlock Text="{Binding GstSuccessfulPasswordDisplay}" FontWeight="SemiBold" Foreground="#166534" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding GstFailureCaption}" Foreground="#B91C1C" Margin="0,9,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardBorderStyle}" Padding="18">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="320"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Income Tax e-Filing Portal" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="User ID / PAN" FontWeight="SemiBold" Margin="0,14,0,0"/>
+                        <TextBox Text="{Binding IncomeTaxUserId, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,0"/>
+                        <TextBlock Text="Password" FontWeight="SemiBold" Margin="0,12,0,0"/>
+                        <TextBox Text="{Binding IncomeTaxPassword, UpdateSourceTrigger=PropertyChanged}" Padding="10,7" Margin="0,5,0,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Content="Save" Command="{Binding SaveIncomeTaxCommand}" Padding="14,8" Margin="0,0,8,0"/>
+                            <Button Content="Login in Chrome" Command="{Binding LoginIncomeTaxCommand}" Style="{StaticResource PrimaryButtonStyle}" Padding="14,8"/>
+                        </StackPanel>
+                        <TextBlock Text="AAH opens the official Income Tax page, fills PAN/User ID, performs only the non-authenticating first Continue step, fills Password, then waits for you to verify the Secure Access Message and press the final Continue/Login." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,9,0,0"/>
+                    </StackPanel>
+                    <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding ItStatusSymbol}" Foreground="{Binding ItStatusBrush}" FontSize="28" FontWeight="Bold" VerticalAlignment="Center"/>
+                                <StackPanel Margin="10,0,0,0">
+                                    <TextBlock Text="{Binding ItResultCaption}" Foreground="{Binding ItStatusBrush}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding ItMessage}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <Border Background="#ECFDF5" CornerRadius="6" Padding="9" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Password beside successful login" FontSize="10" Foreground="#166534"/>
+                                    <TextBlock Text="{Binding ItSuccessfulPasswordDisplay}" FontWeight="SemiBold" Foreground="#166534" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding ItFailureCaption}" Foreground="#B91C1C" Margin="0,9,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="12" Margin="0,14,0,0">
+                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+            </Border>
+            <TextBlock Text="Linked-folder note: AAH now places a Portal Login Credentials shortcut in the linked folder. Opening it starts a stand-alone secure entry window without opening the main AAH workspace. It shares this Client/FY Windows Credential Manager store; no readable password text is written." Foreground="#B45309" TextWrapping="Wrap" FontSize="10" Margin="0,8,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

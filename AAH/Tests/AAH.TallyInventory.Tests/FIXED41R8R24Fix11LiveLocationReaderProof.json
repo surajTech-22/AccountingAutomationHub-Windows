@@ -1,0 +1,13 @@
+{
+  "version": "R24_FIX11",
+  "description": "R6-tested collection-based live Tally location reader replaces Fix10 empty Report/Form query; only reader production source changed vs Fix10",
+  "path": "src/AccountingAutomationHub.Desktop/Services/TallyLiveCompanyLocationReader.cs",
+  "baseline_sha256": "2935d5fabcb5ef3b6962dcaaaccb734028cde307fe2ed2eabb0b1c524f18f5a9",
+  "current_sha256": "693e4b8f26df3047b55aac73ce735c10442bfe32a801efcba9e4891bcad00368",
+  "required_collection_formulae": [
+    "CurrentCompany:##SVCurrentCompany",
+    "CurrentPath:##SVCurrentPath",
+    "DirectNumber:$CompanyNumber:Company:##SVCurrentCompany"
+  ],
+  "save_path_unchanged": true
+}

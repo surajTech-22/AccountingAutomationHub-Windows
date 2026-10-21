@@ -1,0 +1,312 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AuditAdvancedVoucherWorkbenchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Voucher Entry · Audit - Advanced Audit Voucher Workbench" Width="1620" Height="920" MinWidth="1180" MinHeight="720"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Voucher Entry · Audit" FontSize="26" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding HeaderText}" FontSize="15" FontWeight="SemiBold" Margin="0,3,0,0"/>
+                <TextBlock Text="{Binding FilterContext}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                <TextBlock Text="{Binding CurrentPositionText}" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                <TextBlock Text="{Binding CurrentVoucher.ChangeStatus}" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Right"/>
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="1" Padding="8" Margin="0,0,0,8" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Background="{DynamicResource SurfaceBrush}">
+            <WrapPanel VerticalAlignment="Center">
+                <Button Content="◀ Previous" Padding="11,6" Click="Previous_Click" IsEnabled="{Binding CanPrevious}"/>
+                <Button Content="Next ▶" Padding="11,6" Margin="6,0,0,0" Click="Next_Click" IsEnabled="{Binding CanNext}"/>
+                <Button Content="Ledger Rename" Padding="12,6" Margin="14,0,0,0" Click="MasterChanges_Click"/>
+                <Button x:Name="VoucherPreviewButton" Padding="10,5" Margin="6,0,0,0" Click="ViewAll_Click" MouseEnter="VoucherPreviewButton_MouseEnter" MouseLeave="VoucherPreviewButton_MouseLeave" ToolTip="Hover for a quick voucher preview; click to pin the gallery">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Vouchers" VerticalAlignment="Center"/>
+                        <Border Margin="6,0,0,0" Padding="6,1" CornerRadius="8" Background="{DynamicResource AppBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                            <TextBlock Text="{Binding SelectedCount}" FontWeight="SemiBold"/>
+                        </Border>
+                    </StackPanel>
+                </Button>
+                <Button Content="Undo" Padding="12,6" Margin="14,0,0,0" Click="Undo_Click" IsEnabled="{Binding CanUndo}"/>
+                <Button Content="Redo" Padding="12,6" Margin="6,0,0,0" Click="Redo_Click" IsEnabled="{Binding CanRedo}"/>
+                <Button Content="Undo This Voucher" Padding="12,6" Margin="6,0,0,0" Click="UndoCurrent_Click" IsEnabled="{Binding CanUndoCurrentVoucher}"/>
+                <CheckBox Content="Change only this entry" Margin="18,0,0,0" VerticalAlignment="Center" IsChecked="{Binding ChangeOnlyThisEntry, Mode=TwoWay}" FontWeight="SemiBold"/>
+            </WrapPanel>
+        </Border>
+
+        <Border Grid.Row="2" Padding="8" Margin="0,0,0,8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <StackPanel>
+                <TextBlock Text="{Binding SummaryText}" FontWeight="SemiBold"/>
+                <TextBlock Text="Exact-match rule: common edits affect only selected vouchers that still contain the exact old value/master. Similar names, other Groups and unselected vouchers are never changed." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <TabControl Grid.Row="3" x:Name="EditorTabs">
+            <TabItem Header="Accounting Lines">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Padding="10" Margin="0,0,0,8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="105"/><ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="85"/><ColumnDefinition Width="170"/>
+                                <ColumnDefinition Width="105"/><ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Voucher Type" Margin="0,6"/>
+                            <ComboBox Grid.Row="0" Grid.Column="1" IsEditable="True" Text="{Binding CurrentVoucher.VoucherType, UpdateSourceTrigger=PropertyChanged}">
+                                <ComboBoxItem Content="Sales"/><ComboBoxItem Content="Purchase"/><ComboBoxItem Content="Payment"/><ComboBoxItem Content="Receipt"/><ComboBoxItem Content="Contra"/><ComboBoxItem Content="Journal"/><ComboBoxItem Content="Credit Note"/><ComboBoxItem Content="Debit Note"/>
+                            </ComboBox>
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Date" Margin="12,6,0,6"/>
+                            <DatePicker Grid.Row="0" Grid.Column="3" SelectedDate="{Binding CurrentVoucher.Date, Mode=TwoWay}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="4" Text="Voucher No." Margin="12,6,0,6"/>
+                            <TextBox Grid.Row="0" Grid.Column="5" Text="{Binding CurrentVoucher.Reference, UpdateSourceTrigger=PropertyChanged}"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Party A/c Name" Margin="0,6"/>
+                            <ComboBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" IsEditable="True" IsTextSearchEnabled="True" ItemsSource="{Binding LedgerOptions}" Text="{Binding CurrentVoucher.PartyOrLedger, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="Ref. Date" Margin="12,6,0,6"/>
+                            <DatePicker Grid.Row="1" Grid.Column="5" SelectedDate="{Binding CurrentVoucher.ReferenceDate, Mode=TwoWay}"/>
+                        </Grid>
+                    </Border>
+
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+                        <Button Content="Add Line" Padding="10,5" Click="AddLedgerLine_Click"/>
+                        <Button Content="Delete Line" Padding="10,5" Margin="6,0,0,0" Click="DeleteLedgerLine_Click"/>
+                        <Button Content="Duplicate Line" Padding="10,5" Margin="6,0,0,0" Click="DuplicateLedgerLine_Click"/>
+                        <TextBlock Text="   Standard double-entry voucher: edit Particulars, Dr/Cr and Amount. Party/business/GST summary fields follow the accounting lines when saved." VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                    </WrapPanel>
+
+                    <DataGrid x:Name="LedgerLinesGrid" Grid.Row="2" ItemsSource="{Binding CurrentVoucher.LedgerLines}" AutoGenerateColumns="False" CanUserAddRows="False" SelectionMode="Single" SelectionUnit="FullRow" HorizontalScrollBarVisibility="Auto">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Particulars / Ledger" Width="260"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" IsTextSearchEnabled="True" ItemsSource="{Binding DataContext.LedgerOptions, RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding Ledger, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Group" Width="180"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" ItemsSource="{Binding DataContext.GroupOptions, RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding Group, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridComboBoxColumn Header="Dr/Cr" Width="78" SelectedItemBinding="{Binding Direction, UpdateSourceTrigger=PropertyChanged}"><DataGridComboBoxColumn.ItemsSource><x:Array Type="{x:Type sys:String}" xmlns:sys="clr-namespace:System;assembly=System.Runtime"><sys:String>Dr</sys:String><sys:String>Cr</sys:String></x:Array></DataGridComboBoxColumn.ItemsSource></DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="Amount" Binding="{Binding Amount, UpdateSourceTrigger=PropertyChanged, StringFormat=0.00}" Width="120"/>
+                            <DataGridTextColumn Header="GST Treatment" Binding="{Binding GstTreatment, UpdateSourceTrigger=PropertyChanged}" Width="145"/>
+                            <DataGridTextColumn Header="Line Narration" Binding="{Binding Narration, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Grid Grid.Row="3" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="A standard voucher must balance before an edited accounting-line set can be saved." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Debit" Margin="18,0,6,0" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="{Binding CurrentVoucher.AccountingDebit, StringFormat=N2}" TextAlignment="Right" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="3" Text="Credit" Margin="18,0,6,0" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="4" Text="{Binding CurrentVoucher.AccountingCredit, StringFormat=N2}" TextAlignment="Right" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="5" Text="Difference" Margin="18,0,6,0" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="6" Text="{Binding CurrentVoucher.AccountingDifference, StringFormat=N2}" TextAlignment="Right" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <Grid Grid.Row="4" Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="105"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Narration" Margin="0,6"/>
+                        <TextBox Grid.Column="1" MinHeight="58" AcceptsReturn="True" TextWrapping="Wrap" Text="{Binding CurrentVoucher.Narration, UpdateSourceTrigger=PropertyChanged}"/>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Voucher Details">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="155"/><ColumnDefinition Width="*"/><ColumnDefinition Width="24"/><ColumnDefinition Width="155"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Effective Date" Margin="0,7"/><DatePicker Grid.Row="0" Grid.Column="1" SelectedDate="{Binding CurrentVoucher.EffectiveDate, Mode=TwoWay}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="3" Text="Invoice Type" Margin="0,7"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding CurrentVoucher.InvoiceType, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="1" Text="Party Group" Margin="0,7"/><ComboBox Grid.Row="1" Grid.Column="1" IsEditable="True" ItemsSource="{Binding GroupOptions}" Text="{Binding CurrentVoucher.CounterpartyGroup, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="3" Text="Posting Group" Margin="0,7"/><ComboBox Grid.Row="1" Grid.Column="4" IsEditable="True" ItemsSource="{Binding GroupOptions}" Text="{Binding CurrentVoucher.BusinessGroup, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="2" Text="GSTIN" Margin="0,7"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CurrentVoucher.Gstin, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="3" Text="PAN" Margin="0,7"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding CurrentVoucher.Pan, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="3" Text="Place of Supply" Margin="0,7"/><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding CurrentVoucher.PlaceOfSupply, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="3" Grid.Column="3" Text="GST Registration" Margin="0,7"/><TextBox Grid.Row="3" Grid.Column="4" Text="{Binding CurrentVoucher.GstRegistrationType, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="4" Text="Transaction Nature" Margin="0,7"/><TextBox Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="4" Text="{Binding CurrentVoucher.TransactionNature, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Row="5" Text="Party / Counterparty" Margin="0,7"/><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding CurrentVoucher.PartyOrLedger}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="5" Grid.Column="3" Text="Posting Ledger" Margin="0,7"/><TextBlock Grid.Row="5" Grid.Column="4" Text="{Binding CurrentVoucher.BusinessLedger}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="6" Text="Source Debit" Margin="0,7"/><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding CurrentVoucher.Debit, StringFormat=N2}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="6" Grid.Column="3" Text="Source Credit / Amount" Margin="0,7"/><StackPanel Grid.Row="6" Grid.Column="4" Orientation="Horizontal"><TextBlock Text="{Binding CurrentVoucher.Credit, StringFormat=N2}"/><TextBlock Text="   /   "/><TextBlock Text="{Binding CurrentVoucher.Amount, StringFormat=N2}"/></StackPanel>
+                        <TextBlock Grid.Row="7" Text="Taxable Value" Margin="0,7"/><TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding CurrentVoucher.TaxableValue, StringFormat=N2}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Row="7" Grid.Column="3" Text="Notes" Margin="0,7"/><TextBox Grid.Row="7" Grid.Column="4" MinHeight="55" AcceptsReturn="True" TextWrapping="Wrap" Text="{Binding CurrentVoucher.Notes, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Border Grid.Row="8" Grid.ColumnSpan="5" Margin="0,12,0,0" Padding="10" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6"><TextBlock Text="Debit, Credit and Amount above are source-summary fields only. The editable Accounting Lines tab is the standard double-entry voucher authority after you change its lines." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/></Border>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Inventory / Items">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <WrapPanel Margin="0,0,0,8"><Button Content="Add Item Line" Padding="10,5" Click="AddInventoryLine_Click"/><Button Content="Delete Item Line" Padding="10,5" Margin="6,0,0,0" Click="DeleteInventoryLine_Click"/><TextBlock Text="   Taxable:" VerticalAlignment="Center" FontWeight="SemiBold"/><TextBlock Text="{Binding CurrentVoucher.InventoryTaxableTotal, StringFormat=N2}" VerticalAlignment="Center"/><TextBlock Text="   GST:" VerticalAlignment="Center" FontWeight="SemiBold"/><TextBlock Text="{Binding CurrentVoucher.InventoryGstTotal, StringFormat=N2}" VerticalAlignment="Center"/><TextBlock Text="   Total:" VerticalAlignment="Center" FontWeight="SemiBold"/><TextBlock Text="{Binding CurrentVoucher.InventoryGrandTotal, StringFormat=N2}" VerticalAlignment="Center"/></WrapPanel>
+                    <DataGrid x:Name="InventoryGrid" Grid.Row="1" ItemsSource="{Binding CurrentVoucher.InventoryLines}" AutoGenerateColumns="False" CanUserAddRows="False" SelectionMode="Single" SelectionUnit="FullRow" HorizontalScrollBarVisibility="Auto">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Stock Item" Width="190"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" IsTextSearchEnabled="True" ItemsSource="{Binding DataContext.StockItemOptions, RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding StockItem, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Group" Width="140"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" ItemsSource="{Binding DataContext.GroupOptions, RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding Group, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Description" Binding="{Binding Description, UpdateSourceTrigger=PropertyChanged}" Width="180"/>
+                            <DataGridTextColumn Header="HSN/SAC" Binding="{Binding HsnSac, UpdateSourceTrigger=PropertyChanged}" Width="95"/>
+                            <DataGridTextColumn Header="Qty" Binding="{Binding Quantity, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                            <DataGridTemplateColumn Header="UOM" Width="85"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEditable="True" ItemsSource="{Binding DataContext.UnitOptions, RelativeSource={RelativeSource AncestorType=Window}}" Text="{Binding Unit, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Rate" Binding="{Binding Rate, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                            <DataGridTextColumn Header="Disc %" Binding="{Binding DiscountPercent, UpdateSourceTrigger=PropertyChanged}" Width="75"/>
+                            <DataGridTextColumn Header="Disc Amt" Binding="{Binding DiscountAmount, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                            <DataGridTextColumn Header="Taxable" Binding="{Binding TaxableValue, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                            <DataGridTextColumn Header="GST %" Binding="{Binding GstRate, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                            <DataGridTextColumn Header="IGST" Binding="{Binding Igst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                            <DataGridTextColumn Header="CGST" Binding="{Binding Cgst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                            <DataGridTextColumn Header="SGST" Binding="{Binding Sgst, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
+                            <DataGridTextColumn Header="Cess" Binding="{Binding Cess, UpdateSourceTrigger=PropertyChanged}" Width="75"/>
+                            <DataGridTextColumn Header="Line Total" Binding="{Binding LineTotal, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Grid.Row="2" Margin="0,8,0,0" Text="Multiple item rows and multiple GST rates are retained in the Audit voucher payload. Stock Item, Unit, HSN/SAC and Group Master changes use the same exact selected-voucher usage index." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="GST / TDS / TCS">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid Margin="14"><Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/><ColumnDefinition Width="24"/><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="GST Rate %" Margin="0,7"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding CurrentVoucher.GstRate, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="0" Grid.Column="3" Text="GST Ledgers" Margin="0,7"/><TextBox Grid.Row="0" Grid.Column="4" Text="{Binding CurrentVoucher.TaxLedgers, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="1" Text="IGST" Margin="0,7"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding CurrentVoucher.Igst, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="1" Grid.Column="3" Text="CGST" Margin="0,7"/><TextBox Grid.Row="1" Grid.Column="4" Text="{Binding CurrentVoucher.Cgst, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="2" Text="SGST" Margin="0,7"/><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CurrentVoucher.Sgst, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="2" Grid.Column="3" Text="Cess" Margin="0,7"/><TextBox Grid.Row="2" Grid.Column="4" Text="{Binding CurrentVoucher.Cess, UpdateSourceTrigger=PropertyChanged}"/>
+                    <WrapPanel Grid.Row="3" Grid.ColumnSpan="5" Margin="0,10"><CheckBox Content="Reverse Charge" IsChecked="{Binding CurrentVoucher.IsReverseCharge, Mode=TwoWay}"/><CheckBox Content="Nil Rated" IsChecked="{Binding CurrentVoucher.IsNilRated, Mode=TwoWay}" Margin="18,0,0,0"/><CheckBox Content="Exempt" IsChecked="{Binding CurrentVoucher.IsExempt, Mode=TwoWay}" Margin="18,0,0,0"/><CheckBox Content="Non-GST" IsChecked="{Binding CurrentVoucher.IsNonGst, Mode=TwoWay}" Margin="18,0,0,0"/></WrapPanel>
+                    <TextBlock Grid.Row="4" Text="TDS Section" Margin="0,7"/><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CurrentVoucher.TdsSection, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="4" Grid.Column="3" Text="TDS Rate %" Margin="0,7"/><TextBox Grid.Row="4" Grid.Column="4" Text="{Binding CurrentVoucher.TdsRate, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="5" Text="TDS Amount" Margin="0,7"/><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding CurrentVoucher.TdsAmount, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="5" Grid.Column="3" Text="TCS Section" Margin="0,7"/><TextBox Grid.Row="5" Grid.Column="4" Text="{Binding CurrentVoucher.TcsSection, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="6" Text="TCS Rate %" Margin="0,7"/><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding CurrentVoucher.TcsRate, UpdateSourceTrigger=PropertyChanged}"/><TextBlock Grid.Row="6" Grid.Column="3" Text="TCS Amount" Margin="0,7"/><TextBox Grid.Row="6" Grid.Column="4" Text="{Binding CurrentVoucher.TcsAmount, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Border Grid.Row="7" Grid.ColumnSpan="5" Margin="0,12,0,0" Padding="10" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6"><TextBlock Text="GST validation is voucher-local. Multiple GST slabs come from the item rows. Master replacements never infer a tax ledger from a similar name." TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/></Border>
+                </Grid></ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Allocations">
+                <TabControl Margin="8">
+                    <TabItem Header="Bill-wise">
+                        <Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><WrapPanel><Button Content="Add Bill Allocation" Padding="10,5" Click="AddBill_Click"/><Button Content="Delete" Padding="10,5" Margin="6,0,0,0" Click="DeleteBill_Click"/></WrapPanel><DataGrid x:Name="BillGrid" Grid.Row="1" Margin="0,8,0,0" ItemsSource="{Binding CurrentVoucher.BillAllocations}" AutoGenerateColumns="False" CanUserAddRows="False"><DataGrid.Columns><DataGridTextColumn Header="Ledger" Binding="{Binding Ledger, UpdateSourceTrigger=PropertyChanged}" Width="220"/><DataGridTextColumn Header="Reference Type" Binding="{Binding ReferenceType, UpdateSourceTrigger=PropertyChanged}" Width="130"/><DataGridTextColumn Header="Reference No." Binding="{Binding ReferenceNumber, UpdateSourceTrigger=PropertyChanged}" Width="180"/><DataGridTextColumn Header="Due Date" Binding="{Binding DueDate, StringFormat=dd-MM-yyyy, UpdateSourceTrigger=PropertyChanged}" Width="120"/><DataGridTextColumn Header="Amount" Binding="{Binding Amount, UpdateSourceTrigger=PropertyChanged}" Width="120"/></DataGrid.Columns></DataGrid></Grid>
+                    </TabItem>
+                    <TabItem Header="Cost Centres">
+                        <Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><WrapPanel><Button Content="Add Cost Centre Split" Padding="10,5" Click="AddCostCentre_Click"/><Button Content="Delete" Padding="10,5" Margin="6,0,0,0" Click="DeleteCostCentre_Click"/></WrapPanel><DataGrid x:Name="CostCentreGrid" Grid.Row="1" Margin="0,8,0,0" ItemsSource="{Binding CurrentVoucher.CostCentreAllocations}" AutoGenerateColumns="False" CanUserAddRows="False"><DataGrid.Columns><DataGridTextColumn Header="Ledger" Binding="{Binding Ledger, UpdateSourceTrigger=PropertyChanged}" Width="220"/><DataGridTextColumn Header="Cost Centre" Binding="{Binding CostCentre, UpdateSourceTrigger=PropertyChanged}" Width="220"/><DataGridTextColumn Header="Dr/Cr" Binding="{Binding Direction, UpdateSourceTrigger=PropertyChanged}" Width="90"/><DataGridTextColumn Header="Amount" Binding="{Binding Amount, UpdateSourceTrigger=PropertyChanged}" Width="120"/></DataGrid.Columns></DataGrid></Grid>
+                    </TabItem>
+                    <TabItem Header="Banking">
+                        <Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><WrapPanel><Button Content="Add Bank Allocation" Padding="10,5" Click="AddBank_Click"/><Button Content="Delete" Padding="10,5" Margin="6,0,0,0" Click="DeleteBank_Click"/></WrapPanel><DataGrid x:Name="BankGrid" Grid.Row="1" Margin="0,8,0,0" ItemsSource="{Binding CurrentVoucher.BankAllocations}" AutoGenerateColumns="False" CanUserAddRows="False"><DataGrid.Columns><DataGridTextColumn Header="Ledger" Binding="{Binding Ledger, UpdateSourceTrigger=PropertyChanged}" Width="210"/><DataGridTextColumn Header="Transaction Type" Binding="{Binding TransactionType, UpdateSourceTrigger=PropertyChanged}" Width="150"/><DataGridTextColumn Header="Instrument / Ref" Binding="{Binding InstrumentNumber, UpdateSourceTrigger=PropertyChanged}" Width="170"/><DataGridTextColumn Header="UTR" Binding="{Binding Utr, UpdateSourceTrigger=PropertyChanged}" Width="180"/><DataGridTextColumn Header="Bank Date" Binding="{Binding BankDate, StringFormat=dd-MM-yyyy, UpdateSourceTrigger=PropertyChanged}" Width="120"/><DataGridTextColumn Header="Amount" Binding="{Binding Amount, UpdateSourceTrigger=PropertyChanged}" Width="120"/></DataGrid.Columns></DataGrid></Grid>
+                    </TabItem>
+                </TabControl>
+            </TabItem>
+
+            <TabItem Header="Evidence / History">
+                <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="150"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="120"/><ColumnDefinition Width="*"/><ColumnDefinition Width="120"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Source"/><TextBlock Grid.Column="1" Text="{Binding CurrentVoucher.Source}" FontWeight="SemiBold"/><TextBlock Grid.Column="2" Text="Evidence"/><TextBlock Grid.Column="3" Text="{Binding CurrentVoucher.EvidenceStatus}"/><TextBlock Grid.Row="1" Text="Tally MASTERID" Margin="0,5,0,0"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CurrentVoucher.TallyMasterId}" Margin="0,5,0,0"/><TextBlock Grid.Row="1" Grid.Column="2" Text="Tally GUID" Margin="0,5,0,0"/><TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding CurrentVoucher.TallyGuid}" Margin="0,5,0,0"/></Grid>
+                    <TextBox Grid.Row="1" Margin="0,8,0,8" Text="{Binding OriginalSnapshotText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" ToolTip="Immutable original/previous saved Audit row snapshot"/>
+                    <WrapPanel Grid.Row="2" Margin="0,0,0,6"><TextBlock Text="Saved Audit Revisions" FontWeight="SemiBold" VerticalAlignment="Center"/><Button Content="Restore Selected Previous Version" Margin="12,0,0,0" Padding="10,5" Click="RestoreRevision_Click"/></WrapPanel>
+                    <Grid Grid.Row="3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><DataGrid x:Name="SavedRevisionGrid" ItemsSource="{Binding SavedRevisions}" SelectedItem="{Binding SelectedSavedRevision, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="True"><DataGrid.Columns><DataGridTextColumn Header="Saved" Binding="{Binding UpdatedUtc, StringFormat=dd-MM-yyyy HH:mm:ss}" Width="145"/><DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="150"/><DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="140"/><DataGridTextColumn Header="Reason" Binding="{Binding Reason}" Width="*"/></DataGrid.Columns></DataGrid><DataGrid Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding SessionHistory}" AutoGenerateColumns="False" IsReadOnly="True"><DataGrid.Columns><DataGridTextColumn Header="Session Change" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Affected" Binding="{Binding AffectedCount}" Width="70"/><DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="110"/></DataGrid.Columns></DataGrid></Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Grid Grid.Row="4" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="{Binding CurrentVoucher.ValidationMessage}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource AccentBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button Content="Preview Vouchers" Padding="12,7" Click="ViewAll_Click"/>
+                <Button Content="Save All Modified" Padding="14,7" Margin="8,0,0,0" Click="SaveAll_Click" IsDefault="True"/>
+                <Button Content="Close" Padding="14,7" Margin="8,0,0,0" Click="Close_Click"/>
+            </StackPanel>
+        </Grid>
+
+        <Border x:Name="VoucherPreviewLayer" Grid.Row="1" Grid.RowSpan="4" Panel.ZIndex="500" Visibility="Collapsed"
+                Margin="300,52,0,0" Padding="10" CornerRadius="10" ClipToBounds="False"
+                Background="{DynamicResource AppBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                MouseEnter="VoucherPreviewHost_MouseEnter" MouseLeave="VoucherPreviewHost_MouseLeave">
+            <Grid ClipToBounds="False">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="2,0,2,6">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Voucher Preview" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="Move over a voucher to expand it. Click the voucher to open it." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Close" Padding="9,4" Click="CloseVoucherPreview_Click"/>
+                </Grid>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ClipToBounds="False">
+                    <ItemsControl x:Name="VoucherPreviewItems" ItemsSource="{Binding Vouchers}" Margin="26,18,26,26" ClipToBounds="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" ClipToBounds="False"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="Panel.ZIndex" Value="1"/>
+                                <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+                                <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1" ScaleY="1"/></Setter.Value></Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Panel.ZIndex" Value="1000"/>
+                                        <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.18" ScaleY="1.18"/></Setter.Value></Setter>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Width="220" MinHeight="178" Margin="8" Padding="0" Background="Transparent" BorderThickness="0"
+                                        HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Tag="{Binding SessionId}" Click="OpenPreviewVoucher_Click" Cursor="Hand">
+                                    <Border Padding="9" CornerRadius="8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" ClipToBounds="False">
+                                        <Grid ClipToBounds="False">
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding VoucherNumberDisplay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="1" Text="Open ›" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
+                                            </Grid>
+                                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0">
+                                                <TextBlock Text="{Binding Date, StringFormat=dd-MM-yyyy}"/>
+                                                <TextBlock Text="  ·  "/><TextBlock Text="{Binding VoucherType}" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                            <Grid Grid.Row="2" Margin="0,6,0,4">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                <StackPanel><TextBlock Text="Party / Ledger" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9"/><TextBlock Text="{Binding PartyOrLedger}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/></StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock Text="Amount" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" HorizontalAlignment="Right"/><TextBlock Text="{Binding Amount, StringFormat=N2}" FontWeight="SemiBold" HorizontalAlignment="Right"/></StackPanel>
+                                            </Grid>
+                                            <Border Grid.Row="3" Padding="5" Background="{DynamicResource AppBackgroundBrush}" CornerRadius="5" ClipToBounds="False">
+                                                <ItemsControl ItemsSource="{Binding LedgerLines}" ClipToBounds="False">
+                                                    <ItemsControl.ItemTemplate><DataTemplate>
+                                                        <Grid Margin="0,1">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="32"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Ledger}" FontSize="9" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Direction}" FontSize="9" HorizontalAlignment="Center"/>
+                                                            <TextBlock Grid.Column="2" Text="{Binding Amount, StringFormat=N2}" FontSize="9" HorizontalAlignment="Right"/>
+                                                        </Grid>
+                                                    </DataTemplate></ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </Border>
+                                            <Grid Grid.Row="4" Margin="0,5,0,0">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding ChangeStatus}" Foreground="{DynamicResource AccentBrush}" FontSize="9" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding ValidationStatus}" FontSize="9" FontWeight="SemiBold"/>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

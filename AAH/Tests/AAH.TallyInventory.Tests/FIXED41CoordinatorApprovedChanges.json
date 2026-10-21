@@ -1,0 +1,156 @@
+{
+  "files": [
+    {
+      "name": "coordinator",
+      "path": "src/AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs",
+      "current_text_sha256": "6f72e18bd28702ddc9d7874a1e4da07bccbdb5ec40076ab4421aaf923e057408",
+      "baseline_text_sha256": "43e109d3b2714ac76f9a5a559420c951e7fb441824766359ac8c905055da29c4",
+      "changes": [
+        {
+          "before": "",
+          "after": "    // FIXED41 R8 Repair 4 safety bars: failures in low-priority background XML must not\n    // immediately create another expensive timeout. Healthy Tally keeps the normal 5-second\n    // authority pulse; only failed background transport/report attempts receive a short retry\n    // cooldown, while manual import/export/refresh paths remain available immediately.\n    private DateTime _backgroundXmlRetryNotBeforeUtc = DateTime.MinValue;\n    private DateTime _reportWarmupRetryNotBeforeUtc = DateTime.MinValue;\n"
+        },
+        {
+          "before": "",
+          "after": "            if (isFiveSecondBackgroundPulse) _backgroundXmlRetryNotBeforeUtc = DateTime.MinValue;\n"
+        },
+        {
+          "before": "",
+          "after": "            if (isFiveSecondBackgroundPulse)\n            {\n                // Retry soon enough to retain live behavior, but never launch a new 2-5 second\n                // background timeout on every timer tick while Tally/XML is unavailable.\n                var backoffSeconds = Math.Min(30, Math.Max(10, _consecutiveConnectionFailures * 5));\n                _backgroundXmlRetryNotBeforeUtc = DateTime.UtcNow.AddSeconds(backoffSeconds);\n            }\n"
+        },
+        {
+          "before": "",
+          "after": "        // FIXED41 R8 Repair 4 transport safety bar. A passive TCP probe sends no XML and\n        // never acquires TallyRequestGate. When Tally is offline, the five-second scheduler\n        // therefore stays cheap instead of launching Report/Collection calls that each wait\n        // for their request timeout. When transport is healthy, normal authority processing\n        // continues unchanged. A prior background XML failure gets a short passive-only\n        // cooldown; manual refresh/import/export is never routed through this timer guard.\n        var transportReachable = await _httpService.ProbeEndpointAsync(TimeSpan.FromMilliseconds(750));\n        if (_disposed) return;\n        if (!transportReachable)\n        {\n            _consecutiveConnectionFailures++;\n            if (_consecutiveConnectionFailures >= 2) IsConnected = false;\n            _lastAvailableLinkedCompanyKey = string.Empty;\n            ConnectionStatus = IsConnected ? \"Tally linked • transport rechecking\" : \"Tally offline\";\n            LastOperationStatus = \"5-second Tally safety pulse: HTTP port is not reachable; no XML request was sent.\";\n            Changed?.Invoke(this, EventArgs.Empty);\n            return;\n        }\n        if (DateTime.UtcNow < _backgroundXmlRetryNotBeforeUtc)\n        {\n            ConnectionStatus = IsConnected ? \"Tally linked • XML retry cooling down\" : \"Tally transport reachable • XML retry pending\";\n            LastOperationStatus = \"5-second Tally safety pulse: transport is reachable; previous background XML timeout is cooling down before the normal authority retry.\";\n            Changed?.Invoke(this, EventArgs.Empty);\n            return;\n        }\n\n"
+        },
+        {
+          "before": "        await RefreshNowAsync(forceLinkedSynchronization: false);\n",
+          "after": "        await RefreshNowAsync(\n            forceLinkedSynchronization: false,\n            isFiveSecondBackgroundPulse: true);\n"
+        },
+        {
+          "before": "",
+          "after": "        if (DateTime.UtcNow < _reportWarmupRetryNotBeforeUtc) return;\n"
+        },
+        {
+          "before": "",
+          "after": "    }\n\n    private static bool IsBackgroundReportTransportFailure(string? error)\n    {\n        if (string.IsNullOrWhiteSpace(error)) return false;\n        return error.Contains(\"did not complete within\", StringComparison.OrdinalIgnoreCase) ||\n               error.Contains(\"connection refused\", StringComparison.OrdinalIgnoreCase) ||\n               error.Contains(\"actively refused\", StringComparison.OrdinalIgnoreCase) ||\n               error.Contains(\"No connection could be made\", StringComparison.OrdinalIgnoreCase) ||\n               error.Contains(\"Tally HTTP 5\", StringComparison.OrdinalIgnoreCase);\n"
+        },
+        {
+          "before": "",
+          "after": "\n                    // Safety bar only: an unsupported/missing report remains normal cached\n                    // output and the suite continues. A transport timeout is different: once\n                    // Tally has already failed to answer one low-priority background report,\n                    // do not immediately line up the rest of the catalog behind the same busy\n                    // endpoint. The next normal healthy cycle can resume from the first missing\n                    // report because every completed snapshot above is still preserved.\n                    if (!snapshot.IsAvailable && IsBackgroundReportTransportFailure(snapshot.Error))\n                    {\n                        LastOperationStatus = $\"Report authority warm-up paused after Tally transport failure at '{reportName}'. Existing report authority is preserved and the missing reports will resume automatically.\";\n                        _reportWarmupRetryNotBeforeUtc = DateTime.UtcNow.AddSeconds(30);\n                        return;\n                    }\n"
+        },
+        {
+          "before": "                    break;\n",
+          "after": "                    _reportWarmupRetryNotBeforeUtc = DateTime.UtcNow.AddSeconds(30);\n                    return;\n"
+        },
+        {
+          "before": "",
+          "after": "\n            // A complete/clean pass removes only the failure cooldown. Missing/unsupported\n            // reports are still cached by ExportReportAsync and keep the existing behavior.\n            _reportWarmupRetryNotBeforeUtc = DateTime.MinValue;\n"
+        },
+        {
+          "before": "",
+          "after": "    private readonly SqliteClientPreferenceRepository _clientPreferenceRepository = new();\n"
+        },
+        {
+          "before": "",
+          "after": "        _clientPreferenceRepository.Initialize();\n"
+        },
+        {
+          "before": "                        if (!IsInitialLocalPreparationReady())\n",
+          "after": "                        if (!forceLinkedSynchronization && !AutoTallyImportPreference.IsEnabled(_clientPreferenceRepository, client))\n                        {\n                            LastOperationStatus = $\"Auto Tally Import is off for {client.ClientName} · FY {client.FinancialYear}; heartbeat remains connected but Master/Voucher import is paused for this client.\";\n                        }\n                        else if (!IsInitialLocalPreparationReady())\n"
+        },
+        {
+          "before": "",
+          "after": "                    if (!AutoTallyImportPreference.IsEnabled(_clientPreferenceRepository, item.Client)) continue;\n"
+        },
+        {
+          "before": "",
+          "after": "    // FIXED41: startup keeps the Tally-last ordering, but once local preparation has\n    // completed once, ordinary Auto Import/local cache work must never suppress the\n    // five-second ALTERID authority loop.\n    private bool _initialLocalPreparationCompleted;\n"
+        },
+        {
+          "before": "",
+          "after": "    private bool IsInitialLocalPreparationReady()\n    {\n        if (_initialLocalPreparationCompleted) return true;\n        if (!IsLocalPreparationReady()) return false;\n        _initialLocalPreparationCompleted = true;\n        return true;\n    }\n\n"
+        },
+        {
+          "before": "            if (client is null && discovered.Count > 0 && IsLocalPreparationReady())\n",
+          "after": "            if (client is null && discovered.Count > 0 && IsInitialLocalPreparationReady())\n"
+        },
+        {
+          "before": "                    var needsBaseline = state is null || state.LastFullSyncUtc == DateTime.MinValue || state.LastAlterId <= 0 || !stockAuthorityReady;\n",
+          "after": "                    var accountingMasterAuthorityReady = HasCompleteLiveAccountingMasterAuthority(client, marker);\n                    var voucherAuthorityReady = HasCompleteActiveFyVoucherAuthority(client, linkedCompany, state);\n                    var needsBaseline = state is null || state.LastFullSyncUtc == DateTime.MinValue || state.LastAlterId <= 0 ||\n                                        !stockAuthorityReady || !accountingMasterAuthorityReady || !voucherAuthorityReady;\n"
+        },
+        {
+          "before": "",
+          "after": "                            !accountingMasterAuthorityReady ? \"Tally accounting Master authority incomplete\" :\n                            !voucherAuthorityReady ? \"Tally active-FY Voucher authority incomplete\" :\n"
+        },
+        {
+          "before": "                        if (!IsLocalPreparationReady())\n",
+          "after": "                        if (!IsInitialLocalPreparationReady())\n"
+        },
+        {
+          "before": "                            // Fix38 scheduling only: the 5-second health pulse stays live, but\n                            // baseline/delta/export preparation waits until local client caches,\n                            // shared source recovery and Auto Import startup work are complete.\n                            LastOperationStatus = $\"{reason}: Tally authority work waiting behind local client-cache preparation.\";\n",
+          "after": "                            // FIXED41: only the initial startup ordering may defer Tally. After\n                            // that point a detected ALTERID/count mismatch is independent of\n                            // ordinary local Auto Import/background queues and must be consumed.\n                            LastOperationStatus = $\"{reason}: initial local preparation is still completing; the next 5-second pulse will retry without advancing the Tally checkpoint.\";\n"
+        },
+        {
+          "before": "                if (_disposed || !IsLocalPreparationReady()) return;\n",
+          "after": "                if (_disposed || !IsInitialLocalPreparationReady()) return;\n"
+        },
+        {
+          "before": "                    if (_disposed || !IsLocalPreparationReady()) break;\n",
+          "after": "                    if (_disposed || !IsInitialLocalPreparationReady()) break;\n"
+        },
+        {
+          "before": "                        var needsBaseline = state is null || state.LastFullSyncUtc == DateTime.MinValue || state.LastAlterId <= 0 || !stockAuthorityReady;\n",
+          "after": "                        var accountingMasterAuthorityReady = HasCompleteLiveAccountingMasterAuthority(item.Client, marker);\n                        var voucherAuthorityReady = HasCompleteActiveFyVoucherAuthority(item.Client, company, state);\n                        var needsBaseline = state is null || state.LastFullSyncUtc == DateTime.MinValue || state.LastAlterId <= 0 ||\n                                            !stockAuthorityReady || !accountingMasterAuthorityReady || !voucherAuthorityReady;\n"
+        },
+        {
+          "before": "            var fullVoucherAuthorityReady = _repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, marker.VoucherCount);\n",
+          "after": "            var fullVoucherAuthorityReady = HasCompleteActiveFyVoucherAuthority(client, company, state);\n"
+        },
+        {
+          "before": "                if (!_repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, marker.VoucherCount))\n",
+          "after": "                if (!_repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, vouchers.Count))\n"
+        },
+        {
+          "before": "                    LastTallyChangeToken=marker.Token, LastVoucherCount=marker.VoucherCount, LastAlterId=baselineAlterId,\n",
+          "after": "                    LastTallyChangeToken=marker.Token, LastVoucherCount=marker.VoucherCount, LastFyVoucherCount=vouchers.Count, LastAlterId=baselineAlterId,\n"
+        },
+        {
+          "before": "",
+          "after": "                if (vouchers.Count > 0 || fullVouchers.Count > 0)\n                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Journal,\n                        $\"{reason}: live Tally Voucher authority synchronized\");\n"
+        },
+        {
+          "before": "",
+          "after": "                // FIXED41: a pulse token/count may never be acknowledged unless the local\n                // Master + active-FY Voucher authority is already proved complete. This\n                // closes the old failure where a new Ledger count was saved while the\n                // Ledger itself was never imported, permanently hiding it from later pulses.\n                if (!HasCompleteLiveAccountingMasterAuthority(client, marker) ||\n                    !HasCompleteActiveFyVoucherAuthority(client, company, state) ||\n                    !HasCompleteLiveStockMasterAuthority(client, company, marker, state))\n                    throw new InvalidOperationException(\"Tally pulse changed but local authority is incomplete. Checkpoint was not advanced; the next 5-second pulse will repair the baseline.\");\n\n"
+        },
+        {
+          "before": "",
+          "after": "                if (synchronizedState.LastFyVoucherCount < 0)\n                {\n                    var (fyFrom, fyTo) = FinancialYearDates(client.FinancialYear);\n                    synchronizedState.LastFyVoucherCount = _repository.GetVoucherIndexRange(\n                        company.CompanyKey, client.FinancialYear, fyFrom, fyTo).Count;\n                }\n"
+        },
+        {
+          "before": "                synchronizedState.LastStatus = $\"{reason}: no ALTERID change.\";\n",
+          "after": "                synchronizedState.LastStatus = $\"{reason}: no newer ALTERID after verified local authority.\";\n"
+        },
+        {
+          "before": "                if (!_repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, marker.VoucherCount))\n",
+          "after": "                var localFyVoucherCount = _repository.GetVoucherIndexRange(company.CompanyKey, client.FinancialYear, fromDate, toDate).Count;\n                if (!_repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, localFyVoucherCount))\n"
+        },
+        {
+          "before": "",
+          "after": "                if (!HasCompleteLiveAccountingMasterAuthority(client, marker))\n                    throw new InvalidOperationException(\"Tally ALTERID delta did not restore the complete Ledger/Group Master authority. The checkpoint was not advanced; the next 5-second pulse will repair from baseline.\");\n"
+        },
+        {
+          "before": "",
+          "after": "                state.LastFyVoucherCount = localFyVoucherCount;\n"
+        },
+        {
+          "before": "",
+          "after": "                if (delta.Vouchers.Count > 0 || delta.FullVouchers.Count > 0)\n                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Journal, state.LastStatus);\n"
+        },
+        {
+          "before": "",
+          "after": "    }\n\n    private bool HasCompleteLiveAccountingMasterAuthority(\n        ClientProfile client,\n        TallyVoucherChangeMarker marker)\n    {\n        var live = _masterRepository.Get(client.Id, client.FinancialYear, includeArchived: false)\n            .Where(master => MasterAuthority.IsTallySource(master.Source))\n            .ToArray();\n        var ledgers = live.Where(master => master.Type.Equals(\"Ledger\", StringComparison.OrdinalIgnoreCase)).ToArray();\n        var groups = live.Where(master => master.Type.Equals(\"Group\", StringComparison.OrdinalIgnoreCase)).ToArray();\n        var ledgerReady = marker.LedgerCount <= 0\n            ? ledgers.All(master => master.TallyMasterId.Trim().Length > 0 && master.TallyGuid.Trim().Length > 0)\n            : ledgers.Length >= marker.LedgerCount && ledgers.All(master => master.TallyMasterId.Trim().Length > 0 && master.TallyGuid.Trim().Length > 0);\n        var groupReady = marker.GroupCount <= 0\n            ? groups.All(master => master.TallyMasterId.Trim().Length > 0 && master.TallyGuid.Trim().Length > 0)\n            : groups.Length >= marker.GroupCount && groups.All(master => master.TallyMasterId.Trim().Length > 0 && master.TallyGuid.Trim().Length > 0);\n        return ledgerReady && groupReady;\n    }\n\n    private bool HasCompleteActiveFyVoucherAuthority(\n        ClientProfile client,\n        TallyCompanyInfo company,\n        TallyBankSyncState? state)\n    {\n        var (fromDate, toDate) = FinancialYearDates(client.FinancialYear);\n        var localCount = _repository.GetVoucherIndexRange(\n            company.CompanyKey, client.FinancialYear, fromDate, toDate).Count;\n        if (state is null || state.LastFyVoucherCount < 0)\n        {\n            // FIXED41: every legacy checkpoint is unproved for the active FY because the\n            // historical field stored only company-wide $$NumVouchers. Force exactly one\n            // baseline to establish the FY-specific count, including a proved zero-FY case.\n            return false;\n        }\n        if (localCount != state.LastFyVoucherCount) return false;\n        return _repository.HasCompleteVoucherXmlAuthority(company.CompanyKey, client.FinancialYear, localCount);\n"
+        }
+      ]
+    }
+  ]
+}

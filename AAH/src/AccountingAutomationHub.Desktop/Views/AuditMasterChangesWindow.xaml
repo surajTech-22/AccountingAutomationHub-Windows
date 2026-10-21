@@ -1,0 +1,111 @@
+<Window x:Class="AccountingAutomationHub.Desktop.Views.AuditMasterChangesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Ledger Rename · Selected Audit Vouchers" Width="1260" Height="720" MinWidth="980" MinHeight="560"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource AppBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <TextBlock Text="Ledger Rename" FontSize="25" FontWeight="SemiBold"/>
+            <TextBlock Text="Only Ledger Masters used by the selected vouchers are renamed. The parent Group is shown as context, and each row has its own replacement selector, hover voucher preview and Rename action." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="SearchBox" TextChanged="FilterChanged" ToolTip="Search Ledger or voucher number"/>
+            <Button Grid.Column="1" Content="Refresh" Margin="8,0,0,0" Padding="10,5" Click="Refresh_Click"/>
+        </Grid>
+
+        <DataGrid x:Name="UsageGrid" Grid.Row="2" AutoGenerateColumns="False" CanUserAddRows="False" SelectionMode="Single" SelectionUnit="FullRow">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Existing Ledger" Binding="{Binding ExistingMaster}" Width="2*" MinWidth="220" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="1.35*" MinWidth="150" IsReadOnly="True"/>
+                <DataGridTemplateColumn Header="Vouchers" Width="86" IsReadOnly="True">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Padding="7,3" MinWidth="58" HorizontalAlignment="Left" Tag="{Binding}" Click="PreviewVouchers_Click" MouseEnter="PreviewVouchers_MouseEnter" MouseLeave="PreviewVouchers_MouseLeave" ToolTip="Hover to preview vouchers · click to pin">
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="▦" Margin="0,0,5,0"/><TextBlock Text="{Binding VoucherCount}" FontWeight="SemiBold"/></StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Uses" Binding="{Binding LineCount}" Width="62" IsReadOnly="True"/>
+                <DataGridTemplateColumn Header="Rename / Replace With" Width="2.1*" MinWidth="260">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox IsEditable="True" IsTextSearchEnabled="True" MinWidth="260"
+                                      ItemsSource="{Binding DataContext.LedgerOptions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Text="{Binding ReplacementMaster, UpdateSourceTrigger=PropertyChanged}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="Action" Width="92" IsReadOnly="True">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate><Button Content="Rename" Padding="10,4" Tag="{Binding}" Click="RenameRow_Click"/></DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="3" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock x:Name="PreviewText" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <TextBlock Text="Exact selected-voucher scope is retained. 'Change only this entry' still limits a rename to the active voucher; otherwise only exact Ledger usages inside the originally selected voucher set are changed." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="Close" Padding="14,7" Click="Close_Click"/>
+        </Grid>
+
+        <Border x:Name="LedgerVoucherPreviewLayer" Grid.Row="1" Grid.RowSpan="3" Panel.ZIndex="500" Visibility="Collapsed"
+                Margin="180,44,0,48" Padding="10" CornerRadius="10" ClipToBounds="False"
+                Background="{DynamicResource AppBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                MouseEnter="LedgerVoucherPreviewHost_MouseEnter" MouseLeave="LedgerVoucherPreviewHost_MouseLeave">
+            <Grid ClipToBounds="False">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="2,0,2,6">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock x:Name="LedgerVoucherPreviewTitle" Text="Voucher Preview" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="Move over a voucher to expand it. Click the voucher to open it in the Advanced Voucher Workbench." Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Close" Padding="9,4" Click="CloseVoucherPreview_Click"/>
+                </Grid>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ClipToBounds="False">
+                    <ItemsControl x:Name="LedgerVoucherPreviewItems" Margin="26,18,26,26" ClipToBounds="False">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel Orientation="Horizontal" ClipToBounds="False"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="Panel.ZIndex" Value="1"/>
+                                <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+                                <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1" ScaleY="1"/></Setter.Value></Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Panel.ZIndex" Value="1000"/>
+                                        <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.18" ScaleY="1.18"/></Setter.Value></Setter>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Width="214" MinHeight="176" Margin="8" Padding="0" Background="Transparent" BorderThickness="0"
+                                        HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Tag="{Binding SessionId}" Click="OpenVoucherFromPreview_Click" Cursor="Hand">
+                                    <Border Padding="9" CornerRadius="8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" ClipToBounds="False">
+                                        <Grid ClipToBounds="False">
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding VoucherNumberDisplay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" Text="Open ›" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/></Grid>
+                                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0"><TextBlock Text="{Binding Date, StringFormat=dd-MM-yyyy}"/><TextBlock Text="  ·  "/><TextBlock Text="{Binding VoucherType}" FontWeight="SemiBold"/></StackPanel>
+                                            <Grid Grid.Row="2" Margin="0,6,0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Party / Ledger" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding PartyOrLedger}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/></StackPanel><StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock Text="Amount" FontSize="9" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right"/><TextBlock Text="{Binding Amount, StringFormat=N2}" FontWeight="SemiBold" HorizontalAlignment="Right"/></StackPanel></Grid>
+                                            <Border Grid.Row="3" Padding="5" Background="{DynamicResource AppBackgroundBrush}" CornerRadius="5" ClipToBounds="False"><ItemsControl ItemsSource="{Binding LedgerLines}" ClipToBounds="False"><ItemsControl.ItemTemplate><DataTemplate><Grid Margin="0,1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="32"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Ledger}" FontSize="9" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" Text="{Binding Direction}" FontSize="9" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="{Binding Amount, StringFormat=N2}" FontSize="9" HorizontalAlignment="Right"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></Border>
+                                            <TextBlock Grid.Row="4" Margin="0,5,0,0" Text="{Binding ValidationStatus}" FontSize="9" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                    </Border>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
