@@ -1,19 +1,22 @@
 # Accounting Automation Hub (AAH) — Windows
 
-Private source repository for AAH Windows and Tally integration.
+Private repository for the AAH Windows desktop application, its .NET 10 solution, regression tests, and Tally integration.
 
-## Current status
+## Source status
 
-**Repository initialized. Full CL017 R14 source upload is still pending.** The source was prepared in the ChatGPT conversation as `AAH_GITHUB_WINDOWS_COMPILE_SOURCE_R14.zip`; it has not been transferred into GitHub yet.
+The **CL017 R14 source tree has been imported and is available at [AAH/](AAH/)**. It was reconstructed from the complete, SHA256-verified source archive in [source-bundle/](source-bundle/) and committed without modifying production accounting source logic.
 
-The Windows compile workflow verifies that the source solution is present before trying to restore, build or publish it. A missing solution must fail clearly, never be reported as a successful build.
+The original source archive has SHA256:
+`c3cd0286e81f43b6b427081cd3313fe08153a86baba032da3c2d8b2b3382571f`.
 
-## Building
+## Windows compilation
 
-GitHub Actions > **AAH Windows Compile** runs on Windows with .NET 10 and records an MSBuild diagnostic binlog. It builds the full solution and publishes the Desktop app into a temporary CI folder.
+[AAH Windows Compile](.github/workflows/windows-compile.yml) builds the **currently committed** `AAH/AccountingAutomationHub.sln` on a Windows runner with .NET 10, compiles seven regression-test projects, verifies WPF publish output, and stores MSBuild diagnostic logs. It runs on pushes and pull requests to `main`.
 
-## Release safety
+A compilation failure is not bypassed or marked successful. Successful CI compilation alone does not establish that live Tally imports or AAH installer rollout are safe.
 
-Compilation alone does **not** authorize deployment. Future update rollouts must pass all Windows regression tests and signed/hashed release validation, preserve accounting files and Tally MASTERID/voucher identity, and support non-destructive rollback. No unattended production rollout is enabled yet.
+## Future update rollout policy
 
-Do not commit client company data, Tally backups, invoices, credentials, tokens, runtime databases, logs, diagnostic archives, or generated installer artifacts.
+No automatic installation or production deployment is enabled at this point. A future controlled release must verify all required executable regression suites and source/MASTERID/voucher gates, then produce a reproducible Windows update package with a SHA256 release manifest. The installed AAH updater must verify the signed release identity, stop the correct running process, preserve local accounting and settings data, support rollback, and only mark installation successful after post-update health checks. Rollouts should be staged and revocable.
+
+Never add company data, Tally backup files, invoices, passwords, tokens, diagnostics, or runtime databases to this repository.
