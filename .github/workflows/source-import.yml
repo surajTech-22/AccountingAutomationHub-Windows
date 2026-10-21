@@ -1,0 +1,67 @@
+name: Import Verified AAH Source Tree
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'source-bundle/**'
+      - '.github/workflows/source-import.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aah-source-import
+  cancel-in-progress: false
+
+jobs:
+  source-import:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Verify and unpack CL017 R14 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = @(Get-ChildItem -LiteralPath 'source-bundle' -Filter 'part*.b64' -File | Sort-Object Name)
+          if ($parts.Count -ne 18) { throw "Missing source chunk(s): $($parts.Count)/18" }
+          $encoded = [System.Text.StringBuilder]::new()
+          foreach ($part in $parts) {
+            $text = [System.IO.File]::ReadAllText($part.FullName, [System.Text.Encoding]::ASCII).Trim()
+            if ($text -notmatch '^[A-Za-z0-9+/=]+$') { throw "Invalid base64 chunk $($part.Name)" }
+            [void]$encoded.Append($text)
+          }
+          $bytes = [Convert]::FromBase64String($encoded.ToString())
+          if ($bytes.Length -ne 5070732) { throw "Unexpected source size: $($bytes.Length)" }
+          $dest = Join-Path $env:RUNNER_TEMP 'aah-cl017-r14.zip'
+          [System.IO.File]::WriteAllBytes($dest, $bytes)
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLowerInvariant()
+          if ($sha -ne 'c3cd0286e81f43b6b427081cd3313fe08153a86baba032da3c2d8b2b3382571f') { throw 'Source SHA256 mismatch; refusing to import.' }
+          $scratch = Join-Path $env:RUNNER_TEMP 'aah-verified-source'
+          Expand-Archive -LiteralPath $dest -DestinationPath $scratch -Force
+          if (-not (Test-Path (Join-Path $scratch 'AAH/AccountingAutomationHub.sln'))) { throw 'Verified ZIP missing AAH solution.' }
+          if (Test-Path 'AAH') { throw 'AAH source tree already exists; refusing to overwrite it.' }
+          Copy-Item -LiteralPath (Join-Path $scratch 'AAH') -Destination 'AAH' -Recurse -Force
+          Write-Host 'Verified CL017 R14 source tree is staged.'
+
+      - name: Commit extracted source with bot identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- AAH
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to stage verified source.' }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { Write-Host 'No source changes.'; exit 0 }
+          git commit -m 'Import SHA256-verified CL017 R14 source tree'
+          if ($LASTEXITCODE -ne 0) { throw 'Commit of verified source failed.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push the verified source commit.' }
