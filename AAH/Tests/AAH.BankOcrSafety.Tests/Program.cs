@@ -11,6 +11,7 @@ var scenarios = new (string Name, bool BadDate, bool MissingNarration, bool Miss
     ("incomplete statement summary blocked", false, false, true, false, false),
     ("multiline continuation preserved", false, false, false, true, true),
     ("out-of-period posting date blocked", false, false, false, false, false),
+    ("one-paisa printed summary discrepancy blocked", false, false, false, false, false),
 };
 int passed = 0;
 var root = Path.Combine(Path.GetTempPath(), "AAH-Bank-Ocr-Safety-" + Guid.NewGuid().ToString("N"));
@@ -35,7 +36,9 @@ try
         var summaryHeader = "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |";
         var summaryData = scene.MissingSummary
             ? "| 0.00 | 1 | 1 | 25.00 | 100.00 | |"
-            : "| 0.00 | 1 | 1 | 25.00 | 100.00 | 75.00 |";
+            : scene.Name == "one-paisa printed summary discrepancy blocked"
+                ? "| 0.00 | 1 | 1 | 25.00 | 100.01 | 75.00 |"
+                : "| 0.00 | 1 | 1 | 25.00 | 100.00 | 75.00 |";
         var blocks = new[]
         {
             new { block_label = "text", block_content = scene.Name == "out-of-period posting date blocked"
