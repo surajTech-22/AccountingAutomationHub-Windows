@@ -20,6 +20,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
+      - name: Confirm Windows runner started
+        shell: pwsh
+        run: Write-Host 'AAH Windows compilation runner started'
+
       - name: Check out current AAH source
         uses: actions/checkout@v4
 
