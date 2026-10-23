@@ -12,6 +12,7 @@ var scenarios = new (string Name, bool BadDate, bool MissingNarration, bool Miss
     ("multiline continuation preserved", false, false, false, true, true),
     ("out-of-period posting date blocked", false, false, false, false, false),
     ("one-paisa printed summary discrepancy blocked", false, false, false, false, false),
+    ("no summary and unanchored opening blocked", false, false, false, false, false),
 };
 int passed = 0;
 var root = Path.Combine(Path.GetTempPath(), "AAH-Bank-Ocr-Safety-" + Guid.NewGuid().ToString("N"));
@@ -45,7 +46,10 @@ try
                 ? string.Join(Environment.NewLine, "HDFC BANK", "Statement of Account", "From: 01/08/2025 To: 30/08/2025", "Account No: 9999999999")
                 : "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
             new { block_label = "table", block_content = string.Join("\n", rows) },
-            new { block_label = "table", block_content = summaryHeader + "\n" + summaryData },
+            new {
+                block_label = scene.Name == "no summary and unanchored opening blocked" ? "text" : "table",
+                block_content = scene.Name == "no summary and unanchored opening blocked" ? "" : summaryHeader + "\n" + summaryData
+            },
         };
         var jsonPath = Path.Combine(caseDir, "page.json");
         File.WriteAllText(jsonPath, JsonSerializer.Serialize(new { parsing_res_list = blocks }));
