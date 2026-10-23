@@ -139,6 +139,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - project: AAH.BankOcrSafety.Tests
+            marker: 'PASS: 5/5 Bank OCR verifier safety scenarios.'
           - project: AAH.BankXmlValidator.Tests
             marker: 'PASS: 43/43 Bank XML scenarios.'
           - project: AAH.CacheLifecycle.Tests
