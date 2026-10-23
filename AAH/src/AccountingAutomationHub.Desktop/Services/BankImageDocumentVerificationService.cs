@@ -16,7 +16,7 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// </summary>
 internal sealed class BankImageDocumentVerificationService
 {
-    private static readonly string[] DateFormats = ["dd-MM-yyyy", "dd/MM/yyyy", "dd.MM.yyyy"];
+    private static readonly string[] DateFormats = ["dd-MM-yyyy", "dd/MM/yyyy", "dd.MM.yyyy", "dd-MM-yy", "dd/MM/yy", "dd.MM.yy", "d-M-yy", "d/M/yy"];
 
     private static readonly IReadOnlyDictionary<string, string[]> BankAliases =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -442,7 +442,24 @@ internal sealed class BankImageDocumentVerificationService
                 closingRow = new BalanceEvidence(balanceRaw, ParseSignedMoney(balanceRaw));
                 continue;
             }
-            if (dateRaw.Length == 0 && description.Length == 0 && Get(row, "debit").Length == 0 && Get(row, "credit").Length == 0) continue;
+            // Printed narrations and UPI identifiers commonly wrap across several
+            // visual lines. OCR often emits these as rows without a repeated date.
+            // Keep them on their parent transaction rather than inventing another
+            // bank entry; still reject rows with unexpected standalone amounts.
+            if (dateRaw.Length == 0 && Get(row, "debit").Length == 0 &&
+                Get(row, "credit").Length == 0 && balanceRaw.Length == 0)
+            {
+                if (transactions.Count > 0)
+                {
+                    var previous = transactions[^1];
+                    if (description.Length > 0)
+                        previous.Description = string.Join(" ", new[] { previous.Description, description }.Where(part => part.Length > 0));
+                    var extraRef = Get(row, "reference");
+                    if (extraRef.Length > 0)
+                        previous.Reference = string.Join(" ", new[] { previous.Reference, extraRef }.Where(part => part.Length > 0));
+                }
+                continue;
+            }
 
             var debitRaw = Get(row, "debit");
             var creditRaw = Get(row, "credit");
@@ -490,8 +507,8 @@ internal sealed class BankImageDocumentVerificationService
 
             for (var i = 0; i < header.Count; i++)
             {
-                if (header[i].Contains("VALUE DATE", StringComparison.Ordinal)) mapping["value_date"] = i;
-                if (new[] { "REFERENCE", "CHEQUE", "CHQ NO", "REF NO" }.Any(word => header[i].Contains(word, StringComparison.Ordinal))) mapping["reference"] = i;
+                if (header[i].Contains("VALUE DATE", StringComparison.Ordinal) || header[i].Contains("VALUE DT", StringComparison.Ordinal)) mapping["value_date"] = i;
+                if (new[] { "REFERENCE", "CHEQUE", "CHQ", "REF NO", "REF.", "REF/" }.Any(word => header[i].Contains(word, StringComparison.Ordinal))) mapping["reference"] = i;
             }
 
             if (new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey))
@@ -529,8 +546,8 @@ internal sealed class BankImageDocumentVerificationService
             var opening = Find("BROUGHT FORWARD", "OPENING BALANCE", "OPENING BAL");
             var drCount = Find("DR COUNT", "DEBIT COUNT");
             var crCount = Find("CR COUNT", "CREDIT COUNT");
-            var totalDebits = Find("TOTAL DEBITS", "TOTAL DEBIT");
-            var totalCredits = Find("TOTAL CREDITS", "TOTAL CREDIT");
+            var totalDebits = Find("TOTAL DEBITS", "TOTAL DEBIT", "DEBITS");
+            var totalCredits = Find("TOTAL CREDITS", "TOTAL CREDIT", "CREDITS");
             var closing = Find("CLOSING BALANCE", "CLOSING BAL");
             if (new[] { opening, drCount, crCount, totalDebits, totalCredits, closing }.Count(value => value is not null) < 4) continue;
 
