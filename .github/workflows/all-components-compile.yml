@@ -140,7 +140,7 @@ jobs:
       matrix:
         include:
           - project: AAH.BankOcrSafety.Tests
-            marker: 'PASS: 7/7 Bank OCR verifier safety scenarios.'
+            marker: 'PASS: 8/8 Bank OCR verifier safety scenarios.'
           - project: AAH.BankPdfRouting.Tests
             marker: 'PASS: 7/7 Bank PDF routing scenarios.'
           - project: AAH.BankXmlValidator.Tests
