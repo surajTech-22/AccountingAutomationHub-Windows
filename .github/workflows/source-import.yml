@@ -1,11 +1,6 @@
 name: Import Verified AAH Source Tree
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'source-bundle/**'
-      - '.github/workflows/source-import.yml'
   workflow_dispatch:
 
 permissions:
