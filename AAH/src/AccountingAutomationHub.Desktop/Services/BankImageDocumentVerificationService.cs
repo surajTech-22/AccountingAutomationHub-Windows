@@ -271,6 +271,8 @@ internal sealed class BankImageDocumentVerificationService
             PrintedPage = printedPage,
             PrintedTotal = printedTotal,
             Transactions = tx.Transactions,
+            TransactionMapping = tx.Mapping,
+            RawBlocks = blocks,
             BroughtForward = tx.BroughtForward,
             ClosingRow = tx.ClosingRow,
             Summary = summary,
@@ -432,9 +434,12 @@ internal sealed class BankImageDocumentVerificationService
         return (null, null);
     }
 
-    private static CanonicalTransactionTable CanonicalTransactions(IReadOnlyList<OcrBlock> blocks)
+    private static CanonicalTransactionTable CanonicalTransactions(
+        IReadOnlyList<OcrBlock> blocks,
+        IReadOnlyDictionary<string, int>? inheritedMapping = null)
     {
-        var identified = IdentifyTransactionTable(blocks);
+        var identified = IdentifyTransactionTable(blocks) ??
+            (inheritedMapping is not null ? IdentifyContinuationTable(blocks, inheritedMapping) : null);
         if (identified is null) return new CanonicalTransactionTable();
 
         var transactions = new List<PageTransaction>();
@@ -447,7 +452,7 @@ internal sealed class BankImageDocumentVerificationService
             return Clean(row[index]);
         }
 
-        for (var rowIndex = 1; rowIndex < identified.Rows.Count; rowIndex++)
+        for (var rowIndex = identified.HasHeader ? 1 : 0; rowIndex < identified.Rows.Count; rowIndex++)
         {
             var row = identified.Rows[rowIndex];
             var description = Get(row, "description");
@@ -507,6 +512,7 @@ internal sealed class BankImageDocumentVerificationService
         return new CanonicalTransactionTable
         {
             Transactions = transactions,
+            Mapping = identified.Mapping,
             BroughtForward = broughtForward,
             ClosingRow = closingRow
         };
@@ -535,7 +541,7 @@ internal sealed class BankImageDocumentVerificationService
             }
 
             if (new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey))
-                return new IdentifiedTable(rows, mapping);
+                return new IdentifiedTable(rows, mapping, true);
 
             void FindSemantic(string semantic, IReadOnlyList<string> words)
             {
@@ -546,6 +552,35 @@ internal sealed class BankImageDocumentVerificationService
                     break;
                 }
             }
+        }
+        return null;
+    }
+
+    // Follow the source-visible column mapping from the preceding page only when
+    // the next page has a table with no repeated header. Require a valid first
+    // transaction, financial columns and a parseable balance to prevent the
+    // separate statement-summary table from being mistaken for transactions.
+    private static IdentifiedTable? IdentifyContinuationTable(
+        IReadOnlyList<OcrBlock> blocks,
+        IReadOnlyDictionary<string, int> mapping)
+    {
+        if (!new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey))
+            return null;
+
+        foreach (var block in blocks)
+        {
+            if (!NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal)) continue;
+            var rows = TableRows(block.Content);
+            if (rows.Count == 0) continue;
+            var first = rows[0];
+            string Cell(string name) =>
+                mapping.TryGetValue(name, out var index) && index >= 0 && index < first.Count
+                    ? Clean(first[index]) : string.Empty;
+            if (ParseDate(Cell("date")) is null) continue;
+            if (Cell("description").Length == 0) continue;
+            if (ParseSignedMoney(Cell("balance")) is null) continue;
+            if (ParseMoney(Cell("debit")) is null && ParseMoney(Cell("credit")) is null) continue;
+            return new IdentifiedTable(rows, mapping, false);
         }
         return null;
     }
@@ -686,6 +721,37 @@ internal sealed class BankImageDocumentVerificationService
     private static BankVerifiedDocument VerifyDocument(int documentNumber, IReadOnlyList<PageProfile> ordered)
     {
         var metadata = AggregateMetadata(ordered);
+        // Some banks print the table headings only on the first statement page.
+        // Restore the carried-over mapping after page grouping and ordering,
+        // never by assuming a bank-specific column position.
+        IReadOnlyDictionary<string, int>? activeMapping =
+            ordered.Select(page => page.TransactionMapping).FirstOrDefault(mapping => mapping is not null);
+        foreach (var page in ordered)
+        {
+            if (page.TransactionMapping is not null)
+            {
+                activeMapping = page.TransactionMapping;
+                continue;
+            }
+            if (page.Transactions.Count > 0 || activeMapping is null) continue;
+            var continued = CanonicalTransactions(page.RawBlocks, activeMapping);
+            if (continued.Transactions.Count == 0) continue;
+            page.Transactions = continued.Transactions;
+            page.TransactionMapping = continued.Mapping;
+            page.BroughtForward = continued.BroughtForward;
+            page.ClosingRow = continued.ClosingRow;
+            var first = continued.Transactions[0];
+            var last = continued.Transactions[^1];
+            page.FirstDate = first.Date;
+            page.LastDate = last.Date;
+            page.FirstDebit = first.Debit;
+            page.FirstCredit = first.Credit;
+            page.FirstBalance = first.Balance;
+            page.LastBalance = last.Balance;
+            page.ImpliedOpeningRaw = first.Balance is not null
+                ? RoundMoney(first.Balance.Value + first.Debit - first.Credit) : null;
+        }
+
         var (summary, summaryIssues) = UniqueSummary(ordered);
         var (transactions, duplicateCount) = CombineTransactions(ordered);
         var issues = new List<string>(summaryIssues);
@@ -925,12 +991,18 @@ internal sealed class BankImageDocumentVerificationService
             });
         }
 
+        // An unresolved page boundary must not be promoted to VERIFIED solely
+        // because printed page numbers are sequential.
+        var boundariesVerified = boundaries.Values.All(value => value == "VERIFIED");
         var pageStatus = "VERIFIED";
-        if (pageIssues.Count > 0) pageStatus = "REVIEW_REQUIRED";
+        if (pageIssues.Count > 0 || !boundariesVerified) pageStatus = "REVIEW_REQUIRED";
         else if (pageAudit.Any(page => page.PrintedPage is null))
-            pageStatus = boundaries.Values.All(value => value == "VERIFIED") ? "INFERRED_VERIFIED" : "INFERRED";
-        else if (boundaries.Values.All(value => value == "VERIFIED")) pageStatus = "VERIFIED";
+            pageStatus = "INFERRED_VERIFIED";
 
+        if (ordered.Any(page => page.Transactions.Count == 0 && page.Summary is null))
+            issues.Add("A statement page has no recognized transaction rows or summary.");
+        if (pageStatus == "REVIEW_REQUIRED")
+            issues.Add("Statement page sequencing or balance continuity requires review.");
         if (metadata.BankStatus == "REVIEW_REQUIRED") issues.Add("Conflicting bank evidence in grouped pages.");
         if (metadata.AccountConflict) issues.Add("Conflicting account numbers in grouped pages.");
         if (metadata.PeriodConflict) issues.Add("Conflicting statement periods in grouped pages.");
@@ -1335,7 +1407,10 @@ internal sealed class BankImageDocumentVerificationService
     private sealed class OcrBlock { public string Label { get; set; } = string.Empty; public string Content { get; set; } = string.Empty; }
     private sealed record BankNameMatch(int Start, int End, string Bank, string Alias);
     private sealed record BalanceEvidence(string Raw, decimal? Value);
-    private sealed record IdentifiedTable(IReadOnlyList<IReadOnlyList<string>> Rows, IReadOnlyDictionary<string, int> Mapping);
+    private sealed record IdentifiedTable(
+        IReadOnlyList<IReadOnlyList<string>> Rows,
+        IReadOnlyDictionary<string, int> Mapping,
+        bool HasHeader);
     private sealed record DpState(double Score, IReadOnlyList<int> Path);
     private sealed record SummaryEvaluation(bool Exact);
     private sealed record SummaryCheck(string Name, string Status);
@@ -1371,6 +1446,7 @@ internal sealed class BankImageDocumentVerificationService
     private sealed class CanonicalTransactionTable
     {
         public IReadOnlyList<PageTransaction> Transactions { get; set; } = [];
+        public IReadOnlyDictionary<string, int>? Mapping { get; set; }
         public BalanceEvidence? BroughtForward { get; set; }
         public BalanceEvidence? ClosingRow { get; set; }
     }
@@ -1403,6 +1479,8 @@ internal sealed class BankImageDocumentVerificationService
         public int? PrintedPage { get; set; }
         public int? PrintedTotal { get; set; }
         public IReadOnlyList<PageTransaction> Transactions { get; set; } = [];
+        public IReadOnlyDictionary<string, int>? TransactionMapping { get; set; }
+        public IReadOnlyList<OcrBlock> RawBlocks { get; set; } = [];
         public BalanceEvidence? BroughtForward { get; set; }
         public BalanceEvidence? ClosingRow { get; set; }
         public StatementSummary? Summary { get; set; }
