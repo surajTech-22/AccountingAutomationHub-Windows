@@ -717,7 +717,11 @@ internal sealed class BankImageDocumentVerificationService
 
         var rawEval = EvaluateSummary(summary, opening, transactions, useRequired: false);
         var correctedEval = EvaluateSummary(summary, opening, transactions, useRequired: true);
-        var summaryProvesCandidates = summary is not null && correctedEval.Exact && !rawEval.Exact;
+        var summaryHasAllControls = summary is not null &&
+            summary.Opening is not null && summary.DebitCount is not null &&
+            summary.CreditCount is not null && summary.TotalDebits is not null &&
+            summary.TotalCredits is not null && summary.Closing is not null;
+        var summaryProvesCandidates = summaryHasAllControls && correctedEval.Exact && !rawEval.Exact;
 
         foreach (var row in transactions.Where(row => row.IsCorrectionCandidate))
         {
@@ -788,6 +792,13 @@ internal sealed class BankImageDocumentVerificationService
         var summaryStatus = "NOT_AVAILABLE";
         if (summary is not null)
         {
+            // Do not treat missing OCR summary fields as positive proof.
+            // A partially parsed summary requires manual review, even if
+            // the subset that happened to be read matches the transaction sums.
+            if (summary.Opening is null || summary.DebitCount is null ||
+                summary.CreditCount is null || summary.TotalDebits is null ||
+                summary.TotalCredits is null || summary.Closing is null)
+                issues.Add("Statement summary contains unrecognized financial control fields.");
             var checks = new[]
             {
                 CompareMoney("opening", summary.Opening, opening),
@@ -801,9 +812,21 @@ internal sealed class BankImageDocumentVerificationService
             summaryStatus = checks.All(check => check.Status is "MATCH" or "NOT_PRINTED") ? "VERIFIED" : "REVIEW_REQUIRED";
         }
 
+        // OCR can balance every amount while still misreading mandatory text.
+        // Never silently promote a financial-only match as a verified import when
+        // a transaction date, narration, or supplied value-date is unreadable.
+        if (transactions.Count == 0)
+            issues.Add("No transaction rows were recognized; automatic import is blocked.");
+
         DateTime? lastDate = null;
         foreach (var row in transactions)
         {
+            if (row.Date is null)
+                issues.Add($"Transaction {row.Sequence}: posting date was not recognized ({row.DateRaw}).");
+            if (string.IsNullOrWhiteSpace(row.Description))
+                issues.Add($"Transaction {row.Sequence}: narration is missing.");
+            if (!string.IsNullOrWhiteSpace(row.ValueDateRaw) && row.ValueDate is null)
+                issues.Add($"Transaction {row.Sequence}: value date was not recognized ({row.ValueDateRaw}).");
             if (row.Date is not null && lastDate is not null && row.Date.Value < lastDate.Value)
                 issues.Add($"Transaction dates decrease at sequence {row.Sequence}: {row.DateRaw}.");
             if (row.Date is not null) lastDate = row.Date;
