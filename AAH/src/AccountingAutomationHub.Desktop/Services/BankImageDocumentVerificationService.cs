@@ -1389,7 +1389,11 @@ internal sealed class BankImageDocumentVerificationService
     private static decimal? ParseSignedMoney(string? value) => ParseMoney(value);
     private static decimal? AbsNullable(decimal? value) => value is null ? null : Math.Abs(value.Value);
     private static decimal RoundMoney(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
-    private static bool MoneyEqual(decimal? left, decimal? right) => left is not null && right is not null && Math.Abs(RoundMoney(left.Value - right.Value)) <= 0.01m;
+    // Bank statements settle at two decimal places. Even a one-paisa difference
+    // can indicate an omitted transaction or OCR digit error; no tolerance.
+    private static bool MoneyEqual(decimal? left, decimal? right) =>
+        left is not null && right is not null &&
+        RoundMoney(left.Value) == RoundMoney(right.Value);
     private static bool BothDifferent(decimal? left, decimal? right) => left is not null && right is not null && !MoneyEqual(left, right);
     private static bool BothDifferent(int? left, int? right) => left is not null && right is not null && left != right;
     private static bool MatchOrNotPrinted(decimal? printed, decimal? calculated) => printed is null || MoneyEqual(printed, calculated);
