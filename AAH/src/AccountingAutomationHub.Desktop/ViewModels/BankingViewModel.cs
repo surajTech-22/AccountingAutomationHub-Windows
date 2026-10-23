@@ -4633,6 +4633,15 @@ public sealed class BankingViewModel : PageViewModel
                     continue;
                 }
 
+                // Classify before import; OCR handles scanned, mixed and uncertain files.
+                var pdfKind = BankPdfDocumentClassifier.Classify(sourcePath);
+                if (pdfKind != BankPdfDocumentKind.Digital)
+                {
+                    StatusText = $"PDF {index + 1:N0} of {dialog.FileNames.Length:N0}: {pdfKind} PDF routed to advanced OCR…";
+                    ocrSources.Add(sourcePath);
+                    continue;
+                }
+
                 PdfPipelineFileResult? pipeline = null;
                 try
                 {
