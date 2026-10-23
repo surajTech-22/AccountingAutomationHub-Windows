@@ -1018,13 +1018,13 @@ internal sealed class BankImageDocumentVerificationService
             openingSource == "FIRST_PAGE_BROUGHT_FORWARD" &&
             (pageStatus.Equals("VERIFIED", StringComparison.Ordinal) ||
              pageStatus.Equals("INFERRED_VERIFIED", StringComparison.Ordinal));
-        var overall = issues.Count > 0
+        // A plausible arithmetic correction never substitutes for independent
+        // source evidence. Do not let AUTO_CORRECTED bypass a missing or unusable
+        // printed summary unless a printed BROUGHT FORWARD anchors the opening.
+        var hasIndependentFinancialProof = summaryStatus == "VERIFIED" || pageVerifiedWithoutSummary;
+        var overall = issues.Count > 0 || !hasIndependentFinancialProof
             ? "REVIEW_REQUIRED"
-            : corrections.Count > 0
-                ? "VERIFIED_WITH_CORRECTIONS"
-                : summaryStatus == "VERIFIED" || pageVerifiedWithoutSummary
-                    ? "VERIFIED"
-                    : "REVIEW_REQUIRED";
+            : corrections.Count > 0 ? "VERIFIED_WITH_CORRECTIONS" : "VERIFIED";
 
         return new BankVerifiedDocument
         {
