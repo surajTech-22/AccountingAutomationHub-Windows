@@ -81,7 +81,55 @@ try
         Console.WriteLine("PASS: " + scene.Name + " (" + doc.Status + ")");
         passed++;
     }
-    Console.WriteLine($"PASS: {passed}/{scenarios.Length} Bank OCR verifier safety scenarios.");
+    // Regression for the original failure mode: one page recognized from a
+    // two-page bank statement must never be treated as a complete import.
+    var incompleteDir = Path.Combine(root, "missing-page");
+    Directory.CreateDirectory(incompleteDir);
+    var twoPagePdf = Path.Combine(incompleteDir, "two-pages.pdf");
+    var header = new System.Text.StringBuilder("%PDF-1.4\n");
+    var objects = new[]
+    {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>"
+    };
+    var offsets = new List<int> { 0 };
+    for (var obj = 0; obj < objects.Length; obj++)
+    {
+        offsets.Add(System.Text.Encoding.ASCII.GetByteCount(header.ToString()));
+        header.Append(obj + 1).Append(" 0 obj\n").Append(objects[obj]).Append("\nendobj\n");
+    }
+    var xref = System.Text.Encoding.ASCII.GetByteCount(header.ToString());
+    header.Append("xref\n0 5\n0000000000 65535 f \n");
+    for (var obj = 1; obj <= objects.Length; obj++)
+        header.Append(offsets[obj].ToString("D10")).Append(" 00000 n \n");
+    header.Append("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n").Append(xref).Append("\n%%EOF\n");
+    File.WriteAllText(twoPagePdf, header.ToString(), System.Text.Encoding.ASCII);
+    var incompleteJson = Path.Combine(incompleteDir, "page.json");
+    File.WriteAllText(incompleteJson, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = "HDFC BANK\\nStatement of Account" },
+            new { block_label = "table", block_content = "| Date | Narration | Debit | Credit | Balance |\\n| 29/08/25 | Credit | 0.00 | 10.00 | 10.00 |" },
+        }
+    }));
+    var incomplete = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[] { new BankOcrRecognitionPage
+        {
+            Id = "S001P001", SourcePath = twoPagePdf, SourceIndex = 1,
+            SourcePage = 1, JsonPath = incompleteJson
+        } }
+    };
+    var incompleteResult = new BankImageDocumentVerificationService()
+        .Verify(incomplete, incompleteDir, null, CancellationToken.None);
+    if (incompleteResult.WasSuccessful || !incompleteResult.ParseIssues.Any(issue => issue.Contains("1 of 2 physical page", StringComparison.Ordinal)))
+        throw new Exception("Incomplete two-page PDF did not fail the original page count check.");
+    Console.WriteLine("PASS: missing scanned PDF page blocked.");
+    Console.WriteLine($"PASS: {passed + 1}/{scenarios.Length + 1} Bank OCR verifier safety scenarios.");
 }
 finally
 {
