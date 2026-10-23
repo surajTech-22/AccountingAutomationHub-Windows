@@ -68,6 +68,12 @@ try
             throw new Exception(scene.Name + ": unexpected status " + doc.Status + ": " + string.Join("; ", doc.Issues));
         if (doc.Transactions.Count != 2)
             throw new Exception(scene.Name + ": transaction rows lost or invented.");
+        if (doc.Transactions[0].Reference != "000000012345" || doc.Transactions[1].Reference != "CDT123456789")
+            throw new Exception(scene.Name + ": HDFC Chq/Ref.No column was not mapped.");
+        if (doc.Transactions[0].ValueDate is null || doc.Transactions[1].ValueDate is null)
+            throw new Exception(scene.Name + ": HDFC Value Dt column was not parsed.");
+        if (!scene.BadDate && doc.Transactions[0].Date?.Year != 2025)
+            throw new Exception(scene.Name + ": two-digit bank date year was not expanded correctly.");
         if (scene.Wrapped && !doc.Transactions[0].Description.Contains("EXTRA NARRATION", StringComparison.Ordinal))
             throw new Exception(scene.Name + ": wrapped narration was not attached to parent transaction.");
         if (scene.ExpectedVerified && (doc.TotalDebits != 25.00m || doc.TotalCredits != 100.00m || doc.ClosingBalance != 75.00m))
