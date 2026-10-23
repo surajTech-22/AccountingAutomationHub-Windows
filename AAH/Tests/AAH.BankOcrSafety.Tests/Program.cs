@@ -223,7 +223,7 @@ try
     }
     if (creditIndex != 6 || debitIndex != 16 || running != 0m)
         throw new Exception("Synthetic control construction failed.");
-    var longIdentity = "HDFC BANK\\nStatement of Account\\nFrom: 01/07/2025 To: 30/09/2026\\nAccount No: 8888888888\\n";
+    var longIdentity = string.Join(Environment.NewLine, "HDFC BANK", "Statement of Account", "From: 01/07/2025 To: 30/09/2026", "Account No: 8888888888", "");
     var longPage1 = Path.Combine(longDir, "page1.json");
     var longPage2 = Path.Combine(longDir, "page2.json");
     File.WriteAllText(longPage1, JsonSerializer.Serialize(new
@@ -231,7 +231,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = longIdentity + "Page No. 1 of 2" },
-            new { block_label = "table", block_content = string.Join("\\n", p1Rows) }
+            new { block_label = "table", block_content = string.Join(Environment.NewLine, p1Rows) }
         }
     }));
     File.WriteAllText(longPage2, JsonSerializer.Serialize(new
@@ -239,7 +239,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = longIdentity + "Page No. 2 of 2" },
-            new { block_label = "table", block_content = string.Join("\\n", p2Rows) },
+            new { block_label = "table", block_content = string.Join(Environment.NewLine, p2Rows) },
             new { block_label = "table", block_content =
                 "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\\n" +
                 "| 0.00 | 16 | 6 | 25000.05 | 25000.05 | 0.00 |" }
