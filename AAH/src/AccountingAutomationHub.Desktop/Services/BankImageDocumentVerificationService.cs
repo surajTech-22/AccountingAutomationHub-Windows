@@ -407,7 +407,7 @@ internal sealed class BankImageDocumentVerificationService
         var patterns = new[]
         {
             new Regex(@"(?:STATEMENT\s+(?:FROM|SUMMARY)\s*:?\s*)(\d{1,2}[-/.]\d{1,2}[-/.]\d{4})\s*(?:TO|-)\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{4})", RegexOptions.IgnoreCase),
-            new Regex(@"\bFROM\s*:?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{4})\s+TO\s+(\d{1,2}[-/.]\d{1,2}[-/.]\d{4})", RegexOptions.IgnoreCase)
+            new Regex(@"\bFROM\s*:?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s+TO\s*:?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})", RegexOptions.IgnoreCase)
         };
         foreach (var pattern in patterns)
         {
@@ -858,9 +858,18 @@ internal sealed class BankImageDocumentVerificationService
         if (transactions.Count == 0)
             issues.Add("No transaction rows were recognized; automatic import is blocked.");
 
+        var statementStart = ParseDate(metadata.PeriodStart);
+        var statementEnd = ParseDate(metadata.PeriodEnd);
+        if (statementStart is not null && statementEnd is not null && statementStart > statementEnd)
+            issues.Add("OCR statement period is reversed.");
+
         DateTime? lastDate = null;
         foreach (var row in transactions)
         {
+            if (row.Date is not null && statementStart is not null && row.Date < statementStart)
+                issues.Add($"Transaction {row.Sequence}: posting date is earlier than the printed statement period.");
+            if (row.Date is not null && statementEnd is not null && row.Date > statementEnd)
+                issues.Add($"Transaction {row.Sequence}: posting date is later than the printed statement period.");
             if (row.Date is null)
                 issues.Add($"Transaction {row.Sequence}: posting date was not recognized ({row.DateRaw}).");
             if (string.IsNullOrWhiteSpace(row.Description))
