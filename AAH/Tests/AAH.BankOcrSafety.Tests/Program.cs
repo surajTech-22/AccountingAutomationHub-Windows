@@ -39,7 +39,7 @@ try
         var blocks = new[]
         {
             new { block_label = "text", block_content = scene.Name == "out-of-period posting date blocked"
-                ? "HDFC BANK\\nStatement of Account\\nFrom: 01/08/2025 To: 30/08/2025\\nAccount No: 9999999999"
+                ? string.Join(Environment.NewLine, "HDFC BANK", "Statement of Account", "From: 01/08/2025 To: 30/08/2025", "Account No: 9999999999")
                 : "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
             new { block_label = "table", block_content = string.Join("\n", rows) },
             new { block_label = "table", block_content = summaryHeader + "\n" + summaryData },
@@ -66,6 +66,9 @@ try
         if (verified.Documents.Count != 1)
             throw new Exception(scene.Name + ": expected exactly one statement document.");
         var doc = verified.Documents[0];
+        if (scene.Name == "out-of-period posting date blocked" &&
+            (doc.StatementFrom != "01-08-2025" || doc.StatementTo != "30-08-2025"))
+            throw new Exception(scene.Name + ": statement period was not parsed.");
         var isVerified = doc.Status is "VERIFIED" or "VERIFIED_WITH_CORRECTIONS";
         if (isVerified != scene.ExpectedVerified)
             throw new Exception(scene.Name + ": unexpected status " + doc.Status + ": " + string.Join("; ", doc.Issues));
