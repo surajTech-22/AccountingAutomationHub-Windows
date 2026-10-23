@@ -1010,8 +1010,14 @@ internal sealed class BankImageDocumentVerificationService
         issues.AddRange(pageIssues);
         if (duplicateCount > 0) { /* exact overlap duplicates are safely omitted and kept in the audit count */ }
 
+        // Without a statement summary, the first transaction's inferred
+        // opening balance is circular evidence. Require an independently printed
+        // BROUGHT FORWARD amount before accepting a summary-free document.
         var pageVerifiedWithoutSummary = summary is null &&
-            (pageStatus.Equals("VERIFIED", StringComparison.Ordinal) || pageStatus.Equals("INFERRED_VERIFIED", StringComparison.Ordinal));
+            firstBroughtForward?.Value is not null &&
+            openingSource == "FIRST_PAGE_BROUGHT_FORWARD" &&
+            (pageStatus.Equals("VERIFIED", StringComparison.Ordinal) ||
+             pageStatus.Equals("INFERRED_VERIFIED", StringComparison.Ordinal));
         var overall = issues.Count > 0
             ? "REVIEW_REQUIRED"
             : corrections.Count > 0
