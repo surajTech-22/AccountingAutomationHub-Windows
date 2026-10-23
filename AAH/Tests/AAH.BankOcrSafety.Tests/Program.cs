@@ -13,6 +13,7 @@ var scenarios = new (string Name, bool BadDate, bool MissingNarration, bool Miss
     ("out-of-period posting date blocked", false, false, false, false, false),
     ("one-paisa printed summary discrepancy blocked", false, false, false, false, false),
     ("no summary and unanchored opening blocked", false, false, false, false, false),
+    ("no summary with plausible correction blocked", false, false, false, false, false),
 };
 int passed = 0;
 var root = Path.Combine(Path.GetTempPath(), "AAH-Bank-Ocr-Safety-" + Guid.NewGuid().ToString("N"));
@@ -32,7 +33,8 @@ try
         };
         if (scene.Wrapped)
             rows.Add("| | EXTRA NARRATION | | | | | |");
-        rows.Add("| 01/09/25 | BANK CHARGES | CDT123456789 | 01/09/25 | 25.00 | 0.00 | 75.00 |");
+        var debitAsRead = scene.Name == "no summary with plausible correction blocked" ? "2.50" : "25.00";
+        rows.Add($"| 01/09/25 | BANK CHARGES | CDT123456789 | 01/09/25 | {debitAsRead} | 0.00 | 75.00 |");
 
         var summaryHeader = "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |";
         var summaryData = scene.MissingSummary
@@ -47,8 +49,8 @@ try
                 : "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
             new { block_label = "table", block_content = string.Join("\n", rows) },
             new {
-                block_label = scene.Name == "no summary and unanchored opening blocked" ? "text" : "table",
-                block_content = scene.Name == "no summary and unanchored opening blocked" ? "" : summaryHeader + "\n" + summaryData
+                block_label = scene.Name.StartsWith("no summary", StringComparison.Ordinal) ? "text" : "table",
+                block_content = scene.Name.StartsWith("no summary", StringComparison.Ordinal) ? "" : summaryHeader + "\n" + summaryData
             },
         };
         var jsonPath = Path.Combine(caseDir, "page.json");
