@@ -192,7 +192,84 @@ try
         combined.ClosingBalance != 65.00m || combined.DebitCount != 2 || combined.CreditCount != 2)
         throw new Exception("Page-two financial reconciliation is incorrect.");
     Console.WriteLine("PASS: headerless scanned continuation with 2+2 transactions verified.");
-    Console.WriteLine($"PASS: {passed + 2}/{scenarios.Length + 2} Bank OCR verifier safety scenarios.");
+
+    // Synthetic 22-row, two-page bank statement with 16 debits and six credits,
+    // no second-page header, a wrapped narration, and a printed summary.
+    // The amounts and references are deliberately fictitious.
+    var longDir = Path.Combine(root, "twenty-two-rows");
+    Directory.CreateDirectory(longDir);
+    var credits = new decimal[] { 0.05m, 15000m, 500m, 2500m, 1000m, 6000m };
+    var debits = new decimal[] { 9000m, 3000m, 2000m, 1m, 0.05m, 350m, 350m,
+        500m, 750m, 1000m, 900m, 600m, 450m, 400m, 500m, 5199m };
+    var creditPositions = new HashSet<int> { 0, 1, 8, 11, 16, 18 };
+    var p1Rows = new List<string>
+    {
+        "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |"
+    };
+    var p2Rows = new List<string>();
+    decimal running = 0m;
+    int debitIndex = 0, creditIndex = 0;
+    for (int i = 0; i < 22; i++)
+    {
+        var date = new DateTime(2025, 7, 31).AddDays(i * 19).ToString("dd/MM/yy");
+        var isCredit = creditPositions.Contains(i);
+        decimal debit = isCredit ? 0m : debits[debitIndex++];
+        decimal credit = isCredit ? credits[creditIndex++] : 0m;
+        running += credit - debit;
+        string row = $"| {date} | TEST TRANSACTION {i + 1:D2} | REF{i + 1:D5} | {date} | {debit:0.00} | {credit:0.00} | {running:0.00} |";
+        (i < 16 ? p1Rows : p2Rows).Add(row);
+        if (i == 5)
+            p1Rows.Add("| | SUPPLEMENTAL UPI REFERENCE TEXT | | | | | |");
+    }
+    if (creditIndex != 6 || debitIndex != 16 || running != 0m)
+        throw new Exception("Synthetic control construction failed.");
+    var longIdentity = "HDFC BANK\\nStatement of Account\\nFrom: 01/07/2025 To: 30/09/2026\\nAccount No: 8888888888\\n";
+    var longPage1 = Path.Combine(longDir, "page1.json");
+    var longPage2 = Path.Combine(longDir, "page2.json");
+    File.WriteAllText(longPage1, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = longIdentity + "Page No. 1 of 2" },
+            new { block_label = "table", block_content = string.Join("\\n", p1Rows) }
+        }
+    }));
+    File.WriteAllText(longPage2, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = longIdentity + "Page No. 2 of 2" },
+            new { block_label = "table", block_content = string.Join("\\n", p2Rows) },
+            new { block_label = "table", block_content =
+                "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\\n" +
+                "| 0.00 | 16 | 6 | 25000.05 | 25000.05 | 0.00 |" }
+        }
+    }));
+    var longBatch = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[]
+        {
+            new BankOcrRecognitionPage { Id = "S001P001", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 1, JsonPath = longPage1 },
+            new BankOcrRecognitionPage { Id = "S001P002", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 2, JsonPath = longPage2 }
+        }
+    };
+    var longResult = new BankImageDocumentVerificationService().Verify(longBatch, longDir, null, CancellationToken.None);
+    if (!longResult.WasSuccessful || longResult.Documents.Count != 1)
+        throw new Exception("Synthetic 22-row document was not accepted as one complete OCR batch.");
+    var longDoc = longResult.Documents[0];
+    if (longDoc.Status != "VERIFIED" || longDoc.Transactions.Count != 22 ||
+        longDoc.DebitCount != 16 || longDoc.CreditCount != 6 ||
+        longDoc.TotalDebits != 25000.05m || longDoc.TotalCredits != 25000.05m ||
+        longDoc.ClosingBalance != 0m)
+        throw new Exception("Synthetic 22-row financial verification failed: " +
+            longDoc.Status + " (" + string.Join("; ", longDoc.Issues) + ").");
+    if (longDoc.Transactions.Count(row => row.InferredPage == 1) != 16 ||
+        longDoc.Transactions.Count(row => row.InferredPage == 2) != 6 ||
+        !longDoc.Transactions[5].Description.Contains("SUPPLEMENTAL UPI REFERENCE TEXT", StringComparison.Ordinal))
+        throw new Exception("22-row page boundary or wrapped narration handling failed.");
+    Console.WriteLine("PASS: 22-row, 16-debit, six-credit, two-page bank statement reconciled.");
+    Console.WriteLine($"PASS: {passed + 3}/{scenarios.Length + 3} Bank OCR verifier safety scenarios.");
 }
 finally
 {
