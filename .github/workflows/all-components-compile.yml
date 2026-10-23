@@ -1,0 +1,185 @@
+name: AAH All Components Compile And Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'AAH/**'
+      - 'source-bundle/components/**'
+      - 'ci/**'
+      - '.github/workflows/all-components-compile.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aah-full-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invoicevision-child:
+    name: InvoiceVision Child WPF and Python syntax
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify R14 ancillary source and extract
+        run: python ci/restore_extra_components.py
+      - name: Parse Child Python sources without OCR operations
+        shell: pwsh
+        run: |
+          python -c "import ast,pathlib; fs=list(pathlib.Path('InvoiceVisionChild/Engine').rglob('*.py')); [ast.parse(p.read_text(encoding='utf-8-sig'),filename=str(p)) for p in fs]; print('Child Python syntax passed:',len(fs))"
+          if ($LASTEXITCODE -ne 0) { throw 'Child Python parse failed.' }
+      - name: Build InvoiceVision Child WPF
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory -Path ci-artifacts | Out-Null
+          dotnet build InvoiceVisionChild/InvoiceVisionChild.csproj --configuration Release -p:ContinuousIntegrationBuild=true -bl:ci-artifacts/InvoiceVisionChild.binlog
+          if ($LASTEXITCODE -ne 0) { throw 'InvoiceVision Child compile failed.' }
+      - name: Publish InvoiceVision Child in isolated CI staging
+        shell: pwsh
+        run: |
+          dotnet publish InvoiceVisionChild/InvoiceVisionChild.csproj --configuration Release --runtime win-x64 --self-contained false --output "$env:RUNNER_TEMP/InvoiceVisionChild-Publish"
+          if ($LASTEXITCODE -ne 0) { throw 'InvoiceVision Child publish failed.' }
+          if (-not (Test-Path "$env:RUNNER_TEMP/InvoiceVisionChild-Publish/InvoiceVisionChild.exe")) { throw 'InvoiceVisionChild.exe missing after publish.' }
+      - name: Preserve Child compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-InvoiceVisionChild-Build-Logs
+          path: ci-artifacts/*.binlog
+          if-no-files-found: warn
+          retention-days: 14
+
+  android-mobile35:
+    name: Android Mobile35 debug compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Verify R14 ancillary source and extract
+        run: python3 ci/restore_extra_components.py
+      - name: Set up Android platform 36
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Compile Android Mobile35 debug APK
+        working-directory: AAH/AndroidSource/AccountingAutomationHubAndroid
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Preserve build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-Android-Failure-Reports
+          path: |
+            AAH/AndroidSource/AccountingAutomationHubAndroid/**/build/reports/**
+            AAH/AndroidSource/AccountingAutomationHubAndroid/**/build/outputs/logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  installer-parse:
+    name: Windows installer and batch syntax/source validation
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify R14 ancillary source and extract
+        run: python ci/restore_extra_components.py
+      - name: Parse original PowerShell installation scripts without executing them
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paths = @(Get-ChildItem -Path 'AAH/Installer','Installer' -Filter '*.ps1' -File -Recurse)
+          if ($paths.Count -lt 110) { throw "Installer source incomplete: only $($paths.Count) PowerShell scripts." }
+          $count = 0
+          foreach ($item in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($item.FullName,[ref]$tokens,[ref]$errors)
+            if ($errors.Count) {
+              foreach ($err in $errors) { Write-Error "$($item.Name): $($err.Message)" }
+              throw "PowerShell parser failures in $($item.FullName)"
+            }
+            $count++
+          }
+          Write-Host "PASS: $count installer PowerShell scripts parsed."
+      - name: Verify Windows update launcher scripts exist
+        shell: pwsh
+        run: |
+          foreach ($file in @('UPDATE_APP.bat','AAH/UPDATE_APP.bat','AAH/Installer/Update-App.ps1','AAH/Installer/Verify-Installer.ps1')) {
+            if (-not (Test-Path $file)) { throw "Missing mandatory installer component: $file" }
+          }
+          Write-Host 'PASS: original update and verifier launchers present.'
+      # Never run the transactional installer on a CI runner: it is a deployment operation.
+
+  regression-execution:
+    name: Runtime regression - ${{ matrix.project }}
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: AAH.BankXmlValidator.Tests
+            marker: 'PASS: 43/43 Bank XML scenarios.'
+          - project: AAH.CacheLifecycle.Tests
+            marker: 'PASS: 12/12 cache lifecycle scenarios.'
+          - project: AAH.FeatureAudit.Tests
+            marker: 'PASS actual SQLite Sales migration'
+          - project: AAH.StockIdentity.Tests
+            marker: 'PASS: 12/12 production Stock MASTERID identity scenarios.'
+          - project: AAH.StockMapping.Tests
+            marker: 'PASS: 63/63 executable Stock mapping scenarios.'
+          - project: AAH.StockProjection.Tests
+            marker: 'PASS: 19/19 guarded Stock projection scenarios.'
+          - project: AAH.TallyInventory.Tests
+            marker: 'PASS: 26/26 production Tally inventory regressions.'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build real .NET regression executable with copied dependencies
+        shell: pwsh
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = "AAH/Tests/$env:PROJECT/$env:PROJECT.csproj"
+          if (-not (Test-Path $path)) { throw "Missing regression: $path" }
+          dotnet build $path --configuration Release -p:CopyLocalLockFileAssemblies=true
+          if ($LASTEXITCODE -ne 0) { throw "Regression compile failed: $env:PROJECT" }
+      - name: Execute regression and verify final completion proof
+        shell: pwsh
+        env:
+          PROJECT: ${{ matrix.project }}
+          REQUIRED_MARKER: ${{ matrix.marker }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = "AAH/Tests/$env:PROJECT/bin/Release/net10.0/$env:PROJECT.dll"
+          if (-not (Test-Path $dll)) { throw "Missing executable DLL: $dll" }
+          $result = & dotnet $dll 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $result
+          if ($code -ne 0) { throw "Runtime regression returned exit code $code" }
+          if (-not $result.Contains($env:REQUIRED_MARKER)) {
+            throw "Runtime regression did not reach mandatory completion marker: $env:REQUIRED_MARKER"
+          }
+          Write-Host "PASS: fully executed $env:PROJECT"
