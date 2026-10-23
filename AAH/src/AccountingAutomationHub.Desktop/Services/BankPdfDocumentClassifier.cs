@@ -18,8 +18,14 @@ internal static class BankPdfDocumentClassifier
             foreach (var page in document.GetPages())
             {
                 // Logos and headers alone must not make scanned bank tables 'digital'.
-                if (page.Text.Count(char.IsLetterOrDigit) >= 40) textPages++;
-                else otherPages++;
+                // Full-page scanner rasters remain scans even with a hidden OCR text layer.
+                double pageArea = (double)page.Width * (double)page.Height;
+                bool scannerRaster = pageArea > 0 && page.GetImages().Any(image =>
+                    (double)image.Bounds.Width * (double)image.Bounds.Height >= 0.55 * pageArea);
+                if (!scannerRaster && page.Text.Count(char.IsLetterOrDigit) >= 40)
+                    textPages++;
+                else
+                    otherPages++;
             }
             if (textPages == 0 && otherPages == 0) return BankPdfDocumentKind.Unknown;
             if (textPages == 0) return BankPdfDocumentKind.Scanned;
