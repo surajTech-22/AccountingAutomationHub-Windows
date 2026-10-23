@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using UglyToad.PdfPig;
 
 namespace AccountingAutomationHub.Desktop.Services;
 
@@ -110,6 +111,27 @@ internal sealed class BankImageDocumentVerificationService
             }
         }
 
+        // A PaddleOCR response can look successful even when a PDF page was skipped.
+        // Check the original PDF's physical page count before allowing any import.
+        // Never infer completeness from a reconciled subset of the statement.
+        foreach (var group in recognition.Pages
+            .Where(page => Path.GetExtension(page.SourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(page => page.SourcePath, StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var pdf = PdfDocument.Open(group.Key);
+                var actualPages = group.Select(page => page.SourcePage).Distinct().ToArray();
+                if (actualPages.Length != pdf.NumberOfPages ||
+                    actualPages.Any(pageNumber => pageNumber < 1 || pageNumber > pdf.NumberOfPages))
+                    parseIssues.Add($"PDF page completeness failure for {Path.GetFileName(group.Key)}: OCR recognized {actualPages.Length} of {pdf.NumberOfPages} physical page(s).");
+            }
+            catch (Exception exception)
+            {
+                parseIssues.Add($"Cannot verify PDF page completeness for {Path.GetFileName(group.Key)}: {exception.Message}");
+            }
+        }
+
         if (profiles.Count == 0)
             return BankVerifiedDocumentBatch.Failed("Raw OCR was produced, but AAH could not parse a Bank Statement page.", parseIssues);
 
@@ -145,7 +167,8 @@ internal sealed class BankImageDocumentVerificationService
 
         return new BankVerifiedDocumentBatch
         {
-            WasSuccessful = documents.Count > 0,
+            // If even one page or source failed, no partial batch may be imported.
+            WasSuccessful = documents.Count > 0 && parseIssues.Count == 0 && recognition.SourceErrors.Count == 0,
             Documents = documents,
             ParseIssues = parseIssues,
             RecognitionErrors = recognition.SourceErrors,
