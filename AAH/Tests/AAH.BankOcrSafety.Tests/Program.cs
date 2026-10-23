@@ -10,6 +10,7 @@ var scenarios = new (string Name, bool BadDate, bool MissingNarration, bool Miss
     ("missing narration blocked", false, true, false, false, false),
     ("incomplete statement summary blocked", false, false, true, false, false),
     ("multiline continuation preserved", false, false, false, true, true),
+    ("out-of-period posting date blocked", false, false, false, false, false),
 };
 int passed = 0;
 var root = Path.Combine(Path.GetTempPath(), "AAH-Bank-Ocr-Safety-" + Guid.NewGuid().ToString("N"));
@@ -37,7 +38,9 @@ try
             : "| 0.00 | 1 | 1 | 25.00 | 100.00 | 75.00 |";
         var blocks = new[]
         {
-            new { block_label = "text", block_content = "HDFC BANK\nStatement of Account\nAccount No: 9999999999" },
+            new { block_label = "text", block_content = scene.Name == "out-of-period posting date blocked"
+                ? "HDFC BANK\\nStatement of Account\\nFrom: 01/08/2025 To: 30/08/2025\\nAccount No: 9999999999"
+                : "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
             new { block_label = "table", block_content = string.Join("\n", rows) },
             new { block_label = "table", block_content = summaryHeader + "\n" + summaryData },
         };
