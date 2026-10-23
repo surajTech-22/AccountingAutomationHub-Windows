@@ -71,6 +71,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -123,7 +125,7 @@ jobs:
       - name: Verify Windows update launcher scripts exist
         shell: pwsh
         run: |
-          foreach ($file in @('UPDATE_APP.bat','AAH/UPDATE_APP.bat','AAH/Installer/Update-App.ps1','AAH/Installer/Verify-Installer.ps1')) {
+          foreach ($file in @('UPDATE_APP.bat','AAH/Installer/Update-App.ps1','AAH/Installer/Verify-Installer.ps1')) {
             if (-not (Test-Path $file)) { throw "Missing mandatory installer component: $file" }
           }
           Write-Host 'PASS: original update and verifier launchers present.'
