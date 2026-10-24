@@ -11,4 +11,10 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <Version>4.0.0.503</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- EXACT source of original CL017 manual Install-AAHPublish routine.
+         Embedded in the updater so GitHub downloads cannot substitute code. -->
+    <EmbeddedResource Include="../../../ci/legacy/TransactionalPublish.ps1"
+                      LogicalName="AAH.NativeTransactionalPublish.ps1" />
+  </ItemGroup>
 </Project>
