@@ -36,7 +36,7 @@ internal static class GitHubAutoUpdateService
     // A signal is only a wakeup hint; every update must still pass the exact
     // GitHub release, protocol, publisher and SHA256 checks below.
     internal const string ReleaseSignalUrl =
-        "https://ntfy.sh/aah-surajtech22-windows-release-signal-v1/sse?since=now";
+        "https://ntfy.sh/aah-surajtech22-windows-release-signal-v1/sse";
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
@@ -56,12 +56,17 @@ internal static class GitHubAutoUpdateService
         catch (Exception ex) { Log("startup check failed: " + ex.Message); }
         while (true)
         {
+            bool connected = false;
             try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseSignalUrl);
                 using var response = await Client.SendAsync(
                     request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
+                connected = true;
+                // Recover any release missed while the event connection was offline.
+                try { await CheckOnceAsync().ConfigureAwait(false); }
+                catch (Exception ex) { Log("event reconnect catch-up failed: " + ex.Message); }
                 await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
@@ -85,11 +90,10 @@ internal static class GitHubAutoUpdateService
             {
                 Log("release event connection interrupted: " + ex.Message);
             }
-            // Reconnect only after network disruption. Re-check once to recover
-            // a release that arrived while the connection was unavailable.
+            // Only reconnect to the notification stream after a failure.
+            // Never repeatedly query GitHub releases when ntfy rejects the connection.
             await Task.Delay(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
-            try { await CheckOnceAsync().ConfigureAwait(false); }
-            catch (Exception ex) { Log("reconnect check failed: " + ex.Message); }
+            if (!connected) Log("release stream unavailable; no GitHub update check was attempted");
         }
     }
 
