@@ -100,4 +100,25 @@ if (OperatingSystem.IsWindows())
 }
 Pass("unsigned executable never gains trusted release authority");
 
+// Cache cleanup must remove past updater copies, not workspace/data folders.
+var cache = Path.Combine(Path.GetTempPath(), "AAH-GitHub-Cache-Test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var past = GitHubAutoUpdateService.GetReleaseCacheDirectory(cache, "v4.0.0.503");
+    var latest = GitHubAutoUpdateService.GetReleaseCacheDirectory(cache, "v4.0.0.504");
+    var legacy = Path.Combine(cache, "0123456789abcdef0123456789abcdef");
+    var privateData = Path.Combine(cache, "company-ledger-data");
+    foreach (var dir in new[] { past, latest, legacy, privateData })
+    {
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "keep.txt"), "fixture");
+    }
+    var removed = GitHubAutoUpdateService.CleanupStaleUpdaterFolders(cache, "v4.0.0.504");
+    Require(removed == 2 && !Directory.Exists(past) && !Directory.Exists(legacy) &&
+            Directory.Exists(latest) && Directory.Exists(privateData),
+        "GitHub updater cache did not safely replace older updater folders.");
+}
+finally { try { Directory.Delete(cache, recursive: true); } catch { } }
+Pass("remove previous updater caches but leave unrelated accounting directories");
+
 Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
