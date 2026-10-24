@@ -121,8 +121,7 @@ internal static class Program
                         StartWithoutReadiness(target, install);
                         throw new InvalidOperationException("Update rolled back after failed AAH startup.");
                     }
-                    File.WriteAllText(Path.Combine(transaction, "committed"), "OK");
-                    Directory.Delete(transaction, true);
+                    CompleteTransaction(transaction);
                     Log("SUCCESS: AAH " + tag + " restarted and application transaction committed.");
                 }
                 catch (UpdateRuntimeBusyException)
@@ -361,6 +360,17 @@ internal static class Program
         }
         File.WriteAllText(Path.Combine(tx,"rolled-back"),"OK");
         Directory.Delete(tx,true);
+    }
+
+    internal static void CompleteTransaction(string transaction)
+    {
+        // Matches manual Install-AAHPublish: after verified startup the previous
+        // installed DLL/EXE bytes are no longer retained as a second old copy.
+        // First record completion durably, then clean up the rollback journal.
+        File.WriteAllText(Path.Combine(transaction, "committed"), "OK");
+        try { Directory.Delete(transaction, recursive: true); }
+        catch (IOException) { Log("Committed update cleanup deferred (locked file)."); }
+        catch (UnauthorizedAccessException) { Log("Committed update cleanup deferred (permission)."); }
     }
 
     internal static void RecoverPending(string install)
