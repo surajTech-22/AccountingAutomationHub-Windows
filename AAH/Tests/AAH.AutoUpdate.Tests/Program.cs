@@ -56,6 +56,8 @@ string Protocol(string protocol, string release, string sha, bool allowed) =>
     JsonSerializer.Serialize(new {
         protocol,
         release,
+        repository = "surajTech-22/AccountingAutomationHub-Windows",
+        verification = "github-release-sha256-v1",
         asset = "AAH_Update.exe",
         sha256 = sha,
         automatic_install_allowed = allowed
@@ -72,6 +74,13 @@ Require(!GitHubAutoUpdateService.IsProtocolAccepted(
 Require(!GitHubAutoUpdateService.IsProtocolAccepted(
     Protocol(GitHubAutoUpdateService.Protocol,tag,hash,false),tag,hash),"rollout disabled accepted");
 Require(!GitHubAutoUpdateService.IsProtocolAccepted("invalid-json",tag,hash),"malformed protocol accepted");
+Require(!GitHubAutoUpdateService.PublisherIdentityCompatible(null, "AAA"), "unsigned installed app accepted signed unknown updater");
+Require(!GitHubAutoUpdateService.PublisherIdentityCompatible("AAA", null), "signed installed app accepted unsigned updater");
+Require(!GitHubAutoUpdateService.PublisherIdentityCompatible("AAA", "BBB"), "different signing certificate accepted");
+Require(GitHubAutoUpdateService.PublisherIdentityCompatible("AAA", "aaa"), "matching publisher rejected");
+Require(GitHubAutoUpdateService.PublisherIdentityCompatible(null, null), "DeskSpace-style unsigned checksum-only channel not available");
+Pass("signed publisher consistency and two-unsigned GitHub SHA256 compatibility");
+
 Pass("release protocol opt-in, identity, and hash matching");
 
 GitHubAutoUpdateService.Start(isLanClient:true);
@@ -91,4 +100,4 @@ if (OperatingSystem.IsWindows())
 }
 Pass("unsigned executable never gains trusted release authority");
 
-Console.WriteLine($"PASS: {passed}/{passed} AAH signed GitHub auto-update protocol scenarios.");
+Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
