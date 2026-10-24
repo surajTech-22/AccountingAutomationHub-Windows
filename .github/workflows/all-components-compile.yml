@@ -168,6 +168,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - project: AAH.AutoUpdate.Tests
+            marker: 'PASS: 6/6 AAH signed GitHub auto-update protocol scenarios.'
           - project: AAH.BankOcrSafety.Tests
             marker: 'PASS: 12/12 Bank OCR verifier safety scenarios.'
           - project: AAH.BankPdfRouting.Tests
