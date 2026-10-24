@@ -157,6 +157,19 @@ jobs:
           }
           finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
 
+      - name: Place current UpdateHost in versioned application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          # Manual Install-AAHPublish replaces existing app files using incoming
+          # payload file names. Ship updater binary in the same payload so the
+          # next release replaces its older installed copy as well.
+          Copy-Item -LiteralPath ci-release/updater/AAH_Update.exe -Destination ci-release/publish/AAH_Update.exe -Force
+          $a=(Get-FileHash ci-release/updater/AAH_Update.exe -Algorithm SHA256).Hash
+          $b=(Get-FileHash ci-release/publish/AAH_Update.exe -Algorithm SHA256).Hash
+          if ($a -ne $b) { throw 'Embedded updater does not match the latest release updater.' }
+          Write-Host 'PASS: new updater is part of app payload and overwrites the installed prior updater.'
+
       - name: Build conventional AAH Setup.exe
         shell: pwsh
         run: |
