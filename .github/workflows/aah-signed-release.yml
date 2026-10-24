@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.503)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.504)"
         required: true
-        default: "v4.0.0.503"
+        default: "v4.0.0.504"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,7 +40,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.503' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.504' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
