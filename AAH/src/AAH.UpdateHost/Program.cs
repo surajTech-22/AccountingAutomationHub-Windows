@@ -173,8 +173,7 @@ internal static class Program
         psi.ArgumentList.Add(
             "$ErrorActionPreference='Stop'; " +
             ". $env:AAH_MANUAL_SCRIPT; " +
-            "Install-AAHPublish $env:AAH_PUBLISH_DIR $env:AAH_INSTALL_DIR; " +
-            "if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; exit 0");
+            "Install-AAHPublish $env:AAH_PUBLISH_DIR $env:AAH_INSTALL_DIR; exit 0");
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Original AAH manual updater could not start.");
         var stdout = process.StandardOutput.ReadToEndAsync();
