@@ -8,6 +8,10 @@ on:
       - 'AAH/Tests/AAH.UpdateHost.Tests/**'
       - 'AAH/Installer/AAH_GitHubSetup.iss'
       - '.github/workflows/aah-signed-release.yml'
+  workflow_run:
+    workflows: ["AAH All Components Compile And Regression"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -36,13 +40,16 @@ concurrency:
 
 jobs:
   build-channel:
+    # One-time owner-requested v4.0.0.504 smoke release. Never publish for
+    # pull requests, branch drift, failed builds, or unrelated commits.
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.504]')) }}
     name: Build AAH Setup and Update channel (draft-only)
     runs-on: windows-latest
     timeout-minutes: 85
     env:
       AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.504' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
-      PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release }}
+      PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
       AAH_CODESIGN_PASSWORD: ${{ secrets.AAH_CODESIGN_PASSWORD }}
       GH_TOKEN: ${{ github.token }}
@@ -72,7 +79,7 @@ jobs:
           Write-Host "Validated release $env:AAH_TAG from $env:GITHUB_SHA."
 
       - name: Require successful Windows and full regressions at exact SHA
-        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release }}
+        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
         shell: pwsh
         run: |
           $headers = @{
@@ -81,12 +88,23 @@ jobs:
             'X-GitHub-Api-Version'='2022-11-28'
           }
           foreach ($workflow in @('windows-compile.yml','all-components-compile.yml')) {
-            $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&per_page=40"
-            $json = Invoke-RestMethod -Uri $url -Headers $headers
-            $passed = @($json.workflow_runs | Where-Object {
-              $_.head_sha -eq $env:GITHUB_SHA -and $_.event -eq 'push' -and
-              $_.status -eq 'completed' -and $_.conclusion -eq 'success'
-            })
+            $passed = @()
+            # The full-components gate may finish before the independent
+            # Windows compile gate. Wait for its completed result, but never
+            # bypass a failure or accept checks from a different source SHA.
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&per_page=40"
+              $json = Invoke-RestMethod -Uri $url -Headers $headers
+              $same = @($json.workflow_runs | Where-Object {
+                $_.head_sha -eq $env:GITHUB_SHA -and $_.event -eq 'push'
+              })
+              $passed = @($same | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+              if ($passed.Count -gt 0) { break }
+              if (@($same | Where-Object { $_.status -eq 'completed' -and $_.conclusion -ne 'success' }).Count -gt 0) {
+                throw "Release refused: $workflow failed or was cancelled for exact SHA."
+              }
+              Start-Sleep -Seconds 10
+            }
             if ($passed.Count -eq 0) { throw "Release refused: $workflow has no passing run for exact SHA." }
           }
           Write-Host 'PASS: same-SHA compilation and regression proof.'
@@ -211,7 +229,7 @@ jobs:
           Write-Host 'PASS: trusted same-publisher Authenticode signed Setup, AAH and Update binaries.'
 
       - name: Create non-installable unsigned CI preview artifact
-        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release }}
+        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release && github.event_name != 'workflow_run' }}
         shell: pwsh
         run: |
           $src = (Resolve-Path ci-release/publish).Path
@@ -222,7 +240,7 @@ jobs:
           Write-Host 'Candidate prepared only. No user machine update or GitHub release was made.'
 
       - name: Upload disposable unsigned build preview
-        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release }}
+        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release && github.event_name != 'workflow_run' }}
         uses: actions/upload-artifact@v4
         with:
           name: AAH-UNSIGNED-DO-NOT-INSTALL
@@ -231,7 +249,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create SHA256 verified GitHub release payload and protocol
-        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release }}
+        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -277,7 +295,7 @@ jobs:
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
       - name: Publish DeskSpace-style GitHub checksum release (without PFX)
-        if: ${{ inputs.publish_checksum_release }}
+        if: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
