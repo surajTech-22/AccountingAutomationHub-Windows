@@ -130,6 +130,11 @@ jobs:
             if (-not (Test-Path $file)) { throw "Missing mandatory installer component: $file" }
           }
           Write-Host 'PASS: original update and verifier launchers present.'
+      - name: Test GitHub update-candidate archive integrity and sensitive-data rejection
+        shell: pwsh
+        run: |
+          python ci/test_update_candidate.py
+          if ($LASTEXITCODE -ne 0) { throw 'Update candidate integrity regression failed.' }
       # Never run the transactional installer on a CI runner: it is a deployment operation.
 
   regression-execution:
