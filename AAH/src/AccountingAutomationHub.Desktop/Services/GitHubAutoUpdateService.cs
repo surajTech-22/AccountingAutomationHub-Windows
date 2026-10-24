@@ -178,7 +178,7 @@ internal static class GitHubAutoUpdateService
         // Keep only one updater per release, rather than accumulating a new
         // random GUID folder each time the application checks for an update.
         var root = GetReleaseCacheDirectory(cacheRoot, tag);
-        var incoming = Path.Combine(root, UpdateAssetName + ".download");
+        var incoming = Path.Combine(root, UpdateAssetName + ".pending.exe");
         try
         {
             Directory.CreateDirectory(root);
@@ -256,7 +256,7 @@ internal static class GitHubAutoUpdateService
             // Older revisions used GUID names; current revisions use release tags.
             // Ignore unrelated directories (which may contain private workspace data).
             if (ParseStableVersion(name) is null &&
-                !Regex.IsMatch(name, @"\\A[a-fA-F0-9]{32}\\z", RegexOptions.CultureInvariant))
+                !Regex.IsMatch(name, @"\A[a-fA-F0-9]{32}\z", RegexOptions.CultureInvariant))
                 continue;
             try
             {
