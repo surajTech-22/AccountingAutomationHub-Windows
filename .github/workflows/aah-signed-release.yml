@@ -228,6 +228,9 @@ jobs:
           [IO.Compression.ZipFile]::CreateFromDirectory($src,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
           $updateDigest=(Get-FileHash ci-release/out/AAH_Update.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $appDigest=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $setupDigest=(Get-FileHash ci-release/out/AAH_Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path ci-release/out).Path 'AAH_Setup.sha256.txt'),
+            "$setupDigest  AAH_Setup.exe" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
           [IO.File]::WriteAllText((Join-Path (Resolve-Path ci-release/out).Path 'AAH_Update.exe.sha256'),
             "$updateDigest  AAH_Update.exe" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
           $protocol=[ordered]@{
@@ -256,7 +259,7 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "DRAFT: do not publish until production OCR, Tally, installed-client and rollback acceptance passes. Signing and CI gates passed."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "DRAFT: do not publish until production OCR, Tally, installed-client and rollback acceptance passes. Signing and CI gates passed."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -270,6 +273,7 @@ jobs:
           gh release view $tag -R $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) { throw "Release tag $tag already exists; refusing replacement." }
           foreach ($path in @('ci-release/out/AAH_Setup.exe',
+                               'ci-release/out/AAH_Setup.sha256.txt',
                                'ci-release/out/AAH_Update.exe',
                                'ci-release/out/AAH_Update.exe.sha256',
                                'ci-release/out/AAH_App-win-x64.zip',
@@ -285,11 +289,11 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
-              @($release.assets).Count -lt 5) {
+              @($release.assets).Count -lt 6) {
             throw 'Stable GitHub release readback failed.'
           }
           Write-Host "PASS: $tag published with GitHub SHA256 assets; no signing certificate required."
