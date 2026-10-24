@@ -307,7 +307,24 @@ internal static class GitHubAutoUpdateService
                 foreach (var id in uninstall.GetSubKeyNames())
                 {
                     using var entry = uninstall.OpenSubKey(id);
-                    if (IsForeignAahRegistration(entry?.GetValue("DisplayName") as string, id))
+                    var display = entry?.GetValue("DisplayName") as string;
+                    // Existing AAH v4.0.0.502 was registered under the original
+                    // AccountingAutomationHub ID, not the later Inno AppId.
+                    // After a verified IN-PLACE upgrade, the original registry
+                    // ID is still correct. Compare EXE paths, never AppId alone.
+                    var isOriginalId = id.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase);
+                    var isGitHubId = id.Contains("D8E4758C-09F1-45BF-831A-59C22B79DC04", StringComparison.OrdinalIgnoreCase);
+                    if (isOriginalId || isGitHubId)
+                    {
+                        var folder = entry?.GetValue("InstallLocation") as string;
+                        var currentExe = Environment.ProcessPath;
+                        if (string.IsNullOrWhiteSpace(folder) || string.IsNullOrWhiteSpace(currentExe) ||
+                            !Path.GetFullPath(Path.Combine(folder, "AccountingAutomationHub.exe"))
+                                .Equals(Path.GetFullPath(currentExe), StringComparison.OrdinalIgnoreCase))
+                            return true; // another directory: actual duplicate
+                        continue; // same original install, no second application
+                    }
+                    if (IsForeignAahRegistration(display, id))
                         return true;
                 }
             }
