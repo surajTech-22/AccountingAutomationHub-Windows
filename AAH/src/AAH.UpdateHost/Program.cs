@@ -250,6 +250,11 @@ internal static class Program
         foreach (var f in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(source, f);
+            if (new[] { ".db", ".sqlite", ".sqlite3", ".bak", ".pfx", ".key", ".pem" }
+                .Contains(Path.GetExtension(relative).ToLowerInvariant()))
+                throw new InvalidDataException("Accounting or private data cannot be installed as application payload.");
+            if (File.GetAttributes(f).HasFlag(FileAttributes.ReparsePoint))
+                throw new InvalidDataException("Application release may not contain file links.");
             var target = Guard(install, relative);
             var stage = Guard(Path.Combine(transaction,"new"), relative);
             Directory.CreateDirectory(Path.GetDirectoryName(stage)!);
@@ -362,6 +367,12 @@ internal static class Program
             if (File.Exists(Path.Combine(tx,"committed")) || File.Exists(Path.Combine(tx,"rolled-back")))
             {
                 Directory.Delete(tx,true);
+                continue;
+            }
+            if (!File.Exists(Path.Combine(tx, "journal.json")))
+            {
+                // Before journal creation no installed bytes have changed.
+                Directory.Delete(tx, true);
                 continue;
             }
             RollbackTransaction(tx,install);
