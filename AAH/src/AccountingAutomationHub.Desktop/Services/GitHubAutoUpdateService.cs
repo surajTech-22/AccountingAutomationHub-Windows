@@ -223,7 +223,7 @@ internal static class GitHubAutoUpdateService
         }
     }
 
-    private static async Task<string?> GetVerifiedPublisherAsync(string file)
+    internal static async Task<string?> GetVerifiedPublisherAsync(string file)
     {
         // OS Authenticode trust must be valid, not merely a certificate attached to a file.
         var psi = new ProcessStartInfo("powershell.exe")
