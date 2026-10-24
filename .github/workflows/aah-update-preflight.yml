@@ -1,0 +1,114 @@
+name: AAH Update Route Preflight - No Deployment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aah-update-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-preflight:
+    name: Windows Update Candidate and Rollback Safety
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out exact source commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require main source branch
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'Update preflight may run only on the main branch.'
+          }
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) {
+            throw 'Checked out source does not match the requested commit.'
+          }
+
+      - name: Prove Windows and all-component workflows succeeded for exact SHA
+        shell: pwsh
+        env:
+          GH_API_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:GH_API_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          foreach ($file in @('windows-compile.yml','all-components-compile.yml')) {
+            $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/$file/runs?branch=main&per_page=30"
+            $result = Invoke-RestMethod -Method Get -Uri $url -Headers $headers
+            $match = @($result.workflow_runs | Where-Object {
+              $_.head_sha -eq $env:GITHUB_SHA -and $_.event -eq 'push' -and
+              $_.status -eq 'completed' -and $_.conclusion -eq 'success'
+            })
+            if ($match.Count -eq 0) {
+              throw "BLOCKED: $file has no successful completed main-push run for exact commit $env:GITHUB_SHA"
+            }
+            Write-Host "PASS: $file has a completed successful run for this exact source SHA."
+          }
+
+      - name: Set up .NET 10 SDK and Python
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify and restore SHA256 pinned original installer source
+        shell: pwsh
+        run: |
+          python ci/restore_extra_components.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned installer/source recovery failed.' }
+          foreach ($file in @('AAH/Installer/TransactionalPublish.ps1',
+              'AAH/Installer/Update-App.ps1',
+              'AAH/Installer/Verify-Installer.ps1',
+              'AAH/Installer/Start-AAHVerified.ps1',
+              'UPDATE_APP.bat')) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Missing original updater component: $file" }
+          }
+
+      - name: Run original transactional installer safety tests using disposable fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          if (-not (Test-Path $windowsPowerShell)) { throw 'Windows PowerShell 5.1 unavailable' }
+          $root = (Resolve-Path 'AAH').Path
+          foreach ($test in @('Verify-Replacement.ps1','Verify-PackageRetry.ps1',
+                               'Verify-Shutdown.ps1','Verify-Startup.ps1')) {
+            $path = Join-Path $root "Tests\AAH.Package.Tests\$test"
+            Write-Host "RUNNING disposable package fixture: $test"
+            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path -PackageRoot $root
+            if ($LASTEXITCODE -ne 0) { throw "Installer fixture failed: $test" }
+            Write-Host "PASS: $test"
+          }
+
+      - name: Publish isolated self-contained Windows application candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish 'AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj' --configuration Release --runtime win-x64 --self-contained true --output ci-update/publish -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { throw 'Self-contained Windows publish failed.' }
+          if (-not (Test-Path ci-update/publish/AccountingAutomationHub.exe)) { throw 'Published executable missing.' }
+
+      - name: Re-read candidate ZIP and verify SHA256, presence and data exclusions
+        shell: pwsh
+        run: |
+          python ci/build_update_candidate.py --publish ci-update/publish --output ci-update/out --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Update candidate integrity failed.' }
+          Write-Host 'NO DEPLOYMENT: no installer, release, auto-update endpoint, or installed user application was changed.'
+
+      - name: Preserve unpublished candidate and independent checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-NONINSTALLABLE-Update-Preflight
+          path: ci-update/out/*
+          if-no-files-found: error
+          retention-days: 7
