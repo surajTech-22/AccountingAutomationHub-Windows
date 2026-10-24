@@ -8,8 +8,10 @@ using System.Text.RegularExpressions;
 
 namespace Aah.UpdateHost;
 
-// This executable is only eligible for unattended installation once Authenticode
-// signed and distributed alongside an approved signed AAH application release.
+// This executable follows the owner's GitHub HTTPS + SHA256 release channel.
+// If Authenticode is present, it MUST match the already installed publisher.
+// Unsigned binaries receive no Windows publisher trust and require explicit
+// user enrollment of the GitHub release channel first.
 internal static class Program
 {
     private const string Owner = "surajTech-22";
@@ -50,8 +52,8 @@ internal static class Program
             var self = Environment.ProcessPath ?? throw new InvalidOperationException("Updater process path missing.");
             var publisher = await VerifiedPublisherAsync(self);
             var installedPublisher = await VerifiedPublisherAsync(target);
-            if (publisher is null || publisher != installedPublisher)
-                throw new InvalidDataException("Publisher verification failed: both updater and AAH must have a valid matching Authenticode signature.");
+            if (!PublisherIdentityCompatible(publisher, installedPublisher))
+                throw new InvalidDataException("Updater and installed AAH have incompatible Authenticode signing identities.");
 
             using var parent = Process.GetProcessById(parentId);
             if (!SameProcessPath(parent, target))
@@ -70,6 +72,8 @@ internal static class Program
             var manifest = manifestDoc.RootElement;
             if (manifest.GetProperty("protocol").GetString() != "AAH-GITHUB-AUTOUPDATE-v1" ||
                 manifest.GetProperty("release").GetString() != tag ||
+                manifest.GetProperty("repository").GetString() != Owner + "/" + Repository ||
+                manifest.GetProperty("verification").GetString() != "github-release-sha256-v1" ||
                 manifest.GetProperty("automatic_install_allowed").GetBoolean() != true ||
                 manifest.GetProperty("app_asset").GetString() != AssetName)
                 throw new InvalidDataException("The GitHub release is not authorized for automatic installation.");
@@ -86,8 +90,9 @@ internal static class Program
                 var staged = Path.Combine(scratch, "publish");
                 ExtractStrict(archivePath, staged);
                 var stagedExe = Path.Combine(staged, "AccountingAutomationHub.exe");
-                if (!File.Exists(stagedExe) || await VerifiedPublisherAsync(stagedExe) != publisher)
-                    throw new InvalidDataException("The release contains no matching signed AAH application.");
+                if (!File.Exists(stagedExe) ||
+                    !PublisherIdentityCompatible(installedPublisher, await VerifiedPublisherAsync(stagedExe)))
+                    throw new InvalidDataException("Release application and installed AAH have incompatible signing identities.");
                 var installedVersion = FileVersionInfo.GetVersionInfo(target).FileVersion;
                 var newVersion = FileVersionInfo.GetVersionInfo(stagedExe).FileVersion;
                 if (!Version.TryParse(installedVersion, out var oldVer) ||
@@ -442,6 +447,11 @@ internal static class Program
             Equals(expected, StringComparison.OrdinalIgnoreCase); }
         catch { return false; }
     }
+
+    internal static bool PublisherIdentityCompatible(string? expected, string? actual) =>
+        (expected is null && actual is null) ||
+        (expected is not null && actual is not null &&
+         expected.Equals(actual, StringComparison.OrdinalIgnoreCase));
 
     private static async Task<string?> VerifiedPublisherAsync(string path)
     {
