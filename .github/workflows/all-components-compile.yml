@@ -9,6 +9,7 @@ on:
       - 'ci/**'
       - '.github/workflows/all-components-compile.yml'
       - '.github/workflows/aah-update-preflight.yml'
+      - 'docs/AAH_GITHUB_AUTOUPDATE_ROLLOUT.md'
   pull_request:
     branches: [main]
   workflow_dispatch:
