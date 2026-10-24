@@ -47,6 +47,7 @@ public partial class App : System.Windows.Application
     private Task? _activationListener;
     private EventWaitHandle? _updateShutdownEvent;
     private RegisteredWaitHandle? _updateShutdownWait;
+    private int _updateShutdownRequestInProgress;
     private bool _isExiting;
     private bool _lastBalloonOpensActionCenter;
     private string _lastBalloonTargetPage = string.Empty;
@@ -1174,8 +1175,42 @@ public partial class App : System.Windows.Application
         catch (Exception exception) { WriteStartupDiagnostic("Updater readiness signal: " + exception.Message); }
     }
 
-    // Per-process request: the updater verifies the installed executable before signaling.
-    // This is deliberately separate from normal window close, which can hide to tray.
+    // The updater targets this exact PID and EXE path. Window close-to-tray is
+    // not sufficient: only the updater event requests an actual application exit.
+    // Never terminate an in-progress Tally synchronization or queued import/export.
+    private async Task ExitForVerifiedUpdateWhenIdleAsync()
+    {
+        if (Interlocked.Exchange(ref _updateShutdownRequestInProgress, 1) != 0)
+            return;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddMinutes(10);
+            var quietSamples = 0;
+            WriteShutdownDiagnostic("Verified update exit requested; waiting for accounting/Tally queues.");
+            while (DateTime.UtcNow < deadline && !_isExiting)
+            {
+                var busy = (_mainViewModel?.IsTallyBusy ?? false) ||
+                    (AutomationService?.HasPendingWorkForUpdate ?? false) ||
+                    !_distributedImportCancellations.IsEmpty;
+                if (busy) quietSamples = 0;
+                else if (++quietSamples >= 3)
+                {
+                    WriteShutdownDiagnostic("Verified update: queues idle for 3 checks; exiting gracefully.");
+                    ExitApplication();
+                    return;
+                }
+                await Task.Delay(2000);
+            }
+            // No kill, no app replacement while business operations remain active.
+            WriteShutdownDiagnostic("Verified update deferred: active operations did not drain; application left running.");
+        }
+        catch (Exception exception)
+        {
+            WriteShutdownDiagnostic("Verified update shutdown check failed; app kept alive: " + exception.Message);
+        }
+        finally { Interlocked.Exchange(ref _updateShutdownRequestInProgress, 0); }
+    }
+
     private void StartUpdateShutdownListener()
     {
         try
@@ -1186,8 +1221,8 @@ public partial class App : System.Windows.Application
             _updateShutdownWait = ThreadPool.RegisterWaitForSingleObject(signal, (_, _) =>
             {
                 if (!Dispatcher.HasShutdownStarted)
-                    Dispatcher.BeginInvoke(new Action(ExitApplication));
-            }, null, Timeout.Infinite, executeOnlyOnce: true);
+                    Dispatcher.BeginInvoke(new Action(() => _ = ExitForVerifiedUpdateWhenIdleAsync()));
+            }, null, Timeout.Infinite, executeOnlyOnce: false);
         }
         catch (Exception exception)
         {
