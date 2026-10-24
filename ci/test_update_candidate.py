@@ -44,7 +44,7 @@ def main():
         rejected(lambda: stage(src, out, "not-a-commit"), "invalid source SHA")
         exe.rename(src / "missing.exe")
         rejected(lambda: stage(src, out, SHA), "missing entry executable")
-        exe.rename(src / "AccountingAutomationHub.exe")
+        (src / "missing.exe").rename(exe)
         private_data = src / "business.sqlite"
         private_data.write_bytes(b"private user data fixture")
         rejected(lambda: stage(src, out, SHA), "accounting database in candidate")
