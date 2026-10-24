@@ -235,7 +235,7 @@ internal static class Program
         }
     }
 
-    private sealed class UpdateRuntimeBusyException(string message) : Exception(message);
+    private sealed class UpdateRuntimeBusyException(string message) : Exception(message) { }
     private sealed record Entry(string Relative, bool Existed, string OldHash, string NewHash);
     private sealed record Journal(string Install, List<Entry> Entries);
 
