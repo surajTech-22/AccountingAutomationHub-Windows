@@ -9,6 +9,7 @@ on:
       - 'ci/**'
       - '.github/workflows/all-components-compile.yml'
       - '.github/workflows/aah-update-preflight.yml'
+      - '.github/workflows/aah-signed-release.yml'
       - 'docs/AAH_GITHUB_AUTOUPDATE_ROLLOUT.md'
   pull_request:
     branches: [main]
@@ -170,6 +171,8 @@ jobs:
         include:
           - project: AAH.AutoUpdate.Tests
             marker: 'PASS: 7/7 AAH signed GitHub auto-update protocol scenarios.'
+          - project: AAH.UpdateHost.Tests
+            marker: 'PASS: 6/6 AAH UpdateHost transactional safety scenarios.'
           - project: AAH.BankOcrSafety.Tests
             marker: 'PASS: 12/12 Bank OCR verifier safety scenarios.'
           - project: AAH.BankPdfRouting.Tests
