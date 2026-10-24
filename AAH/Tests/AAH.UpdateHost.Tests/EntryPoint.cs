@@ -84,6 +84,35 @@ internal static class EntryPoint
         Assert(!File.Exists(Path.Combine(root,"outside.txt")),"ZIP wrote outside extraction directory.");
         Console.WriteLine("PASS: ZIP traversal rejected before application replacement.");
 
+        // Repeat two successful automatic releases on the SAME installed app.
+        // Both application binary and updater binary must be replaced in place,
+        // and no second install folder or old transaction directory may remain.
+        var updaterPath = Path.Combine(install, "AAH_Update.exe");
+        File.WriteAllText(updaterPath, "PREVIOUS UPDATER");
+        File.WriteAllText(Path.Combine(publish, "AAH_Update.exe"), "RELEASE 1 UPDATER");
+        File.WriteAllText(target, "ORIGINAL EXE");
+        var firstRelease = Program.StageTransaction(publish, install);
+        Program.ApplyTransaction(firstRelease, install);
+        Assert(File.ReadAllText(updaterPath) == "RELEASE 1 UPDATER",
+            "First release did not replace old installed updater.");
+        Program.CompleteTransaction(firstRelease);
+        Assert(!Directory.Exists(firstRelease), "Committed release retained old app files.");
+
+        File.WriteAllText(Path.Combine(publish, "AccountingAutomationHub.exe"), "RELEASE 2 EXE");
+        File.WriteAllText(Path.Combine(publish, "AAH_Update.exe"), "RELEASE 2 UPDATER");
+        var nextRelease = Program.StageTransaction(publish, install);
+        Program.ApplyTransaction(nextRelease, install);
+        Assert(File.ReadAllText(target) == "RELEASE 2 EXE" &&
+               File.ReadAllText(updaterPath) == "RELEASE 2 UPDATER",
+            "Second release left an older application or updater executable.");
+        Assert(File.ReadAllText(records) == "KEEP BOOKS",
+            "Repeated releases changed accounting data.");
+        Program.CompleteTransaction(nextRelease);
+        Assert(!Directory.Exists(nextRelease) &&
+               Directory.GetDirectories(install, ".aah-github-swap-*").Length == 0,
+            "Repeated releases retained prior app/update folders.");
+        Console.WriteLine("PASS: repeated auto-updates replace old AAH_Update.exe and binaries without duplicate install or retained swap folders.");
+
         var maliciousJournal = Program.StageTransaction(publish, install);
         Program.ApplyTransaction(maliciousJournal,install);
         File.WriteAllText(target, "EXTERNALLY MODIFIED");
@@ -101,7 +130,7 @@ internal static class EntryPoint
         try
         {
             Test(temp);
-            Console.WriteLine("PASS: 7/7 AAH UpdateHost transactional safety scenarios.");
+            Console.WriteLine("PASS: 8/8 AAH UpdateHost transactional safety scenarios.");
             return 0;
         }
         finally
