@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using Microsoft.Win32;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -36,6 +37,7 @@ internal static class GitHubAutoUpdateService
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
+    private static int _duplicateInstallationNotified;
 
     internal static void Start(bool isLanClient)
     {
@@ -129,6 +131,13 @@ internal static class GitHubAutoUpdateService
         // installs cannot acquire this checker without replacing the old app.
         var installedExe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(installedExe) || !File.Exists(installedExe)) return;
+        if (HasAnotherAahInstallation())
+        {
+            if (Interlocked.Exchange(ref _duplicateInstallationNotified, 1) == 0)
+                Log("Auto-update paused: another AAH installer identity exists. Keep both copies and data intact pending supervised migration.");
+            return;
+        }
+        Interlocked.Exchange(ref _duplicateInstallationNotified, 0);
         var signer = await GetVerifiedPublisherAsync(installedExe).ConfigureAwait(false);
 
         using var response = await Client.GetAsync(ReleaseApi).ConfigureAwait(false);
@@ -235,6 +244,44 @@ internal static class GitHubAutoUpdateService
             Interlocked.Exchange(ref _updateLaunched, 0);
             throw;
         }
+    }
+
+    // The same identity guard exists in AAH_GitHubSetup.iss. Two separately
+    // registered installations mean no in-place update is safe until their
+    // registry AppIds and actual executable/data paths are reconciled.
+    internal static bool IsForeignAahRegistration(string? displayName, string? registryId) =>
+        !string.IsNullOrWhiteSpace(displayName) &&
+        (displayName.StartsWith("Accounting Automation H", StringComparison.OrdinalIgnoreCase) ||
+         displayName.Equals("AAH", StringComparison.OrdinalIgnoreCase) ||
+         displayName.StartsWith("AAH ", StringComparison.OrdinalIgnoreCase)) &&
+        (registryId?.Contains("D8E4758C-09F1-45BF-831A-59C22B79DC04",
+            StringComparison.OrdinalIgnoreCase) != true);
+
+    private static bool HasAnotherAahInstallation()
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
+        foreach (var view in new[] { RegistryView.Registry32, RegistryView.Registry64 })
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall");
+                if (uninstall is null) continue;
+                foreach (var id in uninstall.GetSubKeyNames())
+                {
+                    using var entry = uninstall.OpenSubKey(id);
+                    if (IsForeignAahRegistration(entry?.GetValue("DisplayName") as string, id))
+                        return true;
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                Log("Cannot verify AAH installation uniqueness: " + ex.GetType().Name);
+                return true; // Fail closed; do not change accounting application files.
+            }
+        }
+        return false;
     }
 
     internal static string GetReleaseCacheDirectory(string cacheRoot, string releaseTag)
