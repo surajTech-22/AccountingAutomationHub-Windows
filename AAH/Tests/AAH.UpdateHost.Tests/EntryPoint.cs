@@ -12,6 +12,19 @@ internal static class EntryPoint
 
     private static void Test(string root)
     {
+        // An update request must never be able to stop an unrelated process.
+        // The production host only signals the already-verified AAH PID.
+        var unrelatedShutdownRejected = false;
+        try
+        {
+            Program.RequestGracefulUpdateExitAsync(
+                System.Diagnostics.Process.GetCurrentProcess(),
+                TimeSpan.FromSeconds(1)).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException) { unrelatedShutdownRejected = true; }
+        Assert(unrelatedShutdownRejected,
+            "Graceful-update protocol permitted shutdown signaling to an unrelated process.");
+
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
         Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),
