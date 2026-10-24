@@ -16,8 +16,13 @@ on:
         default: "v4.0.0.503"
         type: string
       publish_signed_draft:
-        description: "Create GitHub DRAFT release only after verified code-signing secrets exist"
-        required: true
+        description: "Legacy signed DRAFT mode; requires PFX secrets"
+        required: false
+        default: false
+        type: boolean
+      publish_checksum_release:
+        description: "Publish owner-controlled DeskSpace-style GitHub stable release using SHA256, without PFX"
+        required: false
         default: false
         type: boolean
 
@@ -37,6 +42,7 @@ jobs:
     env:
       AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.503' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
+      PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
       AAH_CODESIGN_PASSWORD: ${{ secrets.AAH_CODESIGN_PASSWORD }}
       GH_TOKEN: ${{ github.token }}
@@ -51,6 +57,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Only main branch releases permitted.' }
+          if ($env:PUBLISH_DRAFT -eq 'true' -and $env:PUBLISH_CHECKSUM -eq 'true') {
+            throw 'Signing-draft and checksum-stable modes are mutually exclusive.'
+          }
           if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Git SHA mismatch.' }
           if ($env:AAH_TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') {
             throw 'Tag must be a complete four-component stable AAH version.'
@@ -63,7 +72,7 @@ jobs:
           Write-Host "Validated release $env:AAH_TAG from $env:GITHUB_SHA."
 
       - name: Require successful Windows and full regressions at exact SHA
-        if: ${{ inputs.publish_signed_draft }}
+        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release }}
         shell: pwsh
         run: |
           $headers = @{
@@ -189,7 +198,7 @@ jobs:
           Write-Host 'PASS: trusted same-publisher Authenticode signed Setup, AAH and Update binaries.'
 
       - name: Create non-installable unsigned CI preview artifact
-        if: ${{ !inputs.publish_signed_draft }}
+        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release }}
         shell: pwsh
         run: |
           $src = (Resolve-Path ci-release/publish).Path
@@ -200,7 +209,7 @@ jobs:
           Write-Host 'Candidate prepared only. No user machine update or GitHub release was made.'
 
       - name: Upload disposable unsigned build preview
-        if: ${{ !inputs.publish_signed_draft }}
+        if: ${{ !inputs.publish_signed_draft && !inputs.publish_checksum_release }}
         uses: actions/upload-artifact@v4
         with:
           name: AAH-UNSIGNED-DO-NOT-INSTALL
@@ -208,8 +217,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      - name: Create signed release payload and protocol
-        if: ${{ inputs.publish_signed_draft }}
+      - name: Create SHA256 verified GitHub release payload and protocol
+        if: ${{ inputs.publish_signed_draft || inputs.publish_checksum_release }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -223,6 +232,8 @@ jobs:
             "$updateDigest  AAH_Update.exe" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
           $protocol=[ordered]@{
             protocol='AAH-GITHUB-AUTOUPDATE-v1'
+            repository='surajTech-22/AccountingAutomationHub-Windows'
+            verification='github-release-sha256-v1'
             release=$env:AAH_TAG
             source_sha=$env:GITHUB_SHA
             asset='AAH_Update.exe'
@@ -235,7 +246,7 @@ jobs:
             $protocol,[Text.UTF8Encoding]::new($false))
           if ((Get-FileHash ci-release/out/AAH_Update.exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $updateDigest) { throw 'Updater integrity changed.' }
           if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $appDigest) { throw 'Application archive integrity changed.' }
-          Write-Host 'PASS: signed exact-version release assets and SHA256 protocol staged.'
+          Write-Host 'PASS: exact-version GitHub release assets and SHA256 protocol staged.'
 
       - name: Publish GitHub DRAFT only (not latest or stable)
         if: ${{ inputs.publish_signed_draft }}
@@ -248,3 +259,37 @@ jobs:
           gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "DRAFT: do not publish until production OCR, Tally, installed-client and rollback acceptance passes. Signing and CI gates passed."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
+
+      - name: Publish DeskSpace-style GitHub checksum release (without PFX)
+        if: ${{ inputs.publish_checksum_release }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:PUBLISH_DRAFT -eq 'true') { throw 'Conflicting channel flags.' }
+          $tag=$env:AAH_TAG
+          gh release view $tag -R $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Release tag $tag already exists; refusing replacement." }
+          foreach ($path in @('ci-release/out/AAH_Setup.exe',
+                               'ci-release/out/AAH_Update.exe',
+                               'ci-release/out/AAH_Update.exe.sha256',
+                               'ci-release/out/AAH_App-win-x64.zip',
+                               'ci-release/out/AAH_AutoUpdate.json')) {
+            if (-not (Test-Path $path) -or (Get-Item $path).Length -lt 16) {
+              throw "Cannot publish incomplete release: $path"
+            }
+          }
+          $manifest=Get-Content ci-release/out/AAH_AutoUpdate.json -Raw | ConvertFrom-Json
+          if ($manifest.release -ne $tag -or
+              $manifest.repository -ne $env:GITHUB_REPOSITORY -or
+              $manifest.verification -ne 'github-release-sha256-v1' -or
+              $manifest.automatic_install_allowed -ne $true) {
+            throw 'Release authorization manifest rejected.'
+          }
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release."
+          if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
+          $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
+              @($release.assets).Count -lt 5) {
+            throw 'Stable GitHub release readback failed.'
+          }
+          Write-Host "PASS: $tag published with GitHub SHA256 assets; no signing certificate required."
