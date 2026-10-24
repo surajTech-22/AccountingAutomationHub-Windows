@@ -268,8 +268,11 @@ public partial class App : System.Windows.Application
                     MessageBoxImage.Information);
             }
 
-            var startHidden = !networkClientMode && e.Args.Any(arg => arg.Equals("--background", StringComparison.OrdinalIgnoreCase))
-                              && Preferences.GetBool(ApplicationSettingKeys.CloseToTray);
+            // --background is an explicit Windows autostart contract.
+            // Never turn it into a visible startup because a persisted UI preference changed.
+            // Background workers and watchers must start without a manually opened panel.
+            var startHidden = !networkClientMode &&
+                e.Args.Any(arg => arg.Equals("--background", StringComparison.OrdinalIgnoreCase));
             if (!startHidden)
             {
                 // Fix96 R1: one persistent MainWindow HWND is the visual host for Workspace,
@@ -731,54 +734,38 @@ public partial class App : System.Windows.Application
         else ShowAccountingWindow();
     }
 
+    // Standalone AAH is an always-on tray application. Closing a panel must
+    // never dispose its watcher/Auto Import/Tally automation runtime.
+    // Actual shutdown is reserved for the explicit tray Exit and for the
+    // verified process-targeted update-shutdown handler.
     public void HandleMainWindowClosing(CancelEventArgs e)
     {
         if (_isExiting || Preferences is null) return;
+        e.Cancel = true;
+        _mainWindow?.Hide();
         if (NetworkClientRuntime.IsNetworkClient)
         {
-            // LAN remote access, messages, policy changes and update commands are live runtime services.
-            // Closing the window must therefore hide to tray rather than kill the enrolled device agent.
-            // A deliberate Exit from the tray/menu still terminates the process normally.
-            e.Cancel = true;
-            _mainWindow?.Hide();
-            ShowTrayBalloon("AAH LAN is still live", "Remote Assist, messages, Work, access policy and Main Server updates continue live in the system tray. Use Exit to stop AAH completely.", Forms.ToolTipIcon.Info);
-            return;
-        }
-        if (Preferences.GetBool(ApplicationSettingKeys.CloseToTray))
-        {
-            e.Cancel = true;
-            _mainWindow?.Hide();
-            ShowTrayBalloon(
-                "Accounting Automation Hub is still running",
-                "Background monitoring continues. Right-click the tray icon for Create Folder Here, Action Required and Settings.",
+            ShowTrayBalloon("AAH LAN is still live",
+                "Remote Assist, messages, Work, access policy and Main Server updates continue live in the system tray. Use Exit to stop AAH completely.",
                 Forms.ToolTipIcon.Info);
-            return;
         }
-
-        _isExiting = true;
-        try { CleanupRuntime(); }
-        catch (Exception exception) { WriteShutdownDiagnostic("Exit cleanup error: " + exception); }
-        finally { Dispatcher.BeginInvoke(new Action(Shutdown)); }
+        else
+        {
+            ShowTrayBalloon("Accounting Automation Hub is still running",
+                "Watchers, Auto Import and background monitoring continue. Use tray Exit to close AAH completely.",
+                Forms.ToolTipIcon.Info);
+        }
     }
 
     public void HandleAuditWindowClosing(CancelEventArgs e)
     {
         if (_isExiting || Preferences is null) return;
-        if (NetworkClientRuntime.IsNetworkClient || Preferences.GetBool(ApplicationSettingKeys.CloseToTray))
-        {
-            e.Cancel = true;
-            _auditWindow?.Hide();
-            ShowTrayBalloon(
-                NetworkClientRuntime.IsNetworkClient ? "AAH LAN is still live" : "Accounting Automation Hub is still running",
-                "AAH background services continue in the system tray. Accounting and Audit client selections remain independent.",
-                Forms.ToolTipIcon.Info);
-            return;
-        }
-
-        _isExiting = true;
-        try { CleanupRuntime(); }
-        catch (Exception exception) { WriteShutdownDiagnostic("Exit cleanup error: " + exception); }
-        finally { Dispatcher.BeginInvoke(new Action(Shutdown)); }
+        e.Cancel = true;
+        _auditWindow?.Hide();
+        ShowTrayBalloon(
+            NetworkClientRuntime.IsNetworkClient ? "AAH LAN is still live" : "Accounting Automation Hub is still running",
+            "Background services continue in the system tray. Use tray Exit to close AAH completely.",
+            Forms.ToolTipIcon.Info);
     }
 
     public void ExitApplication()
