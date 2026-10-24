@@ -1,6 +1,8 @@
 # AAH GitHub update route — verified preflight and activation steps
 
 **Status:** SAFETY PREFLIGHT ONLY. GitHub auto-installation is NOT enabled.
+The source repository was confirmed **public** on 24 October 2026.
+Do not add bank statements, account metadata, passwords or other private material.
 
 The existing `NetworkClientSelfUpdateService` is for LAN-client packages from
 the enrolled AAH Main Server. It must not be re-pointed to unauthenticated
@@ -53,9 +55,10 @@ scanned statement or live Tally operation, and does not sign a Windows setup.
 ## Enable a GitHub-backed auto-update feed only after approval
 
 6. Decide the download channel:
-   - **Recommended:** keep this source repository private and create a
-     separate, publicly downloadable *binary-only* GitHub Releases repository.
-     Never upload bank documents, customer data, source, diagnostics or keys.
+   - **Recommended:** consider changing this currently public source repository
+     to private, and create a separate publicly downloadable *binary-only*
+     GitHub Releases repository. Never upload bank documents, customer data,
+     source archives, diagnostics or keys to the binary channel.
    - Alternative: a private authenticated update gateway controlled by the
      AAH Main Server. Do not embed a GitHub PAT in the Windows app.
 7. Configure the Windows application updater to check the fixed approved
