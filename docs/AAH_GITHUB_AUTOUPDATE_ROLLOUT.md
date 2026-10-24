@@ -10,7 +10,7 @@ channel are independent until the checks below are satisfied.
 ## Current automated evidence
 
 - `.github/workflows/windows-compile.yml`: Windows solution build and publish.
-- `.github/workflows/all-components-compile.yml`: eight? See its live test matrix,
+- `.github/workflows/all-components-compile.yml`: nine executable regression projects,
   including BankOcrSafety, BankPdfRouting, Stock MASTERID and Tally regressions,
   InvoiceVision Child and Android builds.
 - `.github/workflows/aah-update-preflight.yml`: **manual** same-commit
@@ -37,11 +37,11 @@ scanned statement or live Tally operation, and does not sign a Windows setup.
    readiness). Download the **AAH-NONINSTALLABLE-Update-Preflight** artifact
    to inspect `candidate-manifest.json` and `candidate-sha256.txt`; do NOT
    treat the ZIP as an updater or run it on a production PC.
-4. Test the **actual two-page scanned HDFC PDF only on the user's trusted
-   Windows test PC** with the installed AAH OCR engine. Compare every row,
-   date, reference, narration, debit, credit and running balance with source;
-   require all 22 rows, 16 debits, 6 credits, ₹18,970.83 each side, closing
-   ₹0.00. Store source and OCR diagnostics locally, not in this GitHub repo.
+4. Test **each original user-provided scanned bank statement exclusively on
+   a trusted Windows test PC** with the installed AAH OCR engine. Verify every
+   row, date, reference, narration, debit, credit, running balance, and printed
+   summary against the original source; require an exact match for every
+   document. Store source and OCR diagnostics locally, not in this GitHub repo.
    Verify MASTERID-first posting and duplicate protection in a disposable
    Tally test company. Correct recognition issues and rerun if any mismatch.
 5. Build a proper signed Setup.exe and Update.exe using the trusted original
