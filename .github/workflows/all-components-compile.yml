@@ -8,6 +8,7 @@ on:
       - 'source-bundle/components/**'
       - 'ci/**'
       - '.github/workflows/all-components-compile.yml'
+      - '.github/workflows/aah-update-preflight.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
