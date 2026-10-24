@@ -1,0 +1,242 @@
+name: AAH Signed Release Channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.503)"
+        required: true
+        default: "v4.0.0.503"
+        type: string
+      publish_signed_draft:
+        description: "Create GitHub DRAFT release only after verified code-signing secrets exist"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: aah-signed-release
+  cancel-in-progress: false
+
+jobs:
+  build-channel:
+    name: Build AAH Setup and Update channel (draft-only)
+    runs-on: windows-latest
+    timeout-minutes: 85
+    env:
+      AAH_TAG: ${{ inputs.release_tag }}
+      PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
+      AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
+      AAH_CODESIGN_PASSWORD: ${{ secrets.AAH_CODESIGN_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out exact main branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require exact revision and correctly formatted release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Only main branch releases permitted.' }
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Git SHA mismatch.' }
+          if ($env:AAH_TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw 'Tag must be a complete four-component stable AAH version.'
+          }
+          $project = Get-Content 'AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj' -Raw
+          [xml]$xml = $project
+          if ($env:AAH_TAG.Substring(1) -ne [string]$xml.Project.PropertyGroup.Version) {
+            throw 'Requested release tag does not match project Version.'
+          }
+          Write-Host "Validated release $env:AAH_TAG from $env:GITHUB_SHA."
+
+      - name: Require successful Windows and full regressions at exact SHA
+        shell: pwsh
+        run: |
+          $headers = @{
+            Authorization="Bearer $env:GH_TOKEN"
+            Accept='application/vnd.github+json'
+            'X-GitHub-Api-Version'='2022-11-28'
+          }
+          foreach ($workflow in @('windows-compile.yml','all-components-compile.yml')) {
+            $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&per_page=40"
+            $json = Invoke-RestMethod -Uri $url -Headers $headers
+            $passed = @($json.workflow_runs | Where-Object {
+              $_.head_sha -eq $env:GITHUB_SHA -and $_.event -eq 'push' -and
+              $_.status -eq 'completed' -and $_.conclusion -eq 'success'
+            })
+            if ($passed.Count -eq 0) { throw "Release refused: $workflow has no passing run for exact SHA." }
+          }
+          Write-Host 'PASS: same-SHA compilation and regression proof.'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore pinned source and run updater host regression
+        shell: pwsh
+        run: |
+          python ci/restore_extra_components.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source recovery failed.' }
+          dotnet run --project AAH/Tests/AAH.UpdateHost.Tests/AAH.UpdateHost.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Updater host transaction tests failed.' }
+          python ci/test_update_candidate.py
+          if ($LASTEXITCODE -ne 0) { throw 'Package data safety tests failed.' }
+
+      - name: Publish self-contained Windows application and updater host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item ci-release/publish,ci-release/updater,ci-release/out,ci-release/candidate -ItemType Directory -Force | Out-Null
+          dotnet publish AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj -c Release -r win-x64 --self-contained true -o ci-release/publish -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { throw 'AAH application publish failed.' }
+          dotnet publish AAH/src/AAH.UpdateHost/AAH.UpdateHost.csproj -c Release -r win-x64 --self-contained true -o ci-release/updater -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { throw 'AAH updater host publish failed.' }
+          if (-not (Test-Path ci-release/publish/AccountingAutomationHub.exe) -or
+              -not (Test-Path ci-release/updater/AAH_Update.exe)) { throw 'Required executable missing.' }
+          if ((Get-Item ci-release/publish/AccountingAutomationHub.exe).VersionInfo.FileVersion -ne $env:AAH_TAG.Substring(1)) {
+            throw 'Compiled Windows EXE version differs from release tag.'
+          }
+          Write-Host 'PASS: application and independent updater host compiled.'
+
+      - name: Install Inno Setup compiler
+        shell: pwsh
+        run: |
+          $paths = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+          $iscc = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup install failed.' }
+          }
+
+      - name: Sign app and updater only when signed draft is explicitly requested
+        if: ${{ inputs.publish_signed_draft }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if ([string]::IsNullOrWhiteSpace($env:AAH_CODESIGN_PFX_B64) -or
+              [string]::IsNullOrWhiteSpace($env:AAH_CODESIGN_PASSWORD)) {
+            throw 'Code signing secrets missing. Refusing to produce or publish an unsigned stable release.'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'aah-signing.pfx'
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction Stop |
+            Where-Object { $_.DirectoryName -match 'x64$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signTool) { throw 'Windows SDK SignTool is missing.' }
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:AAH_CODESIGN_PFX_B64))
+            foreach ($exe in @('ci-release/publish/AccountingAutomationHub.exe','ci-release/updater/AAH_Update.exe')) {
+              & $signTool sign /f $pfx /p $env:AAH_CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+              if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $exe" }
+            }
+          }
+          finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
+
+      - name: Build conventional AAH Setup.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+                    "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup compiler is missing.' }
+          $env:AAH_RELEASE_VERSION = $env:AAH_TAG.Substring(1)
+          $env:AAH_RELEASE_PUBLISH = (Resolve-Path 'ci-release/publish').Path
+          & $iscc "/O$((Resolve-Path 'ci-release/out').Path)" 'AAH/Installer/AAH_GitHubSetup.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'AAH_Setup.exe build failed.' }
+          if (-not (Test-Path ci-release/out/AAH_Setup.exe)) { throw 'Setup binary missing.' }
+
+      - name: Sign final Setup.exe and verify trusted publisher identities
+        if: ${{ inputs.publish_signed_draft }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'aah-signing.pfx'
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.DirectoryName -match 'x64$' } | Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          try {
+            [IO.File]::WriteAllBytes($pfx,[Convert]::FromBase64String($env:AAH_CODESIGN_PFX_B64))
+            & $signTool sign /f $pfx /p $env:AAH_CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ci-release/out/AAH_Setup.exe
+            if ($LASTEXITCODE -ne 0) { throw 'Setup Authenticode signing failed.' }
+          }
+          finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
+          $thumbprints = @()
+          foreach ($f in @('ci-release/publish/AccountingAutomationHub.exe',
+                            'ci-release/updater/AAH_Update.exe','ci-release/out/AAH_Setup.exe')) {
+            $auth = Get-AuthenticodeSignature -LiteralPath $f
+            if ($auth.Status -ne 'Valid' -or -not $auth.SignerCertificate) {
+              throw "No trusted publisher signature: $f ($($auth.Status))"
+            }
+            $thumbprints += $auth.SignerCertificate.Thumbprint
+          }
+          if (@($thumbprints | Select-Object -Unique).Count -ne 1) { throw 'Release signatures have different publishers.' }
+          Write-Host 'PASS: trusted same-publisher Authenticode signed Setup, AAH and Update binaries.'
+
+      - name: Create non-installable unsigned CI preview artifact
+        if: ${{ !inputs.publish_signed_draft }}
+        shell: pwsh
+        run: |
+          $src = (Resolve-Path ci-release/publish).Path
+          [IO.Compression.ZipFile]::CreateFromDirectory($src,(Join-Path (Resolve-Path ci-release/candidate).Path 'AAH_App.UNSIGNED.zip'),[IO.Compression.CompressionLevel]::Optimal,$false)
+          Copy-Item ci-release/updater/AAH_Update.exe ci-release/candidate/AAH_Update.UNSIGNED.exe
+          Copy-Item ci-release/out/AAH_Setup.exe ci-release/candidate/AAH_Setup.UNSIGNED.exe
+          Set-Content ci-release/candidate/DO_NOT_INSTALL.txt -Value 'UNSIGNED PREVIEW: not a published AAH release, not an updater, not approved for installation.'
+          Write-Host 'Candidate prepared only. No user machine update or GitHub release was made.'
+
+      - name: Upload disposable unsigned build preview
+        if: ${{ !inputs.publish_signed_draft }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-UNSIGNED-DO-NOT-INSTALL
+          path: ci-release/candidate/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Create signed release payload and protocol
+        if: ${{ inputs.publish_signed_draft }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Copy-Item ci-release/updater/AAH_Update.exe ci-release/out/AAH_Update.exe
+          $src=(Resolve-Path ci-release/publish).Path
+          $zip=(Join-Path (Resolve-Path ci-release/out).Path 'AAH_App-win-x64.zip')
+          [IO.Compression.ZipFile]::CreateFromDirectory($src,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+          $updateDigest=(Get-FileHash ci-release/out/AAH_Update.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $appDigest=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path ci-release/out).Path 'AAH_Update.exe.sha256'),
+            "$updateDigest  AAH_Update.exe" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
+          $protocol=[ordered]@{
+            protocol='AAH-GITHUB-AUTOUPDATE-v1'
+            release=$env:AAH_TAG
+            source_sha=$env:GITHUB_SHA
+            asset='AAH_Update.exe'
+            sha256=$updateDigest
+            app_asset='AAH_App-win-x64.zip'
+            app_sha256=$appDigest
+            automatic_install_allowed=$true
+          } | ConvertTo-Json
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path ci-release/out).Path 'AAH_AutoUpdate.json'),
+            $protocol,[Text.UTF8Encoding]::new($false))
+          if ((Get-FileHash ci-release/out/AAH_Update.exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $updateDigest) { throw 'Updater integrity changed.' }
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $appDigest) { throw 'Application archive integrity changed.' }
+          Write-Host 'PASS: signed exact-version release assets and SHA256 protocol staged.'
+
+      - name: Publish GitHub DRAFT only (not latest or stable)
+        if: ${{ inputs.publish_signed_draft }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $tag=$env:AAH_TAG
+          gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "DRAFT: do not publish until production OCR, Tally, installed-client and rollback acceptance passes. Signing and CI gates passed."
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
+          Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
