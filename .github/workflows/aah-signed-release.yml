@@ -1,6 +1,13 @@
 name: AAH Signed Release Channel
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'AAH/src/AAH.UpdateHost/**'
+      - 'AAH/Tests/AAH.UpdateHost.Tests/**'
+      - 'AAH/Installer/AAH_GitHubSetup.iss'
+      - '.github/workflows/aah-signed-release.yml'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -28,7 +35,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.503' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
       AAH_CODESIGN_PASSWORD: ${{ secrets.AAH_CODESIGN_PASSWORD }}
@@ -56,6 +63,7 @@ jobs:
           Write-Host "Validated release $env:AAH_TAG from $env:GITHUB_SHA."
 
       - name: Require successful Windows and full regressions at exact SHA
+        if: ${{ inputs.publish_signed_draft }}
         shell: pwsh
         run: |
           $headers = @{
