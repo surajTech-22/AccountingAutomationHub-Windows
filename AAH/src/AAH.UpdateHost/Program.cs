@@ -110,37 +110,21 @@ internal static class Program
                     return 0;
                 }
 
-                var transaction = StageTransaction(staged, install);
-                try
+                // The automatic channel MUST use the exact same source-backed
+                // manual Install-AAHPublish routine as the original Update-App.ps1.
+                // There is no second C# file replacement engine in the live route.
+                var nativeScript = Path.Combine(scratch, "TransactionalPublish.ps1");
+                WriteEmbeddedManualUpdater(nativeScript);
+                await InvokeOriginalManualInstallerAsync(nativeScript, staged, install);
+                Log("Manual Install-AAHPublish replaced AAH application files and removed its completed swap journal.");
+                if (!await StartAndVerifyAsync(target, install))
                 {
-                    ApplyTransaction(transaction, install);
-                    if (!await StartAndVerifyAsync(target, install))
-                    {
-                        Log("New AAH did not signal readiness; restoring previous application files.");
-                        RollbackTransaction(transaction, install);
-                        StartWithoutReadiness(target, install);
-                        throw new InvalidOperationException("Update rolled back after failed AAH startup.");
-                    }
-                    CompleteTransaction(transaction);
-                    Log("SUCCESS: AAH " + tag + " restarted and application transaction committed.");
+                    // The original manual updater has already committed verified
+                    // bytes. Never claim health-check rollback without restoration.
+                    Log("Updated AAH startup readiness was not confirmed. The original manual updater committed installed bytes; intervention may be needed.");
+                    throw new InvalidOperationException("AAH updated, but the restart readiness check failed.");
                 }
-                catch (UpdateRuntimeBusyException)
-                {
-                    // A running app can hold open DLLs. Keep the transaction for
-                    // explicit recovery; never rewrite binaries underneath it.
-                    Log("ROLLBACK DEFERRED: new AAH remains running; recovery journal retained.");
-                    throw;
-                }
-                catch
-                {
-                    if (Directory.Exists(transaction) &&
-                        !File.Exists(Path.Combine(transaction, "committed")))
-                    {
-                        try { RollbackTransaction(transaction, install); }
-                        catch (Exception rollbackError) { Log("CRITICAL rollback needs attention: " + rollbackError); }
-                    }
-                    throw;
-                }
+                Log("SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
                 return 0;
             }
             finally
@@ -153,6 +137,58 @@ internal static class Program
             Log("FAILED (no success claimed): " + exception);
             return 1;
         }
+    }
+
+    private static void WriteEmbeddedManualUpdater(string path)
+    {
+        using var input = typeof(Program).Assembly.GetManifestResourceStream(
+            "AAH.NativeTransactionalPublish.ps1")
+            ?? throw new FileNotFoundException(
+                "The original manual AAH transactional updater was not embedded.");
+        using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        input.CopyTo(output);
+    }
+
+    internal static async Task InvokeOriginalManualInstallerAsync(
+        string manualUpdaterScript, string publishDir, string existingInstallDir)
+    {
+        // The original AAH PowerShell source is embedded, not downloaded
+        // independently from the untrusted release manifest.
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = existingInstallDir
+        };
+        psi.Environment["AAH_MANUAL_SCRIPT"] = Path.GetFullPath(manualUpdaterScript);
+        psi.Environment["AAH_PUBLISH_DIR"] = Path.GetFullPath(publishDir);
+        psi.Environment["AAH_INSTALL_DIR"] = Path.GetFullPath(existingInstallDir);
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-NonInteractive");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add(
+            "$ErrorActionPreference='Stop'; " +
+            ". $env:AAH_MANUAL_SCRIPT; " +
+            "Install-AAHPublish $env:AAH_PUBLISH_DIR $env:AAH_INSTALL_DIR; " +
+            "if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; exit 0");
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Original AAH manual updater could not start.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var output = await stdout;
+        var errors = await stderr;
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                "Original manual AAH update failed with code " + process.ExitCode +
+                ". " + errors.Trim());
+        if (!output.Contains("Application replacement verified.", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Original AAH manual updater returned without its success marker.");
     }
 
     private static string Arg(string[] args, string prefix)
