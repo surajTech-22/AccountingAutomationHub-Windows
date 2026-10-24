@@ -121,4 +121,15 @@ try
 finally { try { Directory.Delete(cache, recursive: true); } catch { } }
 Pass("remove previous updater caches but leave unrelated accounting directories");
 
+Require(GitHubAutoUpdateService.IsForeignAahRegistration(
+        "Accounting Automation Hub", "{LEGACY-AAH}_is1"),
+    "Separate legacy AAH registration not detected.");
+Require(!GitHubAutoUpdateService.IsForeignAahRegistration(
+        "Accounting Automation Hub", "{D8E4758C-09F1-45BF-831A-59C22B79DC04}_is1"),
+    "Current GitHub setup was mistaken for a duplicate legacy application.");
+Require(!GitHubAutoUpdateService.IsForeignAahRegistration(
+        "An Unrelated Application", "{SOME-OTHER-ID}"),
+    "Unrelated applications were falsely identified as AAH.");
+Pass("block update when Windows registers legacy and new AAH copies separately");
+
 Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
