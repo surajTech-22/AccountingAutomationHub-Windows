@@ -28,7 +28,6 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
-DisableDirPage=no
 UninstallDisplayIcon={app}\AccountingAutomationHub.exe
 SetupLogging=yes
 
