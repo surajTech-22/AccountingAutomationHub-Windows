@@ -253,6 +253,10 @@ public partial class App : System.Windows.Application
             InitializeTrayIcon();
             StartActivationListener();
             StartUpdateShutdownListener();
+            // Independent background GitHub release checks for normal AAH installations.
+            // Enrolled LAN clients retain their own Main Server approved update route.
+            // Unsigned legacy installs fail closed until a trusted signed bootstrap.
+            GitHubAutoUpdateService.Start(networkClientMode);
 
             if (!string.IsNullOrWhiteSpace(restoreRollback))
             {
