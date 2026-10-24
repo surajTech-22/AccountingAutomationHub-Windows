@@ -33,7 +33,10 @@ internal static class GitHubAutoUpdateService
     internal const string ProtocolAssetName = "AAH_AutoUpdate.json";
     internal const string Protocol = "AAH-GITHUB-AUTOUPDATE-v1";
 
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
+    // A signal is only a wakeup hint; every update must still pass the exact
+    // GitHub release, protocol, publisher and SHA256 checks below.
+    internal const string ReleaseSignalUrl =
+        "https://ntfy.sh/aah-surajtech22-windows-release-signal-v1/sse?since=now";
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
@@ -47,14 +50,47 @@ internal static class GitHubAutoUpdateService
 
     private static async Task CheckLoopAsync()
     {
-        // Always run outside the UI dispatcher; failures never block AAH startup or imports.
-        using var timer = new PeriodicTimer(CheckInterval);
-        do
+        // One startup check catches releases published while this PC was offline.
+        // Afterwards subscribe to release-published events: NO timed GitHub polling.
+        try { await CheckOnceAsync().ConfigureAwait(false); }
+        catch (Exception ex) { Log("startup check failed: " + ex.Message); }
+        while (true)
         {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseSignalUrl);
+                using var response = await Client.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+                {
+                    if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+                    try
+                    {
+                        using var notice = JsonDocument.Parse(line.Substring(6));
+                        var payload = notice.RootElement;
+                        if (!payload.TryGetProperty("event", out var kind) ||
+                            kind.GetString() != "message" ||
+                            !payload.TryGetProperty("message", out var message) ||
+                            ParseStableVersion(message.GetString()) is null)
+                            continue;
+                        await CheckOnceAsync().ConfigureAwait(false);
+                    }
+                    catch (JsonException) { /* ignore malformed relay notifications */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("release event connection interrupted: " + ex.Message);
+            }
+            // Reconnect only after network disruption. Re-check once to recover
+            // a release that arrived while the connection was unavailable.
+            await Task.Delay(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
             try { await CheckOnceAsync().ConfigureAwait(false); }
-            catch (Exception ex) { Log("check failed: " + ex.GetType().Name + ": " + ex.Message); }
+            catch (Exception ex) { Log("reconnect check failed: " + ex.Message); }
         }
-        while (await timer.WaitForNextTickAsync().ConfigureAwait(false));
     }
 
     internal static Version? ParseStableVersion(string? tag)
