@@ -48,7 +48,10 @@ try {
     $tx = Join-Path $install '.aah-swap-interruption-test'
     New-Item -Path (Join-Path $tx 'old') -ItemType Directory -Force | Out-Null
     $hash = Get-AAHFileHash $exe
-    $journal = [pscustomobject]@{ Schema=1; InstallDir=$install; Entries=@([pscustomobject]@{ Relative='AccountingAutomationHub.exe'; Existed=$true; OldHash=$hash; NewHash=$hash }) }
+    # Mirror Install-AAHPublish's canonical absolute install path exactly.
+    # Production refuses a pending journal if the path is not canonical.
+    $canonicalInstall = [IO.Path]::GetFullPath($install).TrimEnd([char]92,[char]47)
+    $journal = [pscustomobject]@{ Schema=1; InstallDir=$canonicalInstall; Entries=@([pscustomobject]@{ Relative='AccountingAutomationHub.exe'; Existed=$true; OldHash=$hash; NewHash=$hash }) }
     $journal | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $tx 'journal.json') -Encoding UTF8
     [IO.File]::Move($exe,(Join-Path $tx 'old\AccountingAutomationHub.exe'))
     Install-AAHPublish $publish $install
