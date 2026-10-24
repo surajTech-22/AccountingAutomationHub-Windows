@@ -310,3 +310,11 @@ jobs:
             throw 'Stable GitHub release readback failed.'
           }
           Write-Host "PASS: $tag published with GitHub SHA256 assets; no signing certificate required."
+          # GitHub release events created by GITHUB_TOKEN do not trigger other
+          # workflows. Signal subscribers directly after release readback.
+          # The message is PUBLIC release metadata; clients verify GitHub
+          # manifest + SHA256 independently before ever replacing AAH files.
+          Invoke-RestMethod -Method Post `
+            -Uri 'https://ntfy.sh/aah-surajtech22-windows-release-signal-v1' `
+            -ContentType 'text/plain' -Body $tag -TimeoutSec 30 | Out-Null
+          Write-Host "PASS: release-published event delivered to AAH subscribers."
