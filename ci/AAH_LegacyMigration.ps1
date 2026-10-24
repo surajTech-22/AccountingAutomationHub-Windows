@@ -183,7 +183,7 @@ try {
 }
 catch {
     $reason = $_.Exception.Message
-    if ($applied -and (Test-Path -LiteralPath $backup 'AccountingAutomationHub.exe')) {
+    if ($applied -and (Test-Path -LiteralPath (Join-Path $backup 'AccountingAutomationHub.exe'))) {
         try {
             $active=@(Get-CimInstance Win32_Process -Filter "Name='AccountingAutomationHub.exe'" -ErrorAction SilentlyContinue)
             if ($active.Count -eq 0) {
