@@ -172,20 +172,26 @@ internal static class GitHubAutoUpdateService
             return;
         }
         if (Interlocked.CompareExchange(ref _updateLaunched, 1, 0) != 0) return;
-        var root = Path.Combine(
+        var cacheRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AccountingAutomationHub", "GitHubAutoUpdate", Guid.NewGuid().ToString("N"));
+            "AccountingAutomationHub", "GitHubAutoUpdate");
+        // Keep only one updater per release, rather than accumulating a new
+        // random GUID folder each time the application checks for an update.
+        var root = GetReleaseCacheDirectory(cacheRoot, tag);
+        var incoming = Path.Combine(root, UpdateAssetName + ".download");
         try
         {
             Directory.CreateDirectory(root);
             var path = Path.Combine(root, UpdateAssetName);
+            // Download to a separate file, so an interrupted download never
+            // replaces the previously verified updater executable.
             using (var download = await Client.GetAsync(updateUrl!, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
             {
                 download.EnsureSuccessStatusCode();
                 if (download.Content.Headers.ContentLength is > 400_000_000)
                     throw new InvalidDataException("Updater exceeds the 400MB maximum.");
                 await using var source = await download.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                await using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await using var destination = new FileStream(incoming, FileMode.Create, FileAccess.Write, FileShare.None);
                 var buffer = new byte[128 * 1024];
                 long total = 0;
                 int read;
@@ -196,23 +202,25 @@ internal static class GitHubAutoUpdateService
                     await destination.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
                 }
             }
-            await using (var stream = File.OpenRead(path))
+            await using (var stream = File.OpenRead(incoming))
             {
                 var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream).ConfigureAwait(false));
                 if (!hash.Equals(checksum, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Downloaded updater SHA256 verification failed.");
             }
-            var updateSigner = await GetVerifiedPublisherAsync(path).ConfigureAwait(false);
+            var updateSigner = await GetVerifiedPublisherAsync(incoming).ConfigureAwait(false);
             if (!PublisherIdentityCompatible(signer, updateSigner))
                 throw new InvalidDataException("Updater has an unexpected Authenticode signing identity.");
+            // As in manual update mode, replace the OLD updater bytes only after
+            // verifying the complete incoming file. A running previous updater is
+            // left untouched; Windows will refuse overwriting its executable.
+            File.Move(incoming, path, overwrite: true);
+            CleanupStaleUpdaterFolders(cacheRoot, tag);
             var psi = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
                 WorkingDirectory = root
             };
-            // The versioned updater host must implement this exact protocol.
-            // It owns the safe accounting-queue exit, application-only file swap,
-            // process-specific shutdown/restart, health check and rollback.
             psi.ArgumentList.Add("--aah-auto-update-v1");
             psi.ArgumentList.Add("--target-exe=" + installedExe);
             psi.ArgumentList.Add("--parent-pid=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
@@ -223,9 +231,44 @@ internal static class GitHubAutoUpdateService
         }
         catch
         {
+            try { if (File.Exists(incoming)) File.Delete(incoming); } catch { }
             Interlocked.Exchange(ref _updateLaunched, 0);
             throw;
         }
+    }
+
+    internal static string GetReleaseCacheDirectory(string cacheRoot, string releaseTag)
+    {
+        if (ParseStableVersion(releaseTag) is null || !releaseTag.StartsWith("v", StringComparison.Ordinal))
+            throw new InvalidDataException("Invalid GitHub update-cache version.");
+        return Path.Combine(cacheRoot, releaseTag);
+    }
+
+    internal static int CleanupStaleUpdaterFolders(string cacheRoot, string keepTag)
+    {
+        if (ParseStableVersion(keepTag) is null || !Directory.Exists(cacheRoot)) return 0;
+        int removed = 0;
+        foreach (var directory in Directory.EnumerateDirectories(cacheRoot, "*", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(directory);
+            if (name.Equals(keepTag, StringComparison.OrdinalIgnoreCase))
+                continue;
+            // Older revisions used GUID names; current revisions use release tags.
+            // Ignore unrelated directories (which may contain private workspace data).
+            if (ParseStableVersion(name) is null &&
+                !Regex.IsMatch(name, @"\\A[a-fA-F0-9]{32}\\z", RegexOptions.CultureInvariant))
+                continue;
+            try
+            {
+                if (File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint))
+                    continue;
+                Directory.Delete(directory, recursive: true);
+                removed++;
+            }
+            catch (IOException) { /* Previous updater still running or files in use. */ }
+            catch (UnauthorizedAccessException) { /* Never force-delete a locked updater. */ }
+        }
+        return removed;
     }
 
     internal static bool PublisherIdentityCompatible(string? installed, string? updater) =>
