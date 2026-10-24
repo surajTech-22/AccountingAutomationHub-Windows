@@ -149,6 +149,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Native transactional updater fixture failed: $name" }
             Write-Host "PASS: original native updater fixture $name"
           }
+      - name: Print limited source context for failed original updater recovery fixture
+        if: failure()
+        shell: pwsh
+        run: |
+          $file = 'AAH/Installer/TransactionalPublish.ps1'
+          if (Test-Path $file) {
+            Select-String -Path $file -Pattern 'Invalid pending application transaction' -Context 65,25 |
+              ForEach-Object { Write-Host ($_.Context.PreContext -join "`n"); Write-Host $_.Line; Write-Host ($_.Context.PostContext -join "`n") }
+          }
       # Never run the transactional installer on a CI runner: it is a deployment operation.
 
   regression-execution:
