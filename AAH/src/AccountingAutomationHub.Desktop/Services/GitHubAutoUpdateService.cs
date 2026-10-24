@@ -32,7 +32,7 @@ internal static class GitHubAutoUpdateService
     internal const string ProtocolAssetName = "AAH_AutoUpdate.json";
     internal const string Protocol = "AAH-GITHUB-AUTOUPDATE-v1";
 
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(6);
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
