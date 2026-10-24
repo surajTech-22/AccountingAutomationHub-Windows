@@ -120,9 +120,17 @@ internal static class Program
                     Directory.Delete(transaction, true);
                     Log("SUCCESS: AAH " + tag + " restarted and application transaction committed.");
                 }
+                catch (UpdateRuntimeBusyException)
+                {
+                    // A running app can hold open DLLs. Keep the transaction for
+                    // explicit recovery; never rewrite binaries underneath it.
+                    Log("ROLLBACK DEFERRED: new AAH remains running; recovery journal retained.");
+                    throw;
+                }
                 catch
                 {
-                    if (!File.Exists(Path.Combine(transaction, "committed")))
+                    if (Directory.Exists(transaction) &&
+                        !File.Exists(Path.Combine(transaction, "committed")))
                     {
                         try { RollbackTransaction(transaction, install); }
                         catch (Exception rollbackError) { Log("CRITICAL rollback needs attention: " + rollbackError); }
@@ -196,7 +204,7 @@ internal static class Program
             throw new InvalidDataException("Downloaded application archive SHA256 mismatch.");
     }
 
-    private static void ExtractStrict(string zipPath, string dest)
+    internal static void ExtractStrict(string zipPath, string dest)
     {
         Directory.CreateDirectory(dest);
         using var zip = ZipFile.OpenRead(zipPath);
@@ -227,14 +235,17 @@ internal static class Program
         }
     }
 
+    private sealed class UpdateRuntimeBusyException(string message) : Exception(message);
     private sealed record Entry(string Relative, bool Existed, string OldHash, string NewHash);
     private sealed record Journal(string Install, List<Entry> Entries);
 
-    private static string StageTransaction(string source, string install)
+    internal static string StageTransaction(string source, string install)
     {
         RecoverPending(install);
         var transaction = Path.Combine(install, ".aah-github-swap-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(transaction);
+        try
+        {
         var entries = new List<Entry>();
         foreach (var f in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
@@ -251,6 +262,13 @@ internal static class Program
         File.WriteAllText(Path.Combine(transaction,"journal.json"), JsonSerializer.Serialize(new Journal(
             Path.GetFullPath(install), entries)), Encoding.UTF8);
         return transaction;
+        }
+        catch
+        {
+            // Staging failures happen before any installed file is replaced.
+            try { Directory.Delete(transaction, true); } catch { }
+            throw;
+        }
     }
 
     private static string Guard(string root, string relative)
@@ -270,7 +288,7 @@ internal static class Program
         return full;
     }
 
-    private static void ApplyTransaction(string tx, string install)
+    internal static void ApplyTransaction(string tx, string install)
     {
         var journal = ReadJournal(tx, install);
         foreach (var row in journal.Entries)
@@ -305,7 +323,7 @@ internal static class Program
         return journal;
     }
 
-    private static void RollbackTransaction(string tx, string install)
+    internal static void RollbackTransaction(string tx, string install)
     {
         var journal = ReadJournal(tx,install);
         foreach (var entry in journal.Entries.AsEnumerable().Reverse())
@@ -335,7 +353,7 @@ internal static class Program
         Directory.Delete(tx,true);
     }
 
-    private static void RecoverPending(string install)
+    internal static void RecoverPending(string install)
     {
         foreach (var tx in Directory.GetDirectories(install, ".aah-github-swap-*"))
         {
@@ -374,7 +392,12 @@ internal static class Program
         var limit = DateTime.UtcNow.AddSeconds(90);
         while (DateTime.UtcNow < limit)
         {
-            if (ready.WaitOne(300)) return true;
+            if (ready.WaitOne(300))
+            {
+                // A transient startup signal is not enough; process must remain alive.
+                await Task.Delay(2000);
+                return !launched.HasExited;
+            }
             if (launched.HasExited) return false;
             await Task.Delay(100);
         }
@@ -392,7 +415,7 @@ internal static class Program
             catch (WaitHandleCannotBeOpenedException) { }
         }
         if (!launched.HasExited)
-            throw new InvalidOperationException("New AAH did not exit; rollback deferred to protect running process.");
+            throw new UpdateRuntimeBusyException("New AAH did not exit; rollback deferred to protect running process.");
         return false;
     }
 
