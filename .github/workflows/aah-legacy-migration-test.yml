@@ -1,0 +1,74 @@
+name: AAH Original Installation Migration Safety
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ci/AAH_LegacyMigration.ps1'
+      - 'ci/legacy/TransactionalPublish.ps1'
+      - '.github/workflows/aah-legacy-migration-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-safety:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover original source with SHA256 proof
+        shell: pwsh
+        run: |
+          python ci/restore_extra_components.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original manual AAH source recovery failed' }
+          $original='AAH/Installer/TransactionalPublish.ps1'
+          $digest=(Get-FileHash $original -Algorithm SHA256).Hash
+          if ($digest -ne 'C07D82F5101527E51B4B39BCCB18512200F7BE0B91191C7FE8AC544A207A6F9D') {
+            throw 'Original production replacement code SHA256 is not trusted.'
+          }
+          $expected=([IO.File]::ReadAllText((Resolve-Path $original).Path) -replace "`r`n","`n").TrimEnd()
+          $bundled=([IO.File]::ReadAllText((Resolve-Path 'ci/legacy/TransactionalPublish.ps1').Path) -replace "`r`n","`n").TrimEnd()
+          if ($expected -cne $bundled) {
+            throw 'In-place migrator does not use the exact source of the original production manual update routine.'
+          }
+          Write-Host 'PASS: migration code uses the exact original SHA256-pinned manual updater.'
+
+      - name: Parse all PowerShell files and prevent hidden execution
+        shell: pwsh
+        run: |
+          foreach($file in @('ci/AAH_LegacyMigration.ps1','ci/legacy/TransactionalPublish.ps1')) {
+            $tokens=$null
+            $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path,
+               [ref]$tokens,[ref]$errors) | Out-Null
+            if (@($errors).Count -ne 0) {
+              $errors | ForEach-Object { Write-Host $_ }
+              throw "Invalid PowerShell migration syntax: $file"
+            }
+            Write-Host "PASS: PowerShell script parses correctly: $file"
+          }
+
+      - name: Prove -Apply is not a default action and migration refuses unknown PCs
+        shell: pwsh
+        run: |
+          if (Test-Path 'C:\Accounting Automation Hub') {
+            throw 'Unexpected existing accounting installation on disposable CI runner.'
+          }
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ci/AAH_LegacyMigration.ps1
+          if ($LASTEXITCODE -eq 0) {
+            throw 'Migration unexpectedly approved a PC with no original AAH registry identity.'
+          }
+          if (Test-Path 'C:\Accounting Automation Hub') {
+            throw 'Migration modified or created an installation on an unrecognized PC.'
+          }
+          Write-Host 'PASS: migration fails closed without verified old and new AAH identities.'
+
+      - name: Exercise original application replacement and rollback in disposable folders
+        shell: pwsh
+        run: |
+          $root=(Resolve-Path 'AAH').Path
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'AAH/Tests/AAH.Package.Tests/Verify-Replacement.ps1' -PackageRoot $root
+          if ($LASTEXITCODE -ne 0) { throw 'Native manual AAH replacement test failed' }
+          Write-Host 'PASS: existing native manual app replacement, rollback and no-old-copies verification.'
