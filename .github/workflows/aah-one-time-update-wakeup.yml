@@ -1,0 +1,43 @@
+name: One-time AAH installed updater wakeup (owner requested)
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/aah-one-time-update-wakeup.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  wake-existing-listener:
+    if: ${{ github.actor == 'surajTech-22' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify latest stable AAH release and signal its installed listener
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Remote notice is only a wakeup hint. Existing Windows R7 checks
+          # owner/repository, version, manifest, asset SHA256 and publisher
+          # before it can launch the separately verified updater host.
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")
+          tag=$(printf '%s' "$release_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'No valid stable release tag'; exit 1; }
+          printf '%s' "$release_json" | python3 -c '
+          import json,sys
+          r=json.load(sys.stdin)
+          assert not r["draft"] and not r["prerelease"], "No stable release"
+          required={"AAH_Update.exe","AAH_Update.exe.sha256","AAH_AutoUpdate.json","AAH_App-win-x64.zip"}
+          found={a["name"] for a in r.get("assets",[])}
+          assert required <= found, "Stable AAH release lacks approved update assets"
+          '
+          echo "Stable AAH release found: $tag"
+          curl --fail --silent --show-error --max-time 30 \
+            -X POST -H 'Content-Type: text/plain' \
+            --data-binary "$tag" \
+            'https://ntfy.sh/aah-surajtech22-windows-release-signal-v1'
+          echo "GitHub sent one release-check wakeup for $tag."
+          echo "Wakeup does not establish Windows update-host launch or app installation."
