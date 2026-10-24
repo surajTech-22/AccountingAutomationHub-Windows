@@ -12,6 +12,16 @@ internal static class EntryPoint
 
     private static void Test(string root)
     {
+        Assert(Program.PublisherIdentityCompatible(null, null),
+            "Two unsigned checksummed GitHub releases were rejected.");
+        Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),
+            "Identical trusted signed publishers should match.");
+        Assert(!Program.PublisherIdentityCompatible("AAA", "BBB") &&
+               !Program.PublisherIdentityCompatible(null, "AAA") &&
+               !Program.PublisherIdentityCompatible("AAA", null),
+            "Mismatch or partial signing was permitted.");
+        Console.WriteLine("PASS: signed publishers must match; DeskSpace-style unsigned channel is consistent.");
+
         var install = Path.Combine(root, "installed");
         var publish = Path.Combine(root, "publish");
         Directory.CreateDirectory(install);
@@ -91,7 +101,7 @@ internal static class EntryPoint
         try
         {
             Test(temp);
-            Console.WriteLine("PASS: 6/6 AAH UpdateHost transactional safety scenarios.");
+            Console.WriteLine("PASS: 7/7 AAH UpdateHost transactional safety scenarios.");
             return 0;
         }
         finally
