@@ -17,9 +17,11 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// <summary>
 /// Public GitHub stable-release updater for the local MainServer/standalone desktop.
 /// LAN clients must keep using their separately enrolled Main Server update channel.
-/// A version is never installed unless a signed installed AAH and its signed updater
-/// share the same trusted Authenticode signer, release metadata is complete,
-/// the asset hash matches, and the updater supports the AAH automatic-update protocol.
+/// Uses the same public-GitHub release + SHA256 distribution model as DeskSpace.
+/// If *both* executables are Authenticode signed they must share the same
+/// trusted certificate; two unsigned executables use pinned GitHub HTTPS
+/// release URLs and SHA256-verified owner-controlled release assets.
+/// This is weaker than code signing and requires protecting repository releases.
 /// </summary>
 internal static class GitHubAutoUpdateService
 {
@@ -102,6 +104,10 @@ internal static class GitHubAutoUpdateService
                 root.TryGetProperty("asset", out var a) && a.GetString() == UpdateAssetName &&
                 root.TryGetProperty("sha256", out var h) &&
                 h.GetString()?.Equals(sha256, StringComparison.OrdinalIgnoreCase) == true &&
+                root.TryGetProperty("repository", out var repo) &&
+                repo.GetString() == "surajTech-22/AccountingAutomationHub-Windows" &&
+                root.TryGetProperty("verification", out var verification) &&
+                verification.GetString() == "github-release-sha256-v1" &&
                 root.TryGetProperty("automatic_install_allowed", out var allowed) &&
                 allowed.ValueKind == JsonValueKind.True;
         }
@@ -119,12 +125,11 @@ internal static class GitHubAutoUpdateService
 
     private static async Task CheckOnceAsync()
     {
-        // The current executable must have an independently valid publisher signature;
-        // an unsigned legacy install needs its one-time trusted installer bootstrap.
+        // The initial GitHub bootstrap must be installed once; existing legacy
+        // installs cannot acquire this checker without replacing the old app.
         var installedExe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(installedExe) || !File.Exists(installedExe)) return;
         var signer = await GetVerifiedPublisherAsync(installedExe).ConfigureAwait(false);
-        if (signer is null) { Log("disabled until the installed AAH executable is Authenticode-signed"); return; }
 
         using var response = await Client.GetAsync(ReleaseApi).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound) return; // no stable release yet
@@ -198,14 +203,14 @@ internal static class GitHubAutoUpdateService
                     throw new InvalidDataException("Downloaded updater SHA256 verification failed.");
             }
             var updateSigner = await GetVerifiedPublisherAsync(path).ConfigureAwait(false);
-            if (!string.Equals(signer, updateSigner, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Updater signing publisher differs from installed AAH.");
+            if (!PublisherIdentityCompatible(signer, updateSigner))
+                throw new InvalidDataException("Updater has an unexpected Authenticode signing identity.");
             var psi = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
                 WorkingDirectory = root
             };
-            // The *signed* first-party updater must implement this exact protocol.
+            // The versioned updater host must implement this exact protocol.
             // It owns the safe accounting-queue exit, application-only file swap,
             // process-specific shutdown/restart, health check and rollback.
             psi.ArgumentList.Add("--aah-auto-update-v1");
@@ -214,7 +219,7 @@ internal static class GitHubAutoUpdateService
             psi.ArgumentList.Add("--release=" + tag);
             if (Process.Start(psi) is null)
                 throw new InvalidOperationException("Could not launch the verified updater.");
-            Log("launched signed AAH updater for " + tag);
+            Log("launched GitHub SHA256-verified AAH updater for " + tag);
         }
         catch
         {
@@ -222,6 +227,11 @@ internal static class GitHubAutoUpdateService
             throw;
         }
     }
+
+    internal static bool PublisherIdentityCompatible(string? installed, string? updater) =>
+        (installed is null && updater is null) ||
+        (installed is not null && updater is not null &&
+         installed.Equals(updater, StringComparison.OrdinalIgnoreCase));
 
     internal static async Task<string?> GetVerifiedPublisherAsync(string file)
     {
