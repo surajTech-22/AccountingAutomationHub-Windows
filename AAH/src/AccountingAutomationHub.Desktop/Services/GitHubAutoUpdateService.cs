@@ -80,7 +80,9 @@ internal static class GitHubAutoUpdateService
     {
         if (value is null || !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
             uri.Scheme != Uri.UriSchemeHttps ||
-            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
+            !uri.IsDefaultPort || uri.UserInfo.Length != 0 ||
+            uri.Query.Length != 0 || uri.Fragment.Length != 0)
             return false;
         // Only download the exact asset for the selected release; no untrusted host/path.
         return uri.AbsolutePath.Equals(
