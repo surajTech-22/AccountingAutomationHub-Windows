@@ -64,6 +64,7 @@ jobs:
             throw 'Migration modified or created an installation on an unrecognized PC.'
           }
           Write-Host 'PASS: migration fails closed without verified old and new AAH identities.'
+          $global:LASTEXITCODE=0  # An expected child failure is a successful negative test.
 
       - name: Exercise original application replacement and rollback in disposable folders
         shell: pwsh
