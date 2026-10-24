@@ -143,7 +143,7 @@ jobs:
           $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
           if (-not (Test-Path $windowsPowerShell)) { throw 'Windows PowerShell is required for production installer tests.' }
           $root = (Resolve-Path 'AAH').Path
-          foreach ($name in @('Verify-Replacement.ps1','Verify-PackageRetry.ps1')) {
+          foreach ($name in @('Verify-Replacement.ps1','Verify-PackageRetry.ps1','Verify-Shutdown.ps1','Verify-Startup.ps1')) {
             $test = Join-Path $root "Tests\AAH.Package.Tests\$name"
             & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $test -PackageRoot $root
             if ($LASTEXITCODE -ne 0) { throw "Native transactional updater fixture failed: $name" }
@@ -158,7 +158,7 @@ jobs:
             Select-String -Path $file -Pattern 'Invalid pending application transaction' -Context 65,25 |
               ForEach-Object { Write-Host ($_.Context.PreContext -join "`n"); Write-Host $_.Line; Write-Host ($_.Context.PostContext -join "`n") }
           }
-      # Never run the transactional installer on a CI runner: it is a deployment operation.
+      # These tests use disposable fixtures only. Never install over a real AAH copy on CI.
 
   regression-execution:
     name: Runtime regression - ${{ matrix.project }}
