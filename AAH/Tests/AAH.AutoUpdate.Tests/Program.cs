@@ -76,4 +76,19 @@ Pass("release protocol opt-in, identity, and hash matching");
 
 GitHubAutoUpdateService.Start(isLanClient:true);
 Pass("LAN clients excluded from the GitHub update path");
+
+if (OperatingSystem.IsWindows())
+{
+    var unsignedFile = Path.Combine(Path.GetTempPath(), "AAH-unsigned-updater-" +
+        Guid.NewGuid().ToString("N") + ".exe");
+    try
+    {
+        File.WriteAllBytes(unsignedFile, new byte[] { 0x4D, 0x5A, 0x00, 0x00, 0x01 });
+        var identity = await GitHubAutoUpdateService.GetVerifiedPublisherAsync(unsignedFile);
+        Require(identity is null, "unsigned executable accepted as an updater");
+    }
+    finally { try { File.Delete(unsignedFile); } catch { } }
+}
+Pass("unsigned executable never gains trusted release authority");
+
 Console.WriteLine($"PASS: {passed}/{passed} AAH signed GitHub auto-update protocol scenarios.");
