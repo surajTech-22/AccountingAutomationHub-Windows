@@ -44,8 +44,8 @@
                             <StackPanel>
                                 <TextBlock Text="Startup &amp; Tray" Style="{StaticResource SectionTitleStyle}" />
                                 <CheckBox Content="Start Accounting Automation Hub with Windows" IsChecked="{Binding StartWithWindows}" Margin="0,12,0,0" />
-                                <CheckBox Content="Closing the main window keeps the Hub running in the system tray" IsChecked="{Binding CloseToTray}" Margin="0,8,0,0" />
-                                <TextBlock Text="Startup always opens Client Directory (safer for multi-client work)." Margin="0,8,0,0" Foreground="#667085" />
+                                <TextBlock Text="Closing the AAH window always hides it in the tray; watchers, imports and background automation keep running. Choose Exit from the tray menu to stop the app." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#667085" />
+                                <TextBlock Text="Manual launch opens the workspace selector; Windows autostart keeps AAH in the tray with background monitoring active." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#667085" />
                                 <CheckBox Content="Enable Windows notifications" IsChecked="{Binding NotificationsEnabled}" Margin="0,8,0,0" />
                             </StackPanel>
                         </Border>
