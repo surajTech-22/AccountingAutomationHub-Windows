@@ -100,14 +100,15 @@ internal static class Program
                     nextVer.ToString() != tag.TrimStart('v'))
                     throw new InvalidDataException("Application binary version does not match an upgrade release.");
 
-                // Intentionally never terminate an AAH process during accounting work.
-                // Download/verify now, install only after AAH exits normally. This
-                // preserves Tally queues and outstanding import/export operations.
-                Log("Release " + tag + " verified. Waiting for AAH to exit normally; no forced shutdown.");
-                if (!await WaitForOriginalExitAsync(parent, TimeSpan.FromHours(12)))
+                // The payload is downloaded, authenticated and version-checked.
+                // Ask ONLY the verified running original AAH process to shut down.
+                // Its application handler drains Tally/automation work first.
+                // Never kill the process or overwrite files while AAH is alive.
+                Log("Release " + tag + " verified. Requesting process-targeted graceful AAH shutdown.");
+                if (!await RequestGracefulUpdateExitAsync(parent, TimeSpan.FromMinutes(11)))
                 {
-                    Log("AAH did not close within the update window. No files changed.");
-                    return 0;
+                    Log("AAH remained busy or did not acknowledge graceful shutdown. No program files changed.");
+                    return 2;
                 }
 
                 // The automatic channel MUST use the exact same source-backed
@@ -427,6 +428,35 @@ internal static class Program
             }
             RollbackTransaction(tx,install);
         }
+    }
+
+    internal static async Task<bool> RequestGracefulUpdateExitAsync(Process parent, TimeSpan timeout)
+    {
+        // Verify the process-specific, locally created event. Do NOT create
+        // the event here: an absent listener is not permission to kill AAH.
+        // In particular do not signal a different PID or process name.
+        if (parent.HasExited) return true;
+        if (!parent.ProcessName.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Graceful update shutdown target is not AAH.");
+        try
+        {
+            using var exitSignal = EventWaitHandle.OpenExisting(
+                @"Local\AccountingAutomationHub.UpdateShutdown.v1." + parent.Id);
+            exitSignal.Set();
+            Log("Sent graceful update shutdown to original AAH PID " + parent.Id +
+                "; waiting for its own import/export/Tally cleanup.");
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            Log("AAH update-shutdown event absent. Update deferred; no forced termination.");
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Log("AAH update-shutdown signal access denied; no forced termination.");
+            return false;
+        }
+        return await WaitForOriginalExitAsync(parent, timeout);
     }
 
     private static async Task<bool> WaitForOriginalExitAsync(Process parent, TimeSpan timeout)
