@@ -266,7 +266,7 @@ internal static class GitHubAutoUpdateService
             try
             {
                 using var baseKey = RegistryKey.OpenBaseKey(hive, view);
-                using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall");
+                using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
                 if (uninstall is null) continue;
                 foreach (var id in uninstall.GetSubKeyNames())
                 {
