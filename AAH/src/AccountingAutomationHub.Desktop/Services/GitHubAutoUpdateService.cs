@@ -212,6 +212,7 @@ internal static class GitHubAutoUpdateService
             return;
         }
 
+        Log("release " + tag + " downloading checksum and manifest for preflight");
         var checksum = ParseChecksum(await Client.GetStringAsync(checksumUrl!).ConfigureAwait(false));
         if (!IsValidSha256(checksum)) { Log("invalid SHA256 checksum asset"); return; }
         var protocolJson = await Client.GetStringAsync(protocolUrl!).ConfigureAwait(false);
@@ -220,6 +221,7 @@ internal static class GitHubAutoUpdateService
             Log("release protocol validation failed: " + tag);
             return;
         }
+        Log("release " + tag + " manifest and checksum verified");
         if (Interlocked.CompareExchange(ref _updateLaunched, 1, 0) != 0) return;
         var cacheRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -274,9 +276,31 @@ internal static class GitHubAutoUpdateService
             psi.ArgumentList.Add("--target-exe=" + installedExe);
             psi.ArgumentList.Add("--parent-pid=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             psi.ArgumentList.Add("--release=" + tag);
-            if (Process.Start(psi) is null)
-                throw new InvalidOperationException("Could not launch the verified updater.");
-            Log("launched GitHub SHA256-verified AAH updater for " + tag);
+            var updater = Process.Start(psi)
+                ?? throw new InvalidOperationException("Could not launch the verified updater.");
+            Log("launched GitHub SHA256-verified AAH updater for " + tag +
+                " (PID " + updater.Id + ")");
+            // A failed updater must not permanently latch this app into an
+            // un-updatable state. There is no timed retry: the next genuine
+            // release signal or reconnection can attempt a verified update.
+            _ = Task.Run(async () =>
+            {
+                using (updater)
+                {
+                    try
+                    {
+                        await updater.WaitForExitAsync().ConfigureAwait(false);
+                        if (updater.ExitCode != 0)
+                            Log("updater exited unsuccessfully (code " + updater.ExitCode +
+                                "); next release event may retry");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("updater exit monitoring failed: " + ex.GetType().Name);
+                    }
+                    finally { Interlocked.Exchange(ref _updateLaunched, 0); }
+                }
+            });
         }
         catch
         {
