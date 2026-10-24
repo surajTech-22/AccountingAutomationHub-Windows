@@ -8492,6 +8492,21 @@ public sealed class BackgroundAutomationService : IDisposable
         return string.Concat(trimmed.Where(character => !Path.GetInvalidFileNameChars().Contains(character))).Trim();
     }
 
+    // Release updater may request a graceful application exit only when no
+    // queued/in-flight automation source, import or batch worker remains.
+    // This is a read-only snapshot, not a signal to cancel active accounting.
+    public bool HasPendingWorkForUpdate =>
+        !_queue.IsEmpty ||
+        !_queuedKeys.IsEmpty ||
+        !_activeFiles.IsEmpty ||
+        !_activeStages.IsEmpty ||
+        !_gstBootstrapInFlight.IsEmpty ||
+        !_bankCachedProcessors.IsEmpty ||
+        !_salesPurchaseLiveQueue.IsEmpty ||
+        !_salesPurchaseLiveQueuedKeys.IsEmpty ||
+        !_salesPurchaseSourceInFlight.IsEmpty ||
+        !_salesPurchaseSetProcessors.IsEmpty;
+
     public void Dispose()
     {
         Task[] pendingTasks;
