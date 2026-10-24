@@ -1,0 +1,47 @@
+name: AAH Legacy Installer Contract Audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/aah-legacy-installer-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit-legacy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover exact SHA256-pinned original installer source
+        shell: pwsh
+        run: |
+          python ci/restore_extra_components.py
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to recover original AAH installer source' }
+      - name: Print public source manual updater contract, without executing installation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($path in @('AAH/Installer/TransactionalPublish.ps1',
+                              'AAH/Installer/Update-App.ps1',
+                              'AAH/Installer/Install-App.ps1',
+                              'AAH/Installer/Uninstall-App.ps1')) {
+            if (!(Test-Path $path)) { Write-Host "MISSING: $path"; continue }
+            Write-Host "===== BEGIN $path ====="
+            $lines=Get-Content $path
+            Write-Host "LINE_COUNT=$($lines.Count)"
+            if ($path -like '*TransactionalPublish.ps1') {
+              $matches=Select-String -Path $path -Pattern '^function |Rollback|Install-AAHPublish|Recover|OldHash|NewHash|journal' -Context 3,5
+              foreach ($m in $matches) {
+                Write-Host "At line $($m.LineNumber): $($m.Line)"
+                foreach ($line in $m.Context.PostContext) { Write-Host $line }
+              }
+            } else {
+              for ($i=0; $i -lt [Math]::Min(240,$lines.Count);$i++) {
+                Write-Host ("{0}: {1}" -f ($i+1),$lines[$i])
+              }
+            }
+            Write-Host "===== END $path ====="
+          }
+          Write-Host 'READ-ONLY: no application installed, updated or uninstalled.'
