@@ -433,8 +433,16 @@ public sealed class BankOcrExcelConversionService
             row.Reference,
             row.FinalDebit > 0m ? row.FinalDebit.ToString("0.00", CultureInfo.InvariantCulture) : string.Empty,
             row.FinalCredit > 0m ? row.FinalCredit.ToString("0.00", CultureInfo.InvariantCulture) : string.Empty,
-            string.Empty,
-            string.Empty,
+            // Keep both conventional layouts available to the existing
+            // importer. Amount and Dr/Cr are derived from the same audited
+            // debit/credit movement; never re-OCR or invent a direction.
+            row.FinalDebit > 0m && row.FinalCredit == 0m
+                ? row.FinalDebit.ToString("0.00", CultureInfo.InvariantCulture)
+                : row.FinalCredit > 0m && row.FinalDebit == 0m
+                    ? row.FinalCredit.ToString("0.00", CultureInfo.InvariantCulture)
+                    : string.Empty,
+            row.FinalDebit > 0m && row.FinalCredit == 0m ? "DR"
+                : row.FinalCredit > 0m && row.FinalDebit == 0m ? "CR" : string.Empty,
             FormatSignedBalance(row.Balance),
             string.Join(" | ", new[]
             {
