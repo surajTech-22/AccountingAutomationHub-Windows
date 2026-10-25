@@ -589,7 +589,13 @@ internal sealed class BankImageDocumentVerificationService
     {
         foreach (var block in blocks)
         {
-            if (!NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal)) continue;
+            // PaddleOCR sometimes labels a structurally valid Markdown/HTML
+            // statement-summary table as text. Treat source-visible table
+            // markup as evidence regardless of its coarse OCR block label.
+            // Do not inspect ordinary narrative text as if it were a table.
+            if (!NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal) &&
+                !block.Content.Contains('|') &&
+                !block.Content.Contains("<table", StringComparison.OrdinalIgnoreCase)) continue;
             var rows = TableRows(block.Content);
             if (rows.Count < 2) continue;
             var header = rows[0].Select(NormalizeUpper).ToList();
@@ -620,6 +626,67 @@ internal sealed class BankImageDocumentVerificationService
                 TotalCredits = AbsNullable(ParseMoney(Cell(totalCredits))),
                 Closing = ParseSignedMoney(Cell(closing))
             };
+        }
+        // Text-only fallback requires the explicit printed summary title, all
+        // six labeled controls in source order, and an adjacent line with
+        // exactly six numeric cells. It must NEVER fill missing OCR values
+        // from transaction arithmetic or a filename/account-specific guess.
+        // A value that cannot be independently parsed leaves REVIEW_REQUIRED.
+        var text = string.Join("\n", blocks
+            .Where(block => !NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal))
+            .Select(block => block.Content));
+        var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(Normalize).Where(line => line.Length > 0).ToArray();
+        for (var i = 0; i + 2 < lines.Length; i++)
+        {
+            if (!NormalizeUpper(lines[i]).Contains("STATEMENT SUMMARY", StringComparison.Ordinal))
+                continue;
+            // The title and table can be split across multiple OCR text blocks.
+            // Limit the search window so a transaction row from elsewhere on
+            // the page cannot be mistaken for a summary's value row.
+            for (var h = i + 1; h < Math.Min(lines.Length - 1, i + 4); h++)
+            {
+                var headerLine = NormalizeUpper(lines[h]);
+                var labels = new[]
+                {
+                    @"\bOPENING\s+BAL(?:ANCE)?\b",
+                    @"\b(?:DR|DEBIT)\s+COUNT\b",
+                    @"\b(?:CR|CREDIT)\s+COUNT\b",
+                    @"\b(?:TOTAL\s+)?DEBITS?\b",
+                    @"\b(?:TOTAL\s+)?CREDITS?\b",
+                    @"\bCLOSING\s+BAL(?:ANCE)?\b"
+                };
+                var positions = labels.Select(label => Regex.Match(headerLine, label)).ToArray();
+                if (positions.Any(match => !match.Success)) continue;
+                if (!positions.Zip(positions.Skip(1), (left, right) => left.Index < right.Index).All(ok => ok))
+                    continue;
+
+                var values = Regex.Split(lines[h + 1].Trim(), @"\s+")
+                    .Where(value => value.Length > 0).ToArray();
+                if (values.Length != 6 ||
+                    values.Any(value => !Regex.IsMatch(value, @"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$")) ||
+                    !Regex.IsMatch(values[1], @"^\d+$") ||
+                    !Regex.IsMatch(values[2], @"^\d+$"))
+                    continue;
+                var opening = ParseSignedMoney(values[0]);
+                var dr = ParseNullableInt(values[1]);
+                var cr = ParseNullableInt(values[2]);
+                var debits = ParseMoney(values[3]);
+                var credits = ParseMoney(values[4]);
+                var closing = ParseSignedMoney(values[5]);
+                if (opening is null || dr is null || cr is null ||
+                    debits is null || credits is null || closing is null)
+                    continue;
+                return new StatementSummary
+                {
+                    Opening = opening,
+                    DebitCount = dr,
+                    CreditCount = cr,
+                    TotalDebits = Math.Abs(debits.Value),
+                    TotalCredits = Math.Abs(credits.Value),
+                    Closing = closing
+                };
+            }
         }
         return null;
     }
