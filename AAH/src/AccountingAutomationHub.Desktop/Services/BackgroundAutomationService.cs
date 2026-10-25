@@ -4110,6 +4110,21 @@ public sealed class BackgroundAutomationService : IDisposable
             return AutomationCommandResult.Failed("The PDF is not inside an Automation Folder linked to this client/FY.");
 
         var fileHash = ComputeHash(normalized);
+        // An Action Center / manual Auto Import retry must use the SAME scan
+        // classification as the first background import. No interactive Python
+        // PDF mapping/password dialog for an image-based bank statement.
+        var sourceKind = BankPdfDocumentClassifier.Classify(normalized);
+        if (sourceKind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed)
+        {
+            AutomationDiagnosticLog.Write("PDF-SCANNED-OCR-RETRY",
+                $"Interactive PDF retry detected {sourceKind}; routing to production Bank OCR, not digital PDF Python.", normalized);
+            await ProcessBankOcrSourceAsync(folder, normalized, fileHash, manualReimport: true, cancellationToken);
+            var checkedResult = _automationRepository.GetProcessedFile(folder.FolderId, folder.ClientId, fileHash);
+            return checkedResult?.Status.Equals("Imported", StringComparison.OrdinalIgnoreCase) == true
+                ? new AutomationCommandResult(true, "The scanned statement was handled by the existing Bank OCR verifier/importer.", normalized)
+                : AutomationCommandResult.Failed("The scanned statement was routed to Bank OCR, but is not confirmed imported. Check Bank OCR review and Action Center.");
+        }
+
         var expectedWorkbook = Path.ChangeExtension(normalized, ".xlsx");
         _generatedWorkbookPaths.TryAdd(Path.GetFullPath(expectedWorkbook), 0);
         var pipeline = new PdfBankStatementPipelineService(_settings);
@@ -6615,6 +6630,19 @@ public sealed class BackgroundAutomationService : IDisposable
         CancellationToken cancellationToken,
         IReadOnlyList<string>? passwordCandidates = null)
     {
+        // All automatic and distributed Bank PDF paths share this final routing
+        // decision, even if a caller incorrectly labels a scan as BankPdf.
+        // A scanned or mixed statement must not start the normal PDF Python
+        // process or touch any existing source-side generated XLSX.
+        var sourceKind = BankPdfDocumentClassifier.Classify(pdfPath);
+        if (sourceKind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed)
+        {
+            AutomationDiagnosticLog.Write("PDF-SCANNED-OCR-ROUTE",
+                $"Physical PDF preflight detected {sourceKind}; using existing PaddleOCR-VL Bank scan route instead of digital Python.", pdfPath);
+            await ProcessBankOcrSourceAsync(folder, pdfPath, pdfHash, manualReimport: false, cancellationToken);
+            return;
+        }
+
         var expectedWorkbook = Path.ChangeExtension(pdfPath, ".xlsx");
         _generatedWorkbookPaths.TryAdd(Path.GetFullPath(expectedWorkbook), 0);
         var pipeline = new PdfBankStatementPipelineService(_settings);
