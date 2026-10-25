@@ -94,7 +94,9 @@ internal sealed class BankImageDocumentVerificationService
     private static readonly Regex PageOnlyRegex = new(@"\bPAGE\s*(?:NO\.?)?\s*[:\-]?\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex DateTextRegex = new(@"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex HtmlRowRegex = new(@"<tr\b[^>]*>(.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
-    private static readonly Regex HtmlCellRegex = new(@"<(?:td|th)\b[^>]*>(.*?)</(?:td|th)>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex HtmlCellRegex = new(@"<(?:td|th)\b(?<attrs>[^>]*)>(?<body>.*?)</(?:td|th)>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex HtmlRowspanRegex = new(@"\browspan\s*=\s*[""']?(?<count>\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlColspanRegex = new(@"\bcolspan\s*=\s*[""']?(?<count>\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlTagRegex = new(@"<[^>]+>", RegexOptions.Singleline | RegexOptions.Compiled);
 
     public BankVerifiedDocumentBatch Verify(
@@ -1625,15 +1627,51 @@ internal sealed class BankImageDocumentVerificationService
         if (content.Contains("<table", StringComparison.OrdinalIgnoreCase))
         {
             var rows = new List<IReadOnlyList<string>>();
+            // PaddleOCR HTML can put a DATE in a rowspan=2 cell while the
+            // narration, debit, credit and balance arrive on the second <tr>.
+            // Expanding the source HTML grid is required BEFORE applying a
+            // transaction column map. Never infer a date from adjacent rows.
+            var carried = new Dictionary<int, (string Value, int Remaining)>();
             foreach (Match rowMatch in HtmlRowRegex.Matches(content))
             {
-                var cells = new List<string>();
+                var grid = new SortedDictionary<int, string>();
+                foreach (var cell in carried.ToArray())
+                {
+                    grid[cell.Key] = cell.Value.Value;
+                    if (cell.Value.Remaining == 1) carried.Remove(cell.Key);
+                    else carried[cell.Key] = (cell.Value.Value, cell.Value.Remaining - 1);
+                }
+                var column = 0;
                 foreach (Match cellMatch in HtmlCellRegex.Matches(rowMatch.Groups[1].Value))
                 {
-                    var text = HtmlTagRegex.Replace(cellMatch.Groups[1].Value.Replace("<br>", " ", StringComparison.OrdinalIgnoreCase).Replace("<br/>", " ", StringComparison.OrdinalIgnoreCase).Replace("<br />", " ", StringComparison.OrdinalIgnoreCase), " ");
-                    cells.Add(Normalize(WebUtility.HtmlDecode(text)));
+                    while (grid.ContainsKey(column)) column++;
+                    var attributes = cellMatch.Groups["attrs"].Value;
+                    var text = HtmlTagRegex.Replace(
+                        cellMatch.Groups["body"].Value
+                            .Replace("<br>", " ", StringComparison.OrdinalIgnoreCase)
+                            .Replace("<br/>", " ", StringComparison.OrdinalIgnoreCase)
+                            .Replace("<br />", " ", StringComparison.OrdinalIgnoreCase), " ");
+                    var value = Normalize(WebUtility.HtmlDecode(text));
+                    int Span(Regex regex)
+                    {
+                        var match = regex.Match(attributes);
+                        return match.Success && int.TryParse(match.Groups["count"].Value, out var count)
+                            ? Math.Clamp(count, 1, 32) : 1;
+                    }
+                    var columnSpan = Span(HtmlColspanRegex);
+                    var rowSpan = Span(HtmlRowspanRegex);
+                    grid[column] = value;
+                    for (var offset = 1; offset < columnSpan; offset++)
+                        grid[column + offset] = string.Empty;
+                    if (rowSpan > 1)
+                        for (var offset = 0; offset < columnSpan; offset++)
+                            carried[column + offset] = (offset == 0 ? value : string.Empty, rowSpan - 1);
+                    column += columnSpan;
                 }
-                if (cells.Count > 0) rows.Add(cells);
+                if (grid.Count > 0)
+                    rows.Add(Enumerable.Range(0, grid.Keys.Max() + 1)
+                        .Select(index => grid.TryGetValue(index, out var value) ? value : string.Empty)
+                        .ToArray());
             }
             if (rows.Count > 0)
             {
