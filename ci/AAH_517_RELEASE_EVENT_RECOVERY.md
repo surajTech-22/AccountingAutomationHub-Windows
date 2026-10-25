@@ -43,3 +43,9 @@ SUCCESS logs prove it.
 
 Release v4.0.0.517 only after same-commit Windows compilation, full
 regressions, and updater-host test all pass. No customer data in this document.
+
+## Final release gate
+The GitHub All Components workflow's required AAH.AutoUpdate.Tests completion
+marker was updated from 10/10 to 11/11 after adding the replay regression.
+A failed CI marker check is never accepted as a release-pass. This release
+revision must pass both Windows and full-regression workflows at one SHA.
