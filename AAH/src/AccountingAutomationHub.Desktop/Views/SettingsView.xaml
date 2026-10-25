@@ -726,7 +726,7 @@
                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12"><StackPanel>
                         <TextBlock Text="Startup &amp; Local Behaviour" Style="{StaticResource SectionTitleStyle}"/>
                         <CheckBox Content="Start AAH LAN with Windows" IsChecked="{Binding StartWithWindows}" Margin="0,12,0,0"/>
-                        <CheckBox Content="Closing the main window keeps AAH LAN running in the system tray" IsChecked="{Binding CloseToTray}" Margin="0,8,0,0"/>
+                        <TextBlock Text="Closing the window keeps AAH LAN, watchers and background imports running in the system tray. Use Exit to stop AAH completely." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <CheckBox Content="Remember window size and position" IsChecked="{Binding RememberWindowPlacement}" Margin="0,8,0,0"/>
                         <TextBlock Text="Client Directory is always the safe startup workspace. The last accounting client is never reopened automatically." Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,9,0,0"/>
                     </StackPanel></Border>
