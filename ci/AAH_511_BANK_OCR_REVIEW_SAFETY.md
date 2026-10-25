@@ -22,7 +22,8 @@ private diagnostics, or customer financial rows are included in this public repo
   auto-approved by the summary-free single-page fallback: absence from OCR data
   does not prove absence from the original scan.
 - Source-free synthetic regression covers a dated brought-forward row, a 22-row
-  headerless two-page continuation, and omission of an entire summary block.
+  headerless two-page continuation, omission of an entire summary block, and
+  misalignment of an unreadable brought-forward balance into the deposit column.
 
 ## Acceptance boundary
 These changes make the review gate safer. They do NOT claim that the existing
