@@ -6288,12 +6288,15 @@ public sealed class BackgroundAutomationService : IDisposable
                         RecordHistory(folder, source, hash, "Bank OCR", "Needs Action", reviewMessage);
                     }
 
+                    var reviewWorkbook = Path.Combine(batch.ExternalBatchOutputDirectory,
+                        $"AAH_OCR_REVIEW_ONLY_DOCUMENT_{document.DocumentNumber:000}.xlsx");
+                    var reviewWorkbookDetail = File.Exists(reviewWorkbook) ? reviewWorkbook : "NOT_AVAILABLE";
                     AddAction(
                         folder,
                         "Banking",
                         "Bank OCR Document Review",
                         Path.GetFileName(primary),
-                        $"{reviewMessage}\nOCR pages in this document: {document.PageCount:N0}\nSource files: {documentSources.Length:N0}\nTransaction rows detected: {document.TransactionRowsPrepared:N0}\nVerification issues: {document.VerificationIssueCount:N0}\nSource: {primary}\nVerification audit: {document.VerificationAuditPath}\nOCR Log: {batch.LogPath}",
+                        $"{reviewMessage}\nOCR pages in this document: {document.PageCount:N0}\nSource files: {documentSources.Length:N0}\nTransaction rows detected: {document.TransactionRowsPrepared:N0}\nVerification issues: {document.VerificationIssueCount:N0}\nDetected bank: {(document.BankName.Length == 0 ? "NOT_DETECTED" : document.BankName)}\nAccount number detection: {(document.AccountNumber.Length == 0 ? "MISSING" : "SOURCE_DETECTED")}\nReview-only Excel: {reviewWorkbookDetail}\nSource: {primary}\nVerification audit: {document.VerificationAuditPath}\nOCR Log: {batch.LogPath}",
                         primaryHash);
 
                     continue;
