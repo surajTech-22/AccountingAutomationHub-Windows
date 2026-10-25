@@ -208,10 +208,12 @@ try
     var continuationDir = Path.Combine(root, "two-page-continuation");
     Directory.CreateDirectory(continuationDir);
     var identity = "HDFC BANK\nStatement of Account\nFrom: 29/08/2025 To: 03/09/2025\nAccount No: 9999999999\n";
-    string P1Table = "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
+    string P1Table = "| From: 29/08/2025 | To: 03/09/2025 | Statement of account |\n" +
+                     "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
                      "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.00 |\n" +
                      "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.00 |";
-    string P2Table = "| 02/09/25 | CONTINUATION CREDIT | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
+    string P2Table = "| Generated On: 03/09/2025 - Statement of account |\n" +
+                     "| 02/09/25 | CONTINUATION CREDIT | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
                      "| 03/09/25 | CONTINUATION DEBIT | S00004 | 03/09/25 | 20.00 | 0.00 | 65.00 |";
     string P2Summary = "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n" +
                        "| 0.00 | 2 | 2 | 45.00 | 110.00 | 65.00 |";
@@ -257,7 +259,7 @@ try
     if (combined.TotalDebits != 45.00m || combined.TotalCredits != 110.00m ||
         combined.ClosingBalance != 65.00m || combined.DebitCount != 2 || combined.CreditCount != 2)
         throw new Exception("Page-two financial reconciliation is incorrect.");
-    Console.WriteLine("PASS: headerless scanned continuation with 2+2 transactions verified.");
+    Console.WriteLine("PASS: scanned PDF with metadata before header and metadata before headerless continuation verified.");
 
     // Synthetic 22-row, two-page bank statement with 16 debits and six credits,
     // no second-page header, a wrapped narration, and a printed summary.
@@ -290,6 +292,23 @@ try
     if (creditIndex != 6 || debitIndex != 16 || running != 0m)
         throw new Exception("Synthetic control construction failed.");
     var longIdentity = string.Join(Environment.NewLine, "HDFC BANK", "Statement of Account", "From: 01/07/2025 To: 30/09/2026", "Account No: 8888888888", "");
+    // Real PaddleOCR-VL JSON can return a single HTML table with a merged
+    // statement-metadata row before the transaction column headings, and a
+    // headerless continuation page with another merged metadata row.
+    static string HtmlTableWithStatementMetadata(IEnumerable<string> printedRows, string heading)
+    {
+        var html = new System.Text.StringBuilder("<table><tr><td colspan=\"7\">")
+            .Append(System.Net.WebUtility.HtmlEncode(heading)).Append("</td></tr>");
+        foreach (var printed in printedRows)
+        {
+            html.Append("<tr>");
+            foreach (var cell in printed.Trim().Trim('|').Split('|'))
+                html.Append("<td>").Append(System.Net.WebUtility.HtmlEncode(cell.Trim())).Append("</td>");
+            html.Append("</tr>");
+        }
+        return html.Append("</table>").ToString();
+    }
+
     var longPage1 = Path.Combine(longDir, "page1.json");
     var longPage2 = Path.Combine(longDir, "page2.json");
     File.WriteAllText(longPage1, JsonSerializer.Serialize(new
@@ -297,7 +316,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = longIdentity + "Page No. 1 of 2" },
-            new { block_label = "table", block_content = string.Join(Environment.NewLine, p1Rows) }
+            new { block_label = "table", block_content = HtmlTableWithStatementMetadata(p1Rows, "From: 01/07/2025 To: 30/09/2026 Statement of account") }
         }
     }));
     File.WriteAllText(longPage2, JsonSerializer.Serialize(new
@@ -305,7 +324,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = longIdentity + "Page No. 2 of 2" },
-            new { block_label = "table", block_content = string.Join(Environment.NewLine, p2Rows) },
+            new { block_label = "table", block_content = HtmlTableWithStatementMetadata(p2Rows, "Generated On: 30/09/2026 Statement of account") },
             new { block_label = "table", block_content = string.Join(Environment.NewLine,
                 "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |",
                 "| 0.00 | 16 | 6 | 25000.05 | 25000.05 | 0.00 |") }
@@ -334,7 +353,7 @@ try
         longDoc.Transactions.Count(row => row.InferredPage == 2) != 6 ||
         !longDoc.Transactions[5].Description.Contains("SUPPLEMENTAL UPI REFERENCE TEXT", StringComparison.Ordinal))
         throw new Exception("22-row page boundary or wrapped narration handling failed.");
-    Console.WriteLine("PASS: 22-row, 16-debit, six-credit, two-page bank statement reconciled.");
+    Console.WriteLine("PASS: synthetic 22-row HTML/colspan two-page Bank OCR statement reconciled.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
 }
 finally
