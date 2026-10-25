@@ -187,6 +187,7 @@ internal sealed class BankImageDocumentVerificationService
         document.AccountNumber,
         document.AccountType,
         document.AccountName,
+        document.BranchName,
         document.StatementFrom,
         document.StatementTo,
         document.OpeningBalance,
@@ -266,11 +267,13 @@ internal sealed class BankImageDocumentVerificationService
             AccountNumber = meta.AccountNumber,
             AccountType = meta.AccountType,
             AccountName = meta.AccountName,
+            BranchName = meta.BranchName,
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
             PrintedPage = printedPage,
             PrintedTotal = printedTotal,
             Transactions = tx.Transactions,
+            NarrationIssues = tx.NarrationIssues,
             TransactionMapping = tx.Mapping,
             RawBlocks = blocks,
             BroughtForward = tx.BroughtForward,
@@ -283,7 +286,7 @@ internal sealed class BankImageDocumentVerificationService
             FirstDebit = first?.Debit ?? 0m,
             FirstCredit = first?.Credit ?? 0m,
             ImpliedOpeningRaw = impliedOpening,
-            HasHeader = NormalizeUpper(nonTableText).Contains("STATEMENT OF ACCOUNT", StringComparison.Ordinal),
+            HasHeader = NormalizeUpper(allText).Contains("STATEMENT OF ACCOUNT", StringComparison.Ordinal),
             HasEnd = NormalizeUpper(nonTableText).Contains("END OF STATEMENT", StringComparison.Ordinal) || summary is not null
         };
     }
@@ -335,13 +338,38 @@ internal sealed class BankImageDocumentVerificationService
         }
 
         var accountNumber = ExtractAccountNumber(headerText);
+        // Source OCR often prints the customer and branch as separate text blocks,
+        // rather than ParagraphTitle. Only explicit bank-statement labels or a
+        // conventional source-visible name prefix can establish account identity.
+        string LabeledValue(string label)
+        {
+            var match = Regex.Match(headerText,
+                @"(?:^|\n)\s*" + label + @"\s*[:\-]\s*([^\r\n]+)",
+                RegexOptions.IgnoreCase);
+            return match.Success ? Normalize(match.Groups[1].Value) : string.Empty;
+        }
+        var branchName = LabeledValue(@"(?:ACCOUNT\s+)?BRANCH(?:\s+NAME)?");
         var accountType = string.Empty;
         if (Regex.IsMatch(upper, @"\bCURRENT\s+ACCOUNT\b|\bPRODUCT\s*:\s*CA[-\s]", RegexOptions.IgnoreCase)) accountType = "CA";
         else if (Regex.IsMatch(upper, @"\bSAVINGS?\s+(?:BANK\s+)?ACCOUNT\b|\bPRODUCT\s*:\s*SB[-\s]", RegexOptions.IgnoreCase)) accountType = "SB";
         else if (Regex.IsMatch(upper, @"\bOVERDRAFT\b|\bOD\s+ACCOUNT\b", RegexOptions.IgnoreCase)) accountType = "OD";
         else if (Regex.IsMatch(upper, @"\bCASH\s+CREDIT\b|\bCC\s+ACCOUNT\b", RegexOptions.IgnoreCase)) accountType = "CC";
 
-        var accountName = string.Empty;
+        var accountName = LabeledValue(@"(?:ACCOUNT\s+HOLDER|ACCOUNT\s+NAME|CUSTOMER\s+NAME)");
+        foreach (var block in blocks)
+        {
+            if (accountName.Length > 0) break;
+            // Legal-name prefix in the printed address block is source evidence.
+            // Do not invent a customer name from address, narration or filename.
+            var printed = Normalize(Regex.Replace(Clean(block.Content), @"^#+\s*", string.Empty));
+            if (NormalizeUpper(block.Label) != "TABLE" &&
+                Regex.IsMatch(printed, @"^(?:M\s*/\s*S\.?|MS\.?\s+)\s*[A-Z]", RegexOptions.IgnoreCase) &&
+                !printed.Contains(':') && printed.Length <= 110)
+            {
+                accountName = printed;
+                break;
+            }
+        }
         foreach (var block in blocks)
         {
             var label = NormalizeUpper(block.Label);
@@ -363,8 +391,9 @@ internal sealed class BankImageDocumentVerificationService
             BankEvidence = evidence.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             Ifsc = ifscs.FirstOrDefault() ?? string.Empty,
             AccountNumber = accountNumber,
-            AccountType = accountType,
-            AccountName = accountName
+            AccountType = accountType.Length > 0 ? accountType : LabeledValue(@"ACCOUNT\s+TYPE"),
+            AccountName = accountName,
+            BranchName = branchName
         };
     }
 
@@ -443,6 +472,7 @@ internal sealed class BankImageDocumentVerificationService
         if (identified is null) return new CanonicalTransactionTable();
 
         var transactions = new List<PageTransaction>();
+        var narrationIssues = new List<string>();
         BalanceEvidence? broughtForward = null;
         BalanceEvidence? closingRow = null;
 
@@ -495,16 +525,29 @@ internal sealed class BankImageDocumentVerificationService
                 dateRaw.Length > 0 &&
                 dateRaw.Equals(transactions[^1].DateRaw, StringComparison.Ordinal) &&
                 referenceRaw.Length == 0;
-            if (noFinancialCells && (dateRaw.Length == 0 || sameDateNarration))
+            if (noFinancialCells)
             {
-                if (transactions.Count > 0)
+                if (transactions.Count == 0)
                 {
-                    var previous = transactions[^1];
-                    if (description.Length > 0)
-                        previous.Description = string.Join(" ", new[] { previous.Description, description }.Where(part => part.Length > 0));
-                    if (referenceRaw.Length > 0)
-                        previous.Reference = string.Join(" ", new[] { previous.Reference, referenceRaw }.Where(part => part.Length > 0));
+                    if (description.Length > 0 || referenceRaw.Length > 0)
+                        narrationIssues.Add($"Unassigned narration before first transaction at OCR table row {rowIndex + 1}.");
+                    continue;
                 }
+                var previous = transactions[^1];
+                var referenceConflict = referenceRaw.Length > 0 && previous.Reference.Length > 0 &&
+                    !NormalizeUpper(referenceRaw).Equals(NormalizeUpper(previous.Reference), StringComparison.Ordinal);
+                if (dateRaw.Length > 0 && !sameDateNarration ||
+                    referenceConflict)
+                {
+                    narrationIssues.Add($"Narration-only OCR row {rowIndex + 1} has a different posting date or reference and cannot be safely assigned to a transaction.");
+                    // Source content remains in raw page JSON; never invent a zero
+                    // amount transaction or attach disputed words to the wrong row.
+                    continue;
+                }
+                if (description.Length > 0)
+                    previous.Description = string.Join(" ", new[] { previous.Description, description }.Where(part => part.Length > 0));
+                if (referenceRaw.Length > 0 && previous.Reference.Length == 0)
+                    previous.Reference = referenceRaw;
                 continue;
             }
 
@@ -517,7 +560,7 @@ internal sealed class BankImageDocumentVerificationService
                 Date = ParseDate(dateRaw),
                 ValueDateRaw = Get(row, "value_date"),
                 ValueDate = ParseDate(Get(row, "value_date")),
-                Description = description,
+                Description = Normalize(description),
                 Reference = Get(row, "reference"),
                 DebitRaw = debitRaw,
                 CreditRaw = creditRaw,
@@ -531,6 +574,7 @@ internal sealed class BankImageDocumentVerificationService
         return new CanonicalTransactionTable
         {
             Transactions = transactions,
+            NarrationIssues = narrationIssues,
             Mapping = identified.Mapping,
             BroughtForward = broughtForward,
             ClosingRow = closingRow
@@ -837,6 +881,7 @@ internal sealed class BankImageDocumentVerificationService
             var continued = CanonicalTransactions(page.RawBlocks, activeMapping);
             if (continued.Transactions.Count == 0) continue;
             page.Transactions = continued.Transactions;
+            page.NarrationIssues = continued.NarrationIssues;
             page.TransactionMapping = continued.Mapping;
             page.BroughtForward = continued.BroughtForward;
             page.ClosingRow = continued.ClosingRow;
@@ -855,8 +900,17 @@ internal sealed class BankImageDocumentVerificationService
         var (summary, summaryIssues) = UniqueSummary(ordered);
         var (transactions, duplicateCount) = CombineTransactions(ordered);
         var issues = new List<string>(summaryIssues);
+        issues.AddRange(ordered.SelectMany(page => page.NarrationIssues.Select(issue =>
+            $"Source page {page.SourcePage}: {issue}")));
         var pageIssues = new List<string>();
         var corrections = new List<BankOcrCorrection>();
+        if (metadata.Bank.Length == 0)
+            issues.Add("Bank metadata missing: bank name or IFSC must be recognized from the original statement.");
+        if (metadata.AccountNumber.Length == 0)
+            issues.Add("Bank metadata missing: account number must be recognized from a source-labeled field.");
+        if (ordered.Select(page => NormalizeUpper(page.AccountName)).Where(value => value.Length > 0)
+                .Distinct(StringComparer.Ordinal).Count() > 1)
+            issues.Add("OCR account-holder name differs across statement pages; verify source spelling before import.");
 
         var printedSeen = new List<int>();
         for (var i = 0; i < ordered.Count; i++)
@@ -1158,6 +1212,7 @@ internal sealed class BankImageDocumentVerificationService
             AccountNumber = metadata.AccountNumber,
             AccountType = metadata.AccountType,
             AccountName = metadata.AccountName,
+            BranchName = metadata.BranchName,
             StatementFrom = metadata.PeriodStart,
             StatementTo = metadata.PeriodEnd,
             OpeningBalance = opening,
@@ -1186,6 +1241,7 @@ internal sealed class BankImageDocumentVerificationService
         var accounts = new List<string>();
         var accountTypes = new List<string>();
         var accountNames = new List<string>();
+        var branchNames = new List<string>();
         var periods = new List<(string Start, string End)>();
 
         foreach (var page in ordered)
@@ -1200,6 +1256,7 @@ internal sealed class BankImageDocumentVerificationService
             if (page.AccountNumber.Length > 0) accounts.Add(page.AccountNumber);
             if (page.AccountType.Length > 0) accountTypes.Add(page.AccountType);
             if (page.AccountName.Length > 0) accountNames.Add(page.AccountName);
+            if (page.BranchName.Length > 0) branchNames.Add(page.BranchName);
             if (page.PeriodStart.Length > 0 || page.PeriodEnd.Length > 0) periods.Add((page.PeriodStart, page.PeriodEnd));
         }
 
@@ -1220,6 +1277,7 @@ internal sealed class BankImageDocumentVerificationService
             AccountConflict = accountValues.Count > 1,
             AccountType = MostCommon(accountTypes),
             AccountName = MostCommon(accountNames),
+            BranchName = MostCommon(branchNames),
             PeriodStart = periodValues.FirstOrDefault().Start ?? string.Empty,
             PeriodEnd = periodValues.FirstOrDefault().End ?? string.Empty,
             PeriodConflict = periodValues.Count > 1
@@ -1562,6 +1620,7 @@ internal sealed class BankImageDocumentVerificationService
         public string AccountNumber { get; set; } = string.Empty;
         public string AccountType { get; set; } = string.Empty;
         public string AccountName { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty;
     }
 
     private sealed class PageTransaction
@@ -1584,6 +1643,7 @@ internal sealed class BankImageDocumentVerificationService
     private sealed class CanonicalTransactionTable
     {
         public IReadOnlyList<PageTransaction> Transactions { get; set; } = [];
+        public IReadOnlyList<string> NarrationIssues { get; set; } = [];
         public IReadOnlyDictionary<string, int>? Mapping { get; set; }
         public BalanceEvidence? BroughtForward { get; set; }
         public BalanceEvidence? ClosingRow { get; set; }
@@ -1612,11 +1672,13 @@ internal sealed class BankImageDocumentVerificationService
         public string AccountNumber { get; set; } = string.Empty;
         public string AccountType { get; set; } = string.Empty;
         public string AccountName { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty;
         public string PeriodStart { get; set; } = string.Empty;
         public string PeriodEnd { get; set; } = string.Empty;
         public int? PrintedPage { get; set; }
         public int? PrintedTotal { get; set; }
         public IReadOnlyList<PageTransaction> Transactions { get; set; } = [];
+        public IReadOnlyList<string> NarrationIssues { get; set; } = [];
         public IReadOnlyDictionary<string, int>? TransactionMapping { get; set; }
         public IReadOnlyList<OcrBlock> RawBlocks { get; set; } = [];
         public BalanceEvidence? BroughtForward { get; set; }
@@ -1644,6 +1706,7 @@ internal sealed class BankImageDocumentVerificationService
         public bool AccountConflict { get; set; }
         public string AccountType { get; set; } = string.Empty;
         public string AccountName { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty;
         public string PeriodStart { get; set; } = string.Empty;
         public string PeriodEnd { get; set; } = string.Empty;
         public bool PeriodConflict { get; set; }
@@ -1674,6 +1737,7 @@ internal sealed class BankVerifiedDocument
     public string AccountNumber { get; set; } = string.Empty;
     public string AccountType { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
+    public string BranchName { get; set; } = string.Empty;
     public string StatementFrom { get; set; } = string.Empty;
     public string StatementTo { get; set; } = string.Empty;
     public decimal? OpeningBalance { get; set; }
