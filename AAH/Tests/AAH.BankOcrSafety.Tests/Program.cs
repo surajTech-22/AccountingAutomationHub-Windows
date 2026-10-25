@@ -214,7 +214,7 @@ try
                      "| | FIRST TRANSACTION SECOND LINE | | | | | |\n" +
                      "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.00 |";
     string P2Table = "| Generated On: 03/09/2025 - Statement of account |\n" +
-                     "| 02/09/25 | CONTINUATION CREDIT\\nADDITIONAL DETAIL | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
+                     "| 02/09/25 | CONTINUATION CREDIT\nADDITIONAL DETAIL | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
                      "| 03/09/25 | CONTINUATION DEBIT | S00004 | 03/09/25 | 20.00 | 0.00 | 65.00 |";
     string P2Summary = "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n" +
                        "| 0.00 | 2 | 2 | 45.00 | 110.00 | 65.00 |";
