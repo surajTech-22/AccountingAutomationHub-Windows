@@ -525,31 +525,41 @@ internal sealed class BankImageDocumentVerificationService
             if (!NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal)) continue;
             var rows = TableRows(block.Content);
             if (rows.Count == 0) continue;
-            var header = rows[0].Select(NormalizeUpper).ToList();
-            var mapping = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            FindSemantic("date", ["POST DATE", "TRANSACTION DATE", "TXN DATE", "DATE"]);
-            FindSemantic("description", ["DESCRIPTION", "NARRATION", "PARTICULARS", "DETAILS"]);
-            FindSemantic("debit", ["DEBIT", "WITHDRAWAL", "DR AMOUNT"]);
-            FindSemantic("credit", ["CREDIT", "DEPOSIT", "CR AMOUNT"]);
-            FindSemantic("balance", ["BALANCE", "RUNNING BALANCE"]);
-
-            for (var i = 0; i < header.Count; i++)
+            // PaddleOCR may put a title, statement period or a merged colspan
+            // row INSIDE the same HTML table before the real column headings.
+            // Locate a complete source-visible transaction header, not row zero.
+            for (var headerIndex = 0; headerIndex < rows.Count; headerIndex++)
             {
-                if (header[i].Contains("VALUE DATE", StringComparison.Ordinal) || header[i].Contains("VALUE DT", StringComparison.Ordinal)) mapping["value_date"] = i;
-                if (new[] { "REFERENCE", "CHEQUE", "CHQ", "REF NO", "REF.", "REF/" }.Any(word => header[i].Contains(word, StringComparison.Ordinal))) mapping["reference"] = i;
-            }
+                var header = rows[headerIndex].Select(NormalizeUpper).ToList();
+                var mapping = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            if (new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey))
-                return new IdentifiedTable(rows, mapping, true);
+                FindSemantic("date", ["POST DATE", "TRANSACTION DATE", "TXN DATE", "DATE"]);
+                FindSemantic("description", ["DESCRIPTION", "NARRATION", "PARTICULARS", "DETAILS"]);
+                FindSemantic("debit", ["DEBIT", "WITHDRAWAL", "DR AMOUNT"]);
+                FindSemantic("credit", ["CREDIT", "DEPOSIT", "CR AMOUNT"]);
+                FindSemantic("balance", ["BALANCE", "RUNNING BALANCE"]);
 
-            void FindSemantic(string semantic, IReadOnlyList<string> words)
-            {
                 for (var i = 0; i < header.Count; i++)
                 {
-                    if (!words.Any(word => header[i].Contains(word, StringComparison.Ordinal))) continue;
-                    mapping[semantic] = i;
-                    break;
+                    if (header[i].Contains("VALUE DATE", StringComparison.Ordinal) ||
+                        header[i].Contains("VALUE DT", StringComparison.Ordinal)) mapping["value_date"] = i;
+                    if (new[] { "REFERENCE", "CHEQUE", "CHQ", "REF NO", "REF.", "REF/" }
+                        .Any(word => header[i].Contains(word, StringComparison.Ordinal))) mapping["reference"] = i;
+                }
+
+                if (new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey) &&
+                    mapping.Values.Distinct().Count() == mapping.Count)
+                    return new IdentifiedTable(rows.Skip(headerIndex).ToList(), mapping, true);
+
+                void FindSemantic(string semantic, IReadOnlyList<string> words)
+                {
+                    for (var i = 0; i < header.Count; i++)
+                    {
+                        if (!words.Any(word => header[i].Contains(word, StringComparison.Ordinal))) continue;
+                        mapping[semantic] = i;
+                        break;
+                    }
                 }
             }
         }
@@ -571,16 +581,20 @@ internal sealed class BankImageDocumentVerificationService
         {
             if (!NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal)) continue;
             var rows = TableRows(block.Content);
-            if (rows.Count == 0) continue;
-            var first = rows[0];
-            string Cell(string name) =>
-                mapping.TryGetValue(name, out var index) && index >= 0 && index < first.Count
-                    ? Clean(first[index]) : string.Empty;
-            if (ParseDate(Cell("date")) is null) continue;
-            if (Cell("description").Length == 0) continue;
-            if (ParseSignedMoney(Cell("balance")) is null) continue;
-            if (ParseMoney(Cell("debit")) is null && ParseMoney(Cell("credit")) is null) continue;
-            return new IdentifiedTable(rows, mapping, false);
+            // A continuation may begin with one or more merged title/period rows.
+            // Do not mistake its printed statement metadata for a transaction.
+            for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                var first = rows[rowIndex];
+                string Cell(string name) =>
+                    mapping.TryGetValue(name, out var index) && index >= 0 && index < first.Count
+                        ? Clean(first[index]) : string.Empty;
+                if (ParseDate(Cell("date")) is null) continue;
+                if (Cell("description").Length == 0) continue;
+                if (ParseSignedMoney(Cell("balance")) is null) continue;
+                if (ParseMoney(Cell("debit")) is null && ParseMoney(Cell("credit")) is null) continue;
+                return new IdentifiedTable(rows.Skip(rowIndex).ToList(), mapping, false);
+            }
         }
         return null;
     }
@@ -1270,6 +1284,13 @@ internal sealed class BankImageDocumentVerificationService
     private static bool GroupingEdge(PageProfile left, PageProfile right)
     {
         if (IdentityConflict(left, right)) return false;
+        // Physical consecutive pages in the SAME PDF are source-backed adjacency.
+        // An OCR header, balance or account may be missing on a continuation page.
+        // Still reject explicit account, bank or period conflicts above.
+        if (Path.GetExtension(left.SourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase) &&
+            left.SourcePath.Equals(right.SourcePath, StringComparison.OrdinalIgnoreCase) &&
+            Math.Abs(left.SourcePage - right.SourcePage) == 1)
+            return true;
         if (Math.Max(TransitionScore(left, right), TransitionScore(right, left)) >= 150d) return true;
         if (left.AccountNumber.Length > 0 && left.AccountNumber.Equals(right.AccountNumber, StringComparison.OrdinalIgnoreCase) && !PeriodsConflict(left, right)) return true;
         if (left.PeriodStart.Length > 0 && left.PeriodStart == right.PeriodStart && left.PeriodEnd == right.PeriodEnd && left.Bank.Length > 0 && left.Bank.Equals(right.Bank, StringComparison.OrdinalIgnoreCase)) return true;
