@@ -1077,10 +1077,20 @@ internal sealed class BankImageDocumentVerificationService
         issues.AddRange(pageIssues);
         if (duplicateCount > 0) { /* exact overlap duplicates are safely omitted and kept in the audit count */ }
 
+        // If source OCR visibly mentions a printed summary but its financial
+        // fields cannot be parsed, this is NOT a summary-free statement. Never
+        // bypass an unreadable printed amount through a brought-forward value.
+        var unparsedPrintedSummary = summary is null &&
+            ordered.Any(page => page.RawBlocks.Any(block =>
+                NormalizeUpper(block.Content).Contains("STATEMENT SUMMARY", StringComparison.Ordinal)));
+        if (unparsedPrintedSummary)
+            issues.Add("Printed statement summary is present in source OCR but its financial controls are unreadable; review original scanned page.");
+
         // Without a statement summary, the first transaction's inferred
         // opening balance is circular evidence. Require an independently printed
-        // BROUGHT FORWARD amount before accepting a summary-free document.
+        // BROUGHT FORWARD amount before accepting a genuinely summary-free document.
         var pageVerifiedWithoutSummary = summary is null &&
+            !unparsedPrintedSummary &&
             firstBroughtForward?.Value is not null &&
             openingSource == "FIRST_PAGE_BROUGHT_FORWARD" &&
             (pageStatus.Equals("VERIFIED", StringComparison.Ordinal) ||
