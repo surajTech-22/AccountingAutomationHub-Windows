@@ -207,13 +207,14 @@ try
     // page 1, not guessed by bank name or hardcoded cell indices.
     var continuationDir = Path.Combine(root, "two-page-continuation");
     Directory.CreateDirectory(continuationDir);
-    var identity = "HDFC BANK\nStatement of Account\nFrom: 29/08/2025 To: 03/09/2025\nAccount No: 9999999999\n";
+    var identity = "HDFC BANK\nStatement of Account\nFrom: 29/08/2025 To: 03/09/2025\nAccount No: 9999999999\nAccount Branch : TEST CITY\nAccount Type : CURRENT ACCOUNT\n";
     string P1Table = "| From: 29/08/2025 | To: 03/09/2025 | Statement of account |\n" +
                      "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
                      "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.00 |\n" +
+                     "| | FIRST TRANSACTION SECOND LINE | | | | | |\n" +
                      "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.00 |";
     string P2Table = "| Generated On: 03/09/2025 - Statement of account |\n" +
-                     "| 02/09/25 | CONTINUATION CREDIT | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
+                     "| 02/09/25 | CONTINUATION CREDIT\\nADDITIONAL DETAIL | S00003 | 02/09/25 | 0.00 | 10.00 | 85.00 |\n" +
                      "| 03/09/25 | CONTINUATION DEBIT | S00004 | 03/09/25 | 20.00 | 0.00 | 65.00 |";
     string P2Summary = "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n" +
                        "| 0.00 | 2 | 2 | 45.00 | 110.00 | 65.00 |";
@@ -224,6 +225,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = identity + "Page No. 1 of 2" },
+            new { block_label = "text", block_content = "MS TEST TRADERS" },
             new { block_label = "table", block_content = P1Table }
         }
     }));
@@ -256,6 +258,13 @@ try
     if (combined.Transactions[2].InferredPage != 2 || combined.Transactions[2].Reference != "S00003" ||
         combined.Transactions[3].Reference != "S00004")
         throw new Exception("Page-two transaction reference mapping or ordering is incorrect.");
+    if (combined.BankName != "HDFC BANK" || combined.AccountNumber != "9999999999" ||
+        combined.AccountName != "MS TEST TRADERS" || combined.BranchName != "TEST CITY" ||
+        combined.AccountType != "CA")
+        throw new Exception("Source-labeled account metadata was not preserved in the verified bank OCR document.");
+    if (!combined.Transactions[0].Description.Contains("FIRST TRANSACTION SECOND LINE", StringComparison.Ordinal) ||
+        !combined.Transactions[2].Description.Contains("CONTINUATION CREDIT ADDITIONAL DETAIL", StringComparison.Ordinal))
+        throw new Exception("Wrapped OCR narration was lost between raw table rows or embedded line breaks.");
     if (combined.TotalDebits != 45.00m || combined.TotalCredits != 110.00m ||
         combined.ClosingBalance != 65.00m || combined.DebitCount != 2 || combined.CreditCount != 2)
         throw new Exception("Page-two financial reconciliation is incorrect.");
