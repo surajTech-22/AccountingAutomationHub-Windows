@@ -394,6 +394,38 @@ try
         !missingSummaryDocument.Issues.Any(issue => issue.Contains("no readable statement summary", StringComparison.OrdinalIgnoreCase)))
         throw new Exception("Unseen printed summary on multi-page scanned PDF must remain review-required without losing financial rows.");
     Console.WriteLine("PASS: multi-page OCR omitted-summary safety gate and dated brought-forward classification.");
+
+    // In a real scan the opening row may have a printed date and the OCR can
+    // shift its balance into the deposit column. The unknown opening must be
+    // retained as an audit failure, not invented from the deposit amount.
+    var damagedOpeningRows = p1Rows.Select(line => line.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal)
+        ? "| 31/07/25 | BALANCE BROUGHT FORWARD | BF00000 | 31/07/25 | 0.00 | 0.01 | |"
+        : line);
+    var damagedOpeningJson = Path.Combine(longDir, "page1-damaged-opening.json");
+    File.WriteAllText(damagedOpeningJson, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = longIdentity + "Page No. 1 of 2" },
+            new { block_label = "table", block_content = HtmlTableWithStatementMetadata(damagedOpeningRows, "From: 01/07/2025 To: 30/09/2026 Statement of account") }
+        }
+    }));
+    var damagedOpeningBatch = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[]
+        {
+            new BankOcrRecognitionPage { Id = "S001P001", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 1, JsonPath = damagedOpeningJson },
+            new BankOcrRecognitionPage { Id = "S001P002", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 2, JsonPath = longPage2 }
+        }
+    };
+    var damagedOpeningDoc = new BankImageDocumentVerificationService()
+        .Verify(damagedOpeningBatch, longDir, null, CancellationToken.None).Documents.Single();
+    if (damagedOpeningDoc.Status != "REVIEW_REQUIRED" ||
+        damagedOpeningDoc.Transactions.Count != 22 ||
+        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("brought-forward running balance was not recognized", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Misaligned OCR brought-forward balance must be review-required and not create an extra transaction.");
+    Console.WriteLine("PASS: unreadable dated brought-forward balance cannot be silently recovered from deposit column.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
 }
 finally
