@@ -54,5 +54,18 @@ assert "page.GetImages().Any(" in doc_kind
 assert "page.Text.Count(char.IsLetterOrDigit) >= 40" in doc_kind
 assert "BankPdfDocumentKind.Scanned" in doc_kind
 assert "BankPdfDocumentKind.Mixed" in doc_kind
+review = src("ViewModels/ActionCenterViewModel.cs")
+verifier = src("Services/BankImageDocumentVerificationService.cs")
+assert "OCR pages in this document: {document.PageCount:N0}" in background
+assert "Source files: {documentSources.Length:N0}" in background
+assert "Transaction rows detected: {document.TransactionRowsPrepared:N0}" in background
+assert r'\\nGrouped pages:' not in background[
+    background.index('"Bank OCR Document Review"'):background.index('var workbookStatus = ', background.index('"Bank OCR Document Review"'))
+]
+assert "FormatLegacyBankOcrDetail(SelectedAction?.Detail" in review
+assert "detail = FormatLegacyBankOcrDetail(detail);" in review
+assert 'STATEMENT SUMMARY' in verifier and "unparsedPrintedSummary" in verifier
+print("PASS: OCR review reports true PDF page count, restores saved source action and fails closed for unreadable printed summary.")
+
 print("PASS: scanned/mixed PDFs use existing Bank OCR in manual, auto, distributed and retry paths.")
 print("PASS: normal PDF Python refuses scanned/mixed inputs before creating or deleting workbook.")
