@@ -663,8 +663,10 @@ internal sealed class BankImageDocumentVerificationService
         if (table.HasHeader && table.Rows.Count > 0)
             rows.Add(table.Rows[0].Select(Normalize).ToArray());
 
-        // Tracks the last real transaction candidate rather than just the last
-        // printed OCR row, so two- and three-line wrapped narrations stay attached.
+        // Tracks source continuation text that OCR placed on a dated HTML row
+        // with no movement, while its source financial cells are on the next
+        // row under a shared rowspan date.
+        string[]? pendingNextFinancialNarration = null;
         var previousFinancialRowIndex = -1;
         for (var sourceIndex = startingIndex; sourceIndex < table.Rows.Count; sourceIndex++)
         {
@@ -687,7 +689,10 @@ internal sealed class BankImageDocumentVerificationService
 
                 if (previousFinancialRowIndex < 0)
                 {
-                    issues.Add($"Source OCR row {sourceIndex + 1} has unassigned narrative text before the first financial row.");
+                    if (date.Length > 0)
+                        pendingNextFinancialNarration = row;
+                    else
+                        issues.Add($"Source OCR row {sourceIndex + 1} has unassigned narrative text before the first financial row.");
                     continue;
                 }
                 var prior = rows[previousFinancialRowIndex].ToArray();
@@ -700,7 +705,13 @@ internal sealed class BankImageDocumentVerificationService
                     !reference.Equals(priorReference, StringComparison.OrdinalIgnoreCase);
                 if (dateConflict || referenceConflict)
                 {
-                    issues.Add($"Source OCR row {sourceIndex + 1} contains an ambiguous narration continuation (posting date or reference differs).");
+                    // This can be a split rowspan transaction beginning on a
+                    // new date, not a narration fragment of the previous entry.
+                    // Hold it for the following financial row; do not merge it
+                    // backwards or invent a zero-amount accounting entry.
+                    pendingNextFinancialNarration = date.Length > 0 ? row : null;
+                    if (pendingNextFinancialNarration is null)
+                        issues.Add($"Source OCR row {sourceIndex + 1} contains an ambiguous narration continuation (posting date or reference differs).");
                     continue;
                 }
                 if (descriptionColumn >= 0 && descriptionColumn < prior.Length &&
@@ -714,9 +725,38 @@ internal sealed class BankImageDocumentVerificationService
                 continue;
             }
 
+            if (pendingNextFinancialNarration is not null)
+            {
+                var pendingDate = Cell(pendingNextFinancialNarration, dateColumn);
+                var pendingReference = Cell(pendingNextFinancialNarration, referenceColumn);
+                var financialDate = Cell(row, dateColumn);
+                var financialReference = Cell(row, referenceColumn);
+                if (pendingDate.Length > 0 &&
+                    ParseDate(pendingDate) is not null &&
+                    ParseDate(pendingDate) == ParseDate(financialDate) &&
+                    (pendingReference.Length == 0 || financialReference.Length == 0 ||
+                     NormalizeUpper(pendingReference) == NormalizeUpper(financialReference)))
+                {
+                    if (descriptionColumn >= 0 && descriptionColumn < row.Length)
+                    {
+                        var fragment = Cell(pendingNextFinancialNarration, descriptionColumn);
+                        if (fragment.Length > 0)
+                            row[descriptionColumn] = Normalize(string.Join(" ", new[] {
+                                fragment, row[descriptionColumn] }.Where(value => value.Length > 0)));
+                    }
+                    if (referenceColumn >= 0 && referenceColumn < row.Length &&
+                        financialReference.Length == 0 && pendingReference.Length > 0)
+                        row[referenceColumn] = pendingReference;
+                }
+                else
+                    issues.Add($"Source OCR row {sourceIndex + 1}: a separate dated narration fragment could not be attached to the following financial transaction.");
+                pendingNextFinancialNarration = null;
+            }
             rows.Add(row);
             previousFinancialRowIndex = rows.Count - 1;
         }
+        if (pendingNextFinancialNarration is not null)
+            issues.Add("Trailing dated OCR narration has no matching financial row.");
         return rows;
     }
 
@@ -1751,6 +1791,11 @@ internal sealed class BankImageDocumentVerificationService
     private static DateTime? ParseDate(string? value)
     {
         var text = Clean(value);
+        // Local OCR occasionally reads the source date separator as a colon
+        // (14:08/26 instead of 14/08/26). Only repair this strict DD:MM/YY
+        // shape; retain the unmodified DateRaw in financial audit evidence.
+        if (Regex.IsMatch(text, @"^\d{1,2}:\d{1,2}[/.-]\d{2,4}$"))
+            text = text.Replace(':', '/');
         foreach (var format in DateFormats)
             if (DateTime.TryParseExact(text, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) return date;
         var match = DateTextRegex.Match(text);
