@@ -370,6 +370,9 @@ internal sealed class BankImageDocumentVerificationService
                 break;
             }
         }
+        // A generic title is a last resort, never overwrite a source-labeled
+        // account holder with a bank/logo title returned by Paddle.
+        if (accountName.Length == 0)
         foreach (var block in blocks)
         {
             var label = NormalizeUpper(block.Label);
