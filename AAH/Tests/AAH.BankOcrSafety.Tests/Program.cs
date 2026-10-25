@@ -96,6 +96,63 @@ try
         Console.WriteLine("PASS: " + scene.Name + " (" + doc.Status + ")");
         passed++;
     }
+    // A bank can print a dated BALANCE BROUGHT FORWARD credit as the first
+    // line while including it in the printed bank credit count/total. AAH must
+    // display it as opening metadata and create NO voucher for it.
+    foreach (var test in new (string Name, string BfBalance, string SummaryCredits,
+        string SummaryCreditCount, bool IncludeSummary, bool ExpectVerified)[]
+    {
+        ("dated opening movement included in printed summary", "0.01", "100.01", "2", true, true),
+        ("opening amount is not a voucher even without balance OCR", "", "100.01", "2", false, false),
+        ("wrong printed bank credit count remains blocked", "0.01", "100.01", "1", true, false),
+        ("one paisa printed bank credit mismatch remains blocked", "0.01", "100.00", "2", true, false)
+    })
+    {
+        var directory = Path.Combine(root, "brought-forward-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var blocks = new List<object>
+        {
+            new { block_label = "text", block_content =
+                "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
+            new { block_label = "table", block_content =
+                "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\\n" +
+                $"| 31/07/25 | BALANCE BROUGHT FORWARD | BF00001 | 31/07/25 | 0.00 | 0.01 | {test.BfBalance} |\\n" +
+                "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.01 |\\n" +
+                "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.01 |" }
+        };
+        if (test.IncludeSummary)
+            blocks.Add(new { block_label = "table", block_content =
+                "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\\n" +
+                $"| 0.00 | 1 | {test.SummaryCreditCount} | 25.00 | {test.SummaryCredits} | 75.01 |" });
+        var path = Path.Combine(directory, "page.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new { parsing_res_list = blocks }));
+        var batch = new BankOcrRecognitionBatch
+        {
+            WasSuccessful = true,
+            Pages = new[] { new BankOcrRecognitionPage
+            {
+                Id = "S001P001", SourcePath = "synthetic-scan.pdf",
+                SourceIndex = 1, SourcePage = 1, JsonPath = path
+            } }
+        };
+        var result = new BankImageDocumentVerificationService()
+            .Verify(batch, directory, null, CancellationToken.None);
+        if (result.Documents.Count != 1)
+            throw new Exception(test.Name + ": expected one document.");
+        var doc = result.Documents[0];
+        if (doc.Transactions.Count != 2 ||
+            doc.Transactions.Any(tx => tx.Description.Contains("BROUGHT FORWARD", StringComparison.Ordinal)) ||
+            doc.OpeningBalance != 0.01m || doc.BroughtForwardCredit != 0.01m ||
+            doc.TotalCredits != 100.00m || doc.CreditCount != 1 ||
+            doc.PrintedSummaryOpeningBalance != (test.IncludeSummary ? 0.00m : null))
+            throw new Exception(test.Name + ": opening was lost, duplicated, or counted as voucher.");
+        var verified = doc.Status is "VERIFIED" or "VERIFIED_WITH_CORRECTIONS";
+        if (verified != test.ExpectVerified)
+            throw new Exception(test.Name + ": unexpected status " + doc.Status +
+                " issues: " + string.Join("; ", doc.Issues));
+        Console.WriteLine("PASS: " + test.Name + " (" + doc.Status + ")");
+    }
+
     // The real scanned HDFC summary is printed at the bottom of the last page.
     // PaddleOCR may emit the same printed six financial controls as a text block
     // or as prose, not a TABLE block. Parsing must preserve their source values,
