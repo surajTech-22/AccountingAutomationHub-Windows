@@ -252,6 +252,18 @@ try
     if (!continued.WasSuccessful || continued.Documents.Count != 1)
         throw new Exception("Two-page continuation was rejected or split into separate documents.");
     var combined = continued.Documents[0];
+    var tabularAudit = Path.Combine(continuationDir, "AAH_OCR_TABULAR_NORMALIZATION.json");
+    if (!File.Exists(tabularAudit))
+        throw new Exception("OCR normalization stage did not save pre-import tabular evidence.");
+    using (var normalizedEvidence = JsonDocument.Parse(File.ReadAllText(tabularAudit)))
+    {
+        var evidence = normalizedEvidence.RootElement;
+        if (evidence.GetProperty("physical_pages").GetInt32() != 2 ||
+            evidence.GetProperty("candidate_rows").GetInt32() != 4 ||
+            evidence.GetProperty("pages")[1].GetProperty("rows").GetArrayLength() != 2 ||
+            !evidence.GetProperty("pages")[1].GetProperty("source_columns").TryGetProperty("description", out _))
+            throw new Exception("Source-backed OCR table normalization lost headerless page-two rows.");
+    }
     if (combined.Status != "VERIFIED" || combined.Transactions.Count != 4)
         throw new Exception("Headerless continuation was not fully verified: " + combined.Status + " (" +
                             string.Join("; ", combined.Issues) + ")");
