@@ -272,7 +272,10 @@ try
     var creditPositions = new HashSet<int> { 0, 1, 8, 11, 16, 18 };
     var p1Rows = new List<string>
     {
-        "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |"
+        "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |",
+        // The real-world OCR often puts a date on this printed opening row.
+        // It is balance evidence, never transaction 23.
+        "| 31/07/25 | BALANCE BROUGHT FORWARD | BF00000 | 31/07/25 | 0.00 | 0.00 | 0.00 |"
     };
     var p2Rows = new List<string>();
     decimal running = 0m;
@@ -361,6 +364,36 @@ try
         !longDoc.Transactions[5].Description.Contains("SAME DATE CONTINUATION TEXT", StringComparison.Ordinal))
         throw new Exception("22-row page boundary or wrapped narration handling failed.");
     Console.WriteLine("PASS: synthetic 22-row HTML/colspan two-page Bank OCR statement reconciled.");
+
+    // The OCR model can drop an entire printed summary, leaving the raw
+    // parsing_res_list without the words STATEMENT SUMMARY. A reconciled
+    // two-page subset must not be auto-imported based only on opening balance.
+    var p2NoSummaryJson = Path.Combine(longDir, "page2-no-summary.json");
+    File.WriteAllText(p2NoSummaryJson, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = "Page No. 2 of 2" },
+            new { block_label = "table", block_content = HtmlTableWithStatementMetadata(p2Rows, "Generated On: 30/09/2026 Statement of account") }
+        }
+    }));
+    var missingSummaryBatch = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[]
+        {
+            new BankOcrRecognitionPage { Id = "S001P001", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 1, JsonPath = longPage1 },
+            new BankOcrRecognitionPage { Id = "S001P002", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 2, JsonPath = p2NoSummaryJson }
+        }
+    };
+    var missingSummaryDocument = new BankImageDocumentVerificationService()
+        .Verify(missingSummaryBatch, longDir, null, CancellationToken.None).Documents.Single();
+    if (missingSummaryDocument.Status != "REVIEW_REQUIRED" ||
+        missingSummaryDocument.SummaryStatus != "NOT_AVAILABLE" ||
+        missingSummaryDocument.Transactions.Count != 22 ||
+        !missingSummaryDocument.Issues.Any(issue => issue.Contains("no readable statement summary", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Unseen printed summary on multi-page scanned PDF must remain review-required without losing financial rows.");
+    Console.WriteLine("PASS: multi-page OCR omitted-summary safety gate and dated brought-forward classification.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
 }
 finally
