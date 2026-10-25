@@ -337,6 +337,58 @@ try
             throw new Exception("Source account evidence or second-page rectangular transactions not preserved.");
     }
     Console.WriteLine("PASS: GSTN footer is not a bank account; two-page PDF is grouped with four transaction rows.");
+    // The real HDFC scan can return a headerless page with date OCR as
+    // 14:08/26 and a separate HTML row whose date cell is rowspan=2.
+    // The leading date/narration row has no money, the second contains it.
+    // Both are one source transaction, never an inferred/duplicate voucher.
+    var splitHtmlDir = Path.Combine(root, "ocr-html-rowspan-colon-date");
+    Directory.CreateDirectory(splitHtmlDir);
+    var splitFirstJson = Path.Combine(splitHtmlDir, "first.json");
+    var splitSecondJson = Path.Combine(splitHtmlDir, "second.json");
+    File.WriteAllText(splitFirstJson, File.ReadAllText(page1Json));
+    var htmlPageTwo = "<table>" +
+        "<tr><td colspan='7'>Generated On:03-SEP-2025 Statement of account</td></tr>" +
+        "<tr><td>02:09/25</td><td>CONTINUATION CREDIT</td><td>S00003</td><td>02/09/25</td><td>0.00</td><td>10.00</td><td>85.00</td></tr>" +
+        "<tr><td rowspan='2'>03:09/25</td><td>CONTINUATION DEBIT</td><td>S00004</td><td></td><td></td><td></td><td></td></tr>" +
+        "<tr><td>ADDITIONAL DETAIL</td><td>S00004</td><td>03/09/25</td><td>20.00</td><td>0.00</td><td>65.00</td></tr>" +
+        "</table>";
+    File.WriteAllText(splitSecondJson, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = identity + "Page No. 2 of 2" },
+            new { block_label = "table", block_content = htmlPageTwo },
+            new { block_label = "table", block_content = P2Summary }
+        }
+    }));
+    var splitResult = new BankImageDocumentVerificationService().Verify(
+        new BankOcrRecognitionBatch
+        {
+            WasSuccessful = true,
+            Pages = new[]
+            {
+                new BankOcrRecognitionPage { Id = "S001P001", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 1, JsonPath = splitFirstJson },
+                new BankOcrRecognitionPage { Id = "S001P002", SourcePath = twoPagePdf, SourceIndex = 1, SourcePage = 2, JsonPath = splitSecondJson }
+            }
+        }, splitHtmlDir, null, CancellationToken.None);
+    if (splitResult.Documents.Count != 1 || splitResult.Documents[0].Pages.Count != 2 ||
+        splitResult.Documents[0].Transactions.Count != 4 ||
+        splitResult.Documents[0].Transactions[2].Date?.Day != 2 ||
+        splitResult.Documents[0].Transactions[3].Date?.Day != 3 ||
+        splitResult.Documents[0].Transactions[3].FinalDebit != 20.00m ||
+        !splitResult.Documents[0].Transactions[3].Description.Contains("ADDITIONAL DETAIL", StringComparison.Ordinal))
+        throw new Exception("HTML rowspan or colon-date normalization lost/duplicated a headerless continuation transaction: " +
+            string.Join("; ", splitResult.Documents.SelectMany(d => d.Issues)));
+    using (var splitEvidence = JsonDocument.Parse(File.ReadAllText(
+        Path.Combine(splitHtmlDir, "AAH_OCR_TABULAR_NORMALIZATION.json"))))
+    {
+        var evidence = splitEvidence.RootElement;
+        if (evidence.GetProperty("candidate_rows").GetInt32() != 4 ||
+            evidence.GetProperty("pages")[1].GetProperty("rows").GetArrayLength() != 2)
+            throw new Exception("HTML shared-date rows did not normalize to one transaction per movement.");
+    }
+    Console.WriteLine("PASS: HTML rowspans and source OCR colon-date separators preserve four financial rows.");
+
 
 
     // Synthetic 22-row, two-page bank statement with 16 debits and six credits,
