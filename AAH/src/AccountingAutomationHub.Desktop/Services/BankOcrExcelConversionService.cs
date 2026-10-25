@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using System.Xml;
 using AccountingAutomationHub.Domain.Banking;
 
@@ -317,6 +318,32 @@ public sealed class BankOcrExcelConversionService
             try
             {
                 WritePipelineWorkbook(outputPath, document, verified.AuditPath);
+                // Separate, source-backed metadata record for bank-master
+                // discovery and diagnostics. It is NOT an import authorization.
+                // The ordinary workbook header retains identical metadata keys.
+                var metadataPath = Path.Combine(runRoot,
+                    $"AAH_OCR_BANK_METADATA_DOCUMENT_{document.DocumentNumber:000}.json");
+                File.WriteAllText(metadataPath,
+                    JsonSerializer.Serialize(new
+                    {
+                        DocumentNumber = document.DocumentNumber,
+                        BankName = document.BankName,
+                        AccountNumber = document.AccountNumber,
+                        AccountName = document.AccountName,
+                        AccountTypeAsPrinted = document.AccountType,
+                        BranchName = document.BranchName,
+                        IFSC = document.Ifsc,
+                        StatementFrom = document.StatementFrom,
+                        StatementTo = document.StatementTo,
+                        OpeningBalance = document.OpeningBalance,
+                        ClosingBalance = document.ClosingBalance,
+                        OCRPageCount = document.Pages.Count,
+                        OCRTransactionCandidates = document.Transactions.Count,
+                        VerificationStatus = document.Status,
+                        ImportAuthorized = IsVerified(document.Status),
+                        MetadataEvidence = "AAH source-recognized scanned bank statement"
+                    }, new JsonSerializerOptions { WriteIndented = true }),
+                    new UTF8Encoding(false));
                 // Keep the normalized workbook from a blocked document available
                 // for source-backed review, even if normal transient workbooks are
                 // deleted after the import attempt. This is not an import request.
