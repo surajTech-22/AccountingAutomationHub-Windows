@@ -135,8 +135,19 @@ internal sealed class BankImageDocumentVerificationService
         if (profiles.Count == 0)
             return BankVerifiedDocumentBatch.Failed("Raw OCR was produced, but AAH could not parse a Bank Statement page.", parseIssues);
 
+        var groups = GroupPages(profiles);
+        var documents = new List<BankVerifiedDocument>();
+
+        for (var i = 0; i < groups.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ordered = OrderPages(groups[i]).Ordered;
+            progress?.Invoke($"Bank OCR • verifying document {i + 1:N0} of {groups.Count:N0} ({ordered.Count:N0} page(s))");
+            documents.Add(VerifyDocument(i + 1, ordered));
+        }
+
         // Keep the exact source-backed rectangular transaction candidates on
-        // disk before document-level balance/summary verification. An OCR page
+        // disk including the inherited column mapping from page one. An OCR page
         // containing only free-form text still reports zero tabular candidates.
         // This is a diagnostic artifact, NOT a verified accounting workbook.
         var tabularPath = Path.Combine(runRoot, "AAH_OCR_TABULAR_NORMALIZATION.json");
@@ -144,7 +155,7 @@ internal sealed class BankImageDocumentVerificationService
         {
             var snapshot = new
             {
-                stage = "POST_OCR_PRE_FINANCIAL_VERIFICATION",
+                stage = "POST_OCR_NORMALIZED_TABULAR_ROWS",
                 created_utc = DateTime.UtcNow,
                 physical_pages = profiles.Count,
                 candidate_rows = profiles.Sum(page => page.Transactions.Count),
@@ -176,17 +187,6 @@ internal sealed class BankImageDocumentVerificationService
             parseIssues.Add("Could not preserve local pre-verification OCR table evidence: " + exception.Message);
         }
         progress?.Invoke($"Bank OCR • structured OCR into {profiles.Sum(page => page.Transactions.Count):N0} tabular candidate row(s) across {profiles.Count:N0} page(s); verifying documents");
-        var groups = GroupPages(profiles);
-        var documents = new List<BankVerifiedDocument>();
-
-        for (var i = 0; i < groups.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var ordered = OrderPages(groups[i]).Ordered;
-            progress?.Invoke($"Bank OCR • verifying document {i + 1:N0} of {groups.Count:N0} ({ordered.Count:N0} page(s))");
-            documents.Add(VerifyDocument(i + 1, ordered));
-        }
-
         var auditPath = Path.Combine(runRoot, "AAH_DOCUMENT_VERIFICATION.json");
         try
         {
