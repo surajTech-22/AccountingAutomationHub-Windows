@@ -12,7 +12,10 @@ var scenarios = new (string Name, string[] Pages, BankPdfDocumentKind Expected)[
     ("raster scan with hidden OCR text layer", new[] { "overlay" }, BankPdfDocumentKind.Scanned),
     ("mixed text and scanned pages", new[] { "text", "image" }, BankPdfDocumentKind.Mixed),
     ("all digital multi-page", new[] { "text", "text" }, BankPdfDocumentKind.Digital),
-    ("all scanned multi-page", new[] { "image", "image" }, BankPdfDocumentKind.Scanned)
+    ("all scanned multi-page", new[] { "image", "image" }, BankPdfDocumentKind.Scanned),
+    // Scanning apps often place a second watermark/logo raster outside the
+    // large photographed document. Both pages are still scans, not digital PDFs.
+    ("two-page scanner PDF plus watermark images", new[] { "scanner", "scanner" }, BankPdfDocumentKind.Scanned)
 };
 try
 {
@@ -52,7 +55,7 @@ static void MakePdf(string path, IReadOnlyList<string> types)
     };
     foreach (var type in types)
     {
-        bool isImage = type == "image" || type == "overlay";
+        bool isImage = type == "image" || type == "overlay" || type == "scanner";
         bool hasText = type == "text" || type == "overlay";
         int pageNumber = objects.Count + 1;
         int contentsNumber = pageNumber + 1;
@@ -60,6 +63,7 @@ static void MakePdf(string path, IReadOnlyList<string> types)
         var res = "<< /Font << /F1 3 0 R >> /XObject << /Im1 4 0 R >> >>";
         objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources {res} /Contents {contentsNumber} 0 R >>");
         var content = (isImage ? "q 595 0 0 842 0 0 cm /Im1 Do Q\n" : "")
+                    + (type == "scanner" ? "q 150 0 0 21 420 15 cm /Im1 Do Q\n" : "")
                     + (hasText ? $"BT /F1 12 Tf 30 750 Td ({contentText}) Tj ET\n" : "");
         int length = Encoding.ASCII.GetByteCount(content);
         objects.Add($"<< /Length {length} >>\nstream\n{content}endstream");
