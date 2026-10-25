@@ -80,8 +80,16 @@ internal sealed class BankImageDocumentVerificationService
         };
 
     private static readonly Regex IfscRegex = new(@"\b[A-Z]{4}0[A-Z0-9]{6}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex AccountRegex1 = new(@"(?:A/?C|ACCOUNT)\s*(?:NO\.?|NUMBER|#)?\s*[:\-]?\s*([0-9X*][0-9X*\-\s]{5,25})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex AccountRegex2 = new(@"\bA/C\s*[:\-]?\s*([0-9X*][0-9X*\-\s]{5,25})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Never match AC inside a GSTN/PAN/customer identifier, e.g. a footer
+    // containing AAAAC123456H1ZW. Only explicit account-number labels qualify.
+    // Page-one OCR may have an unlabeled account number; source-labeled page-two
+    // identity can safely supply it after adjacent PDF pages are grouped.
+    private static readonly Regex AccountRegex1 = new(
+        @"(?<![A-Z0-9])(?:ACCOUNT\s*(?:NO\.?|NUMBER|#)|ACCT\s*(?:NO\.?|NUMBER|#)|A\s*/\s*C\s*(?:NO\.?|NUMBER|#)?|AC\s*(?:NO\.?|NUMBER|#))\s*[:\-]?\s*([0-9X*][0-9X*\-\s]{5,25})",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AccountRegex2 = new(
+        @"(?<![A-Z0-9])ACCOUNT\s*:\s*([0-9X*][0-9X*\-\s]{5,25})",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PageWithTotalRegex = new(@"\bPAGE\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*(\d{1,4})\s*(?:OF|/)\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PageOnlyRegex = new(@"\bPAGE\s*(?:NO\.?)?\s*[:\-]?\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex DateTextRegex = new(@"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b", RegexOptions.Compiled);
