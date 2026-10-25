@@ -476,6 +476,11 @@ internal sealed class BankImageDocumentVerificationService
 
         var transactions = new List<PageTransaction>();
         var narrationIssues = new List<string>();
+        // Normalize OCR source rows into a consistent tabular structure BEFORE
+        // date, amount, reference or narration extraction. Source column mapping
+        // is inherited from the previous PDF page, never guessed by bank name.
+        var tabularRows = NormalizeTransactionRows(identified, narrationIssues);
+        identified = new IdentifiedTable(tabularRows, identified.Mapping, identified.HasHeader);
         BalanceEvidence? broughtForward = null;
         BalanceEvidence? closingRow = null;
 
@@ -582,6 +587,87 @@ internal sealed class BankImageDocumentVerificationService
             BroughtForward = broughtForward,
             ClosingRow = closingRow
         };
+    }
+
+    /// <summary>
+    /// Transform OCR layout rows into a source-backed transaction table BEFORE
+    /// interpreting field values. Monetary cells, posting dates and references
+    /// remain verbatim. Only narration-only continuation rows with no conflicting
+    /// date/reference may be joined to the immediately preceding financial row.
+    /// </summary>
+    private static IReadOnlyList<IReadOnlyList<string>> NormalizeTransactionRows(
+        IdentifiedTable table, List<string> issues)
+    {
+        var rows = new List<IReadOnlyList<string>>();
+        var mapping = table.Mapping;
+        int Column(string key) => mapping.TryGetValue(key, out var index) ? index : -1;
+        int descriptionColumn = Column("description");
+        int dateColumn = Column("date");
+        int referenceColumn = Column("reference");
+        int debitColumn = Column("debit");
+        int creditColumn = Column("credit");
+        int balanceColumn = Column("balance");
+        static string Cell(IReadOnlyList<string> row, int column) =>
+            column >= 0 && column < row.Count ? Normalize(row[column]) : string.Empty;
+        var startingIndex = table.HasHeader ? 1 : 0;
+        if (table.HasHeader && table.Rows.Count > 0)
+            rows.Add(table.Rows[0].Select(Normalize).ToArray());
+
+        // Tracks the last real transaction candidate rather than just the last
+        // printed OCR row, so two- and three-line wrapped narrations stay attached.
+        var previousFinancialRowIndex = -1;
+        for (var sourceIndex = startingIndex; sourceIndex < table.Rows.Count; sourceIndex++)
+        {
+            var row = table.Rows[sourceIndex].Select(Normalize).ToArray();
+            var description = Cell(row, descriptionColumn);
+            var date = Cell(row, dateColumn);
+            var reference = Cell(row, referenceColumn);
+            var hasMoneyOrBalance = new[] { debitColumn, creditColumn, balanceColumn }
+                .Any(column => Cell(row, column).Length > 0);
+
+            if (!hasMoneyOrBalance)
+            {
+                // Merged PDF page titles/statement periods are not narrations.
+                if (NormalizeUpper(string.Join(" ", row)).Contains("STATEMENT OF ACCOUNT",
+                        StringComparison.Ordinal) ||
+                    NormalizeUpper(string.Join(" ", row)).StartsWith("GENERATED ON",
+                        StringComparison.Ordinal))
+                    continue;
+                if (description.Length == 0 && reference.Length == 0) continue;
+
+                if (previousFinancialRowIndex < 0)
+                {
+                    issues.Add($"Source OCR row {sourceIndex + 1} has unassigned narrative text before the first financial row.");
+                    continue;
+                }
+                var prior = rows[previousFinancialRowIndex].ToArray();
+                var priorDate = Cell(prior, dateColumn);
+                var priorReference = Cell(prior, referenceColumn);
+                var dateConflict = date.Length > 0 &&
+                    !date.Equals(priorDate, StringComparison.OrdinalIgnoreCase);
+                var referenceConflict = reference.Length > 0 &&
+                    priorReference.Length > 0 &&
+                    !reference.Equals(priorReference, StringComparison.OrdinalIgnoreCase);
+                if (dateConflict || referenceConflict)
+                {
+                    issues.Add($"Source OCR row {sourceIndex + 1} contains an ambiguous narration continuation (posting date or reference differs).");
+                    continue;
+                }
+                if (descriptionColumn >= 0 && descriptionColumn < prior.Length &&
+                    description.Length > 0)
+                    prior[descriptionColumn] = Normalize(string.Join(" ", new[]
+                    { prior[descriptionColumn], description }.Where(part => part.Length > 0)));
+                if (referenceColumn >= 0 && referenceColumn < prior.Length &&
+                    prior[referenceColumn].Length == 0 && reference.Length > 0)
+                    prior[referenceColumn] = reference;
+                rows[previousFinancialRowIndex] = prior;
+                continue;
+            }
+
+            rows.Add(row);
+            previousFinancialRowIndex = rows.Count - 1;
+        }
+        return rows;
     }
 
     private static IdentifiedTable? IdentifyTransactionTable(IReadOnlyList<OcrBlock> blocks)
