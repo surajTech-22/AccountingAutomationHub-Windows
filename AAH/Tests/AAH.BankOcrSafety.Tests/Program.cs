@@ -46,7 +46,7 @@ try
         {
             new { block_label = "text", block_content = scene.Name == "out-of-period posting date blocked"
                 ? string.Join(Environment.NewLine, "HDFC BANK", "Statement of Account", "From: 01/08/2025 To: 30/08/2025", "Account No: 9999999999")
-                : "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
+                : "HDFC BANK\nStatement of Account\\nAccount No: 9999999999" },
             new { block_label = "table", block_content = string.Join("\n", rows) },
             new {
                 block_label = scene.Name.StartsWith("no summary", StringComparison.Ordinal) ? "text" : "table",
@@ -183,7 +183,7 @@ try
     {
         parsing_res_list = new[]
         {
-            new { block_label = "text", block_content = "HDFC BANK\\nStatement of Account" },
+            new { block_label = "text", block_content = "HDFC BANK\nStatement of Account" },
             new { block_label = "table", block_content = "| Date | Narration | Debit | Credit | Balance |\\n| 29/08/25 | Credit | 0.00 | 10.00 | 10.00 |" },
         }
     }));
