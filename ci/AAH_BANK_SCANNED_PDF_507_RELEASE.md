@@ -8,7 +8,7 @@ The two-page scanned HDFC statement is raster-only (zero extractable PDF text; e
 
 ## Fixes
 
-- `AutomationFileClassifier` now runs `BankPdfDocumentClassifier` **before** generic PDF text/content classification. Scanned/mixed sources route to `AutomationFileKind.BankOcrSource`.
+- `AutomationFileClassifier` reads physical PDF page type before generic content classification. Already-identifiable GSTR-3B and Form 26AS retain their specialized routes; scanned/mixed **bank** PDFs route to `AutomationFileKind.BankOcrSource` before any normal Bank PDF/Python flow.
 - `BackgroundAutomationService.ProcessPdfAsync` performs a second physical-page check before ever constructing the normal PDF pipeline. Auto watcher and distributed Bank import route scanned/mixed PDFs into the existing `ProcessBankOcrSourceAsync`.
 - Action Center and manual Auto Import retry through `ResolvePdfAndImportInteractivelyAsync` now also reclassify and select Bank OCR instead of the interactive digital-PDF Python mapping UI.
 - `PdfBankStatementPipelineService.ProcessAsync` rejects scanned/mixed files *before* resolving the external script and before touching any source-side XLSX. This is a final safety gate for other callers.
@@ -30,3 +30,6 @@ The two-page scanned HDFC statement is raster-only (zero extractable PDF text; e
 4. No claimed OCR-quality pass without end-to-end extraction and reconciliation.
 
 **Production OCR accuracy remains independently unverified.** This release fixes routing, not the trained model.
+
+## Release final source marker
+No accounting writes occur during CI. On the target Windows client, the existing automatic updater must install only a published, checksum-verified stable release. Production OCR row accuracy is a separate, still-unverified acceptance gate.
