@@ -113,16 +113,16 @@ try
         var blocks = new List<object>
         {
             new { block_label = "text", block_content =
-                "HDFC BANK\\nStatement of Account\\nAccount No: 9999999999" },
+                "HDFC BANK\nStatement of Account\nAccount No: 9999999999" },
             new { block_label = "table", block_content =
-                "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\\n" +
-                $"| 31/07/25 | BALANCE BROUGHT FORWARD | BF00001 | 31/07/25 | 0.00 | 0.01 | {test.BfBalance} |\\n" +
-                "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.01 |\\n" +
+                "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
+                $"| 31/07/25 | BALANCE BROUGHT FORWARD | BF00001 | 31/07/25 | 0.00 | 0.01 | {test.BfBalance} |\n" +
+                "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.01 |\n" +
                 "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.01 |" }
         };
         if (test.IncludeSummary)
             blocks.Add(new { block_label = "table", block_content =
-                "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\\n" +
+                "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n" +
                 $"| 0.00 | 1 | {test.SummaryCreditCount} | 25.00 | {test.SummaryCredits} | 75.01 |" });
         var path = Path.Combine(directory, "page.json");
         File.WriteAllText(path, JsonSerializer.Serialize(new { parsing_res_list = blocks }));
