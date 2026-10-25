@@ -54,6 +54,18 @@ internal sealed class AutomationFileClassifier
         var extension = Path.GetExtension(path).ToLowerInvariant();
         if (extension == ".pdf")
         {
+            // A scanned statement must never enter the normal digital-PDF/Python pipeline.
+            // Inspect physical pages first, not only extracted text or filename. This
+            // catches image-only HDFC statements and mixed scanned/digital documents,
+            // including scanners that add a misleading searchable text overlay.
+            var pageKind = BankPdfDocumentClassifier.Classify(path);
+            if (pageKind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed)
+                return new(
+                    AutomationFileKind.BankOcrSource,
+                    85,
+                    $"Physical PDF classification: {pageKind}. Route directly to the existing Bank PaddleOCR-VL and AAH verified OCR workbook flow; never run digital PDF extraction.",
+                    BankScore: 8);
+
             var pdf = UniversalPdfContentInspector.Inspect(path);
             if (pdf.Kind.Equals(UniversalPdfContentInspector.Gstr3b, StringComparison.OrdinalIgnoreCase))
                 return new(AutomationFileKind.Gstr3bPdf, pdf.Confidence, pdf.Reason);
