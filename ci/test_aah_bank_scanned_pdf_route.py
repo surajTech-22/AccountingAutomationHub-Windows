@@ -67,5 +67,22 @@ assert "detail = FormatLegacyBankOcrDetail(detail);" in review
 assert 'STATEMENT SUMMARY' in verifier and "unparsedPrintedSummary" in verifier
 print("PASS: OCR review reports true PDF page count, restores saved source action and fails closed for unreadable printed summary.")
 
+action_center = src("ViewModels/ActionCenterViewModel.cs")
+pdf_action_route = action_center[
+    action_center.index("private async Task<(bool WasSuccessful, string Message)> RetryBankPdfByPhysicalKindAsync("):
+    action_center.index("private void ResolveSelected()")
+]
+assert 'BankPdfDocumentClassifier.Classify(sourcePath)' in pdf_action_route
+assert 'var isScanned = kind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed;' in pdf_action_route
+assert 'kind == BankPdfDocumentKind.Unknown && fromOcrReview' in pdf_action_route
+assert 'No normal PDF/Python import was started.' in pdf_action_route
+assert 'Running existing Advanced Bank OCR for {fileName}' in pdf_action_route
+assert 'Running the normal digital-bank-PDF Python pipeline interactively for {fileName}' in pdf_action_route
+assert pdf_action_route.count('RetryBankPdfByPhysicalKindAsync(') == 4
+assert 'Running the external Python pipeline interactively for' not in pdf_action_route
+assert 'StatusText = outcome.Message;' in pdf_action_route
+assert 'client.Id, client.FinancialYear, sourcePath, entry.Item.ActionType' in pdf_action_route
+print("PASS: all Action Center Bank PDF retry commands choose actual OCR/digital route and display the correct engine.")
+
 print("PASS: scanned/mixed PDFs use existing Bank OCR in manual, auto, distributed and retry paths.")
 print("PASS: normal PDF Python refuses scanned/mixed inputs before creating or deleting workbook.")
