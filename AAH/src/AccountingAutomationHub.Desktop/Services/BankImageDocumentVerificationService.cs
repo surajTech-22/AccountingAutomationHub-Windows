@@ -470,21 +470,28 @@ internal sealed class BankImageDocumentVerificationService
                 closingRow = new BalanceEvidence(balanceRaw, ParseSignedMoney(balanceRaw));
                 continue;
             }
-            // Printed narrations and UPI identifiers commonly wrap across several
-            // visual lines. OCR often emits these as rows without a repeated date.
-            // Keep them on their parent transaction rather than inventing another
-            // bank entry; still reject rows with unexpected standalone amounts.
-            if (dateRaw.Length == 0 && Get(row, "debit").Length == 0 &&
-                Get(row, "credit").Length == 0 && balanceRaw.Length == 0)
+            // Wrapped narrations may repeat the posting date on a visually
+            // separate OCR row. When the same date is repeated, no independent
+            // reference exists and all three financial cells are empty, retain
+            // the text on the previous transaction rather than inventing a
+            // zero-amount Bank entry. A DIFFERENT date/standalone reference
+            // without financial fields is still retained for review.
+            var referenceRaw = Get(row, "reference");
+            var noFinancialCells = Get(row, "debit").Length == 0 &&
+                Get(row, "credit").Length == 0 && balanceRaw.Length == 0;
+            var sameDateNarration = transactions.Count > 0 &&
+                dateRaw.Length > 0 &&
+                dateRaw.Equals(transactions[^1].DateRaw, StringComparison.Ordinal) &&
+                referenceRaw.Length == 0;
+            if (noFinancialCells && (dateRaw.Length == 0 || sameDateNarration))
             {
                 if (transactions.Count > 0)
                 {
                     var previous = transactions[^1];
                     if (description.Length > 0)
                         previous.Description = string.Join(" ", new[] { previous.Description, description }.Where(part => part.Length > 0));
-                    var extraRef = Get(row, "reference");
-                    if (extraRef.Length > 0)
-                        previous.Reference = string.Join(" ", new[] { previous.Reference, extraRef }.Where(part => part.Length > 0));
+                    if (referenceRaw.Length > 0)
+                        previous.Reference = string.Join(" ", new[] { previous.Reference, referenceRaw }.Where(part => part.Length > 0));
                 }
                 continue;
             }
