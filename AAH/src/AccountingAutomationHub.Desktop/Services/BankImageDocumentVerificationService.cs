@@ -1508,8 +1508,30 @@ internal sealed class BankImageDocumentVerificationService
             }
         }
 
-        var pipeRows = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(line => line.Contains('|'))
+        // Markdown/pipe OCR can wrap one cell across physical text lines.
+        // Reassemble a source row up to its closing pipe before splitting cells,
+        // rather than converting a narration line into a false transaction.
+        var logicalLines = new List<string>();
+        var pending = string.Empty;
+        foreach (var physicalLine in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = physicalLine.Trim();
+            if (line.Length == 0) continue;
+            if (pending.Length == 0)
+            {
+                if (!line.Contains('|')) continue;
+                pending = line;
+            }
+            else
+            {
+                pending += " " + line;
+            }
+            if (!pending.EndsWith('|')) continue;
+            logicalLines.Add(pending);
+            pending = string.Empty;
+        }
+        if (pending.Contains('|')) logicalLines.Add(pending);
+        var pipeRows = logicalLines
             .Select(line => line.Trim().Trim('|').Split('|').Select(Normalize).ToList())
             .Where(row => !IsSeparatorRow(row))
             .ToList();
