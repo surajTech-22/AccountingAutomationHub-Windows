@@ -1,4 +1,6 @@
 name: One-time AAH installed updater wakeup (owner requested)
+# Owner-requested recovery: re-signal latest verified stable release to installed AAH clients.
+# This triggers only an update-check hint; GitHub SHA256 verification remains mandatory.
 on:
   push:
     branches: [main]
