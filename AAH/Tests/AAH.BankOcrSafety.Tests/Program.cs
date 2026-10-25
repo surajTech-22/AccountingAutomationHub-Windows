@@ -421,11 +421,17 @@ try
     };
     var damagedOpeningDoc = new BankImageDocumentVerificationService()
         .Verify(damagedOpeningBatch, longDir, null, CancellationToken.None).Documents.Single();
+    // Unlike a metadata-only brought-forward row, this dated row contains a
+    // real nonzero 0.01 deposit. The scan's printed credit count/total can
+    // include it, so it MUST be retained as an ambiguous financial candidate.
+    // Missing source balance and printed-summary mismatch keep it blocked.
     if (damagedOpeningDoc.Status != "REVIEW_REQUIRED" ||
-        damagedOpeningDoc.Transactions.Count != 22 ||
-        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("brought-forward running balance was not recognized", StringComparison.OrdinalIgnoreCase)))
-        throw new Exception("Misaligned OCR brought-forward balance must be review-required and not create an extra transaction.");
-    Console.WriteLine("PASS: unreadable dated brought-forward balance cannot be silently recovered from deposit column.");
+        damagedOpeningDoc.Transactions.Count != 23 ||
+        damagedOpeningDoc.Transactions[0].OriginalCredit != 0.01m ||
+        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("Dated BROUGHT FORWARD row contains a debit/credit movement", StringComparison.OrdinalIgnoreCase)) ||
+        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("running balance could not be parsed", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("The dated 0.01 brought-forward credit must be retained, but never auto-approved with unreadable financial proof.");
+    Console.WriteLine("PASS: dated 0.01 brought-forward movement retained as review-only financial candidate.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
 }
 finally
