@@ -151,6 +151,7 @@ try
             throw new Exception(test.Name + ": unexpected status " + doc.Status +
                 " issues: " + string.Join("; ", doc.Issues));
         Console.WriteLine("PASS: " + test.Name + " (" + doc.Status + ")");
+        passed++;
     }
 
     // The real scanned HDFC summary is printed at the bottom of the last page.
@@ -608,18 +609,18 @@ try
     };
     var damagedOpeningDoc = new BankImageDocumentVerificationService()
         .Verify(damagedOpeningBatch, longDir, null, CancellationToken.None).Documents.Single();
-    // Unlike a metadata-only brought-forward row, this dated row contains a
-    // real nonzero 0.01 deposit. The scan's printed credit count/total can
-    // include it, so it MUST be retained as an ambiguous financial candidate.
-    // Missing source balance and printed-summary mismatch keep it blocked.
+    // A source-visible dated brought-forward credit belongs to the opening
+    // section, not to a transaction. With an unreadable balance and summary
+    // mismatch it must remain review-only; never create a voucher for it.
     if (damagedOpeningDoc.Status != "REVIEW_REQUIRED" ||
-        damagedOpeningDoc.Transactions.Count != 23 ||
-        damagedOpeningDoc.Transactions[0].OriginalCredit != 0.01m ||
-        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("Dated BROUGHT FORWARD row contains a debit/credit movement", StringComparison.OrdinalIgnoreCase)) ||
-        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("running balance could not be parsed", StringComparison.OrdinalIgnoreCase)))
-        throw new Exception("The dated 0.01 brought-forward credit must be retained, but never auto-approved with unreadable financial proof.");
-    Console.WriteLine("PASS: dated 0.01 brought-forward movement retained as review-only financial candidate.");
-    Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
+        damagedOpeningDoc.Transactions.Count != 22 ||
+        damagedOpeningDoc.BroughtForwardCredit != 0.01m ||
+        damagedOpeningDoc.OpeningBalance != 0.01m ||
+        damagedOpeningDoc.OpeningSource != "BROUGHT_FORWARD_MOVEMENT_PENDING_BALANCE_PROOF" ||
+        damagedOpeningDoc.Transactions.Any(tx => tx.Description.Contains("BROUGHT FORWARD", StringComparison.Ordinal)))
+        throw new Exception("The dated 0.01 brought-forward credit must be opening metadata, never a voucher or auto-approved without proof.");
+    Console.WriteLine("PASS: dated 0.01 brought-forward amount held in opening metadata with missing balance proof.");
+    Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 11} Bank OCR verifier safety scenarios.");
 }
 finally
 {
