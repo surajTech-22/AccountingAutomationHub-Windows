@@ -281,6 +281,63 @@ try
         combined.ClosingBalance != 65.00m || combined.DebitCount != 2 || combined.CreditCount != 2)
         throw new Exception("Page-two financial reconciliation is incorrect.");
     Console.WriteLine("PASS: scanned PDF with metadata before header and metadata before headerless continuation verified.");
+    // Regression from live Bank OCR: the page-one footer's GSTN has
+    // an embedded "AC123456" sequence. A previous permissive account regex
+    // treated it as an account number, splitting a two-page scanned statement
+    // from the source-labeled account number on page two. No private GSTN or
+    // bank account number is stored in this public synthetic fixture.
+    var gstnFolder = Path.Combine(root, "gstn-footer-does-not-split-statement");
+    Directory.CreateDirectory(gstnFolder);
+    var gstnPage1 = Path.Combine(gstnFolder, "first.json");
+    var gstnPage2 = Path.Combine(gstnFolder, "second.json");
+    File.WriteAllText(gstnPage1, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = "HDFC BANK\nPage No. 1 of 2\n" },
+            new { block_label = "vision_footnote", block_content = "Account branch GSTN:29AAAAC123456H1ZW" },
+            new { block_label = "text", block_content = "50200000000000 OTHER" },
+            new { block_label = "table", block_content = P1Table }
+        }
+    }));
+    File.WriteAllText(gstnPage2, JsonSerializer.Serialize(new
+    {
+        parsing_res_list = new[]
+        {
+            new { block_label = "text", block_content = "HDFC BANK\nPage No. 2 of 2\nAccount No : 50200000000000 OTHER\nAccount Branch : TEST CITY" },
+            new { block_label = "table", block_content = P2Table },
+            new { block_label = "table", block_content = P2Summary }
+        }
+    }));
+    var gstnBatch = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[]
+        {
+            new BankOcrRecognitionPage { Id="S001P001", SourcePath=twoPagePdf, SourceIndex=1, SourcePage=1, JsonPath=gstnPage1 },
+            new BankOcrRecognitionPage { Id="S001P002", SourcePath=twoPagePdf, SourceIndex=1, SourcePage=2, JsonPath=gstnPage2 }
+        }
+    };
+    var gstnResult = new BankImageDocumentVerificationService().Verify(gstnBatch, gstnFolder, null, CancellationToken.None);
+    if (!gstnResult.WasSuccessful || gstnResult.Documents.Count != 1 ||
+        gstnResult.Documents[0].Pages.Count != 2 ||
+        gstnResult.Documents[0].Transactions.Count != 4 ||
+        gstnResult.Documents[0].AccountNumber != "50200000000000" ||
+        gstnResult.Documents[0].Transactions[2].InferredPage != 2 ||
+        gstnResult.Documents[0].Issues.Any(issue => issue.Contains("Conflicting account", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("An embedded GSTN substring split source-adjacent PDF pages or lost page-two transaction mapping: " +
+            string.Join("; ", gstnResult.Documents.SelectMany(document => document.Issues)));
+    using (var tabularEvidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(gstnFolder, "AAH_OCR_TABULAR_NORMALIZATION.json"))))
+    {
+        var pages = tabularEvidence.RootElement.GetProperty("pages");
+        if (pages.GetArrayLength() != 2 ||
+            pages[0].GetProperty("AccountNumber").GetString() != "" ||
+            pages[1].GetProperty("AccountNumber").GetString() != "50200000000000" ||
+            pages[1].GetProperty("rows").GetArrayLength() != 2)
+            throw new Exception("Source account evidence or second-page rectangular transactions not preserved.");
+    }
+    Console.WriteLine("PASS: GSTN footer is not a bank account; two-page PDF is grouped with four transaction rows.");
+
 
     // Synthetic 22-row, two-page bank statement with 16 debits and six credits,
     // no second-page header, a wrapped narration, and a printed summary.
