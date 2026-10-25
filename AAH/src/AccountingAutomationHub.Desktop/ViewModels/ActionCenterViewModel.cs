@@ -665,6 +665,43 @@ public sealed class ActionCenterViewModel : PageViewModel
     }
 
 
+    // Action Center's PDF actions must agree with the backend scan/digital gate.
+    // A failed or unknown inspection of an existing OCR review may NEVER fall
+    // back into the interactive normal-PDF Python pipeline.
+    private async Task<(bool WasSuccessful, string Message)> RetryBankPdfByPhysicalKindAsync(
+        long clientId, string financialYear, string sourcePath, string actionType)
+    {
+        var kind = BankPdfDocumentClassifier.Classify(sourcePath);
+        var fileName = Path.GetFileName(sourcePath);
+        var fromOcrReview = actionType.Contains("Bank OCR", StringComparison.OrdinalIgnoreCase);
+        if (kind == BankPdfDocumentKind.Unknown && fromOcrReview)
+        {
+            return (false,
+                $"Bank OCR retry stopped: the physical pages of {fileName} could not be classified. " +
+                "No normal PDF/Python import was started. Check the original PDF and Bank OCR review.");
+        }
+
+        var isScanned = kind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed;
+        StatusText = isScanned
+            ? $"Running existing Advanced Bank OCR for {fileName} ({kind}). " +
+              "AAH will check the scanned pages and printed financial controls before any accounting import."
+            : kind == BankPdfDocumentKind.Digital
+                ? $"Running the normal digital-bank-PDF Python pipeline interactively for {fileName}. " +
+                  "Complete a mapping/password prompt only if one appears."
+                : $"Inspecting {fileName} with the existing bank-PDF handler. " +
+                  "A password-protected document may require the normal PDF unlock process.";
+
+        // The service independently classifies this same source again before
+        // starting the digital Python process. OCR never bypasses verification.
+        var result = await _automationService.ResolvePdfAndImportInteractivelyAsync(
+            clientId, financialYear, sourcePath);
+        var route = isScanned ? "Bank OCR" : "Bank PDF";
+        var message = result.WasSuccessful
+            ? $"{route} retry completed for {fileName}: {result.Message}"
+            : $"{route} retry needs review for {fileName}: {result.Message}";
+        return (result.WasSuccessful, message);
+    }
+
     private async Task RetrySelectedAsync()
     {
         if (SelectedAction is null || !File.Exists(SelectedSourcePath)) return;
@@ -674,13 +711,10 @@ public sealed class ActionCenterViewModel : PageViewModel
         if (Path.GetExtension(sourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase) &&
             selected.Module.Equals("Banking", StringComparison.OrdinalIgnoreCase))
         {
-            StatusText = $"Running the external Python pipeline interactively for {Path.GetFileName(sourcePath)}. Complete any Python mapping/password/line-confirmation window that appears…";
-            var result = await _automationService.ResolvePdfAndImportInteractivelyAsync(
-                selected.ClientId,
-                selected.FinancialYear,
-                sourcePath);
-            StatusText = result.WasSuccessful ? result.Message : $"PDF retry did not complete: {result.Message}";
+            var outcome = await RetryBankPdfByPhysicalKindAsync(
+                selected.ClientId, selected.FinancialYear, sourcePath, selected.ActionType);
             Refresh();
+            StatusText = outcome.Message;
             ActionAvailabilityChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -700,13 +734,10 @@ public sealed class ActionCenterViewModel : PageViewModel
         if (accountingType.Equals("Bank", StringComparison.OrdinalIgnoreCase) &&
             Path.GetExtension(sourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
         {
-            StatusText = $"Running the external Python pipeline interactively for {Path.GetFileName(sourcePath)}. Complete any Python mapping/password/line-confirmation window that appears…";
-            var result = await _automationService.ResolvePdfAndImportInteractivelyAsync(
-                selected.ClientId,
-                selected.FinancialYear,
-                sourcePath);
-            StatusText = result.WasSuccessful ? result.Message : $"PDF retry did not complete: {result.Message}";
+            var outcome = await RetryBankPdfByPhysicalKindAsync(
+                selected.ClientId, selected.FinancialYear, sourcePath, selected.ActionType);
             Refresh();
+            StatusText = outcome.Message;
             ActionAvailabilityChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -743,12 +774,9 @@ public sealed class ActionCenterViewModel : PageViewModel
             if (Path.GetExtension(sourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase) &&
                 entry.Item.Module.Equals("Banking", StringComparison.OrdinalIgnoreCase))
             {
-                StatusText = $"Reimport All: running {Path.GetFileName(sourcePath)} ({completed + failed + 1:N0}/{pending.Count:N0})…";
-                var result = await _automationService.ResolvePdfAndImportInteractivelyAsync(
-                    client.Id,
-                    client.FinancialYear,
-                    sourcePath);
-                if (result.WasSuccessful) completed++; else failed++;
+                var outcome = await RetryBankPdfByPhysicalKindAsync(
+                    client.Id, client.FinancialYear, sourcePath, entry.Item.ActionType);
+                if (outcome.WasSuccessful) completed++; else failed++;
             }
             else
             {
