@@ -19,6 +19,36 @@ Require(GitHubAutoUpdateService.ReleaseApi.StartsWith(
     StringComparison.Ordinal), "release feed not pinned");
 Pass("pinned main AAH GitHub release feed");
 
+// Catch-up is event replay, never an untrusted alternate update feed.
+// Assert that a dead SSE connection cannot block forever, and that replay
+// never accepts arbitrary relay payloads as update authority.
+Require(GitHubAutoUpdateService.ReleaseSignalReplayUrl.StartsWith(
+    GitHubAutoUpdateService.ReleaseSignalUrl + "?since=latest",
+    StringComparison.Ordinal), "missed release-event replay not configured");
+Require(GitHubAutoUpdateService.ReleaseStreamIdleTimeout > TimeSpan.FromMinutes(1) &&
+        GitHubAutoUpdateService.ReleaseStreamIdleTimeout <= TimeSpan.FromMinutes(5),
+    "stale SSE stream must be reconnectable without hourly polling");
+Require(GitHubAutoUpdateService.TryGetReleaseSignalVersion(
+        "data: {\"event\":\"message\",\"message\":\"v4.0.0.516\"}", out var accepted) &&
+        accepted == "v4.0.0.516",
+    "valid cached stable release event was discarded");
+Require(GitHubAutoUpdateService.TryGetReleaseSignalVersion(
+        "data:{\"event\":\"message\",\"message\":\"v4.0.0.517\"}", out accepted) &&
+        accepted == "v4.0.0.517",
+    "unspaced valid SSE data prefix was discarded");
+Require(!GitHubAutoUpdateService.TryGetReleaseSignalVersion(
+        "data: {\"event\":\"keepalive\",\"message\":\"v4.0.0.999\"}", out _),
+    "keepalive accepted as update event");
+Require(!GitHubAutoUpdateService.TryGetReleaseSignalVersion(
+        "data: {\"event\":\"message\",\"message\":\"v4.0.0.517-rc1\"}", out _),
+    "prerelease accepted from relay");
+Require(!GitHubAutoUpdateService.TryGetReleaseSignalVersion(
+        "data: {\"event\":\"message\",\"message\":\"https://untrusted.invalid/update\"}", out _),
+    "arbitrary relay URL accepted");
+Require(!GitHubAutoUpdateService.TryGetReleaseSignalVersion("data: invalid-json", out _),
+    "broken event JSON accepted");
+Pass("missed SSE release replay, idle watchdog and strict untrusted-event filtering");
+
 var baseVersion = new Version(4,0,0,502);
 Require(GitHubAutoUpdateService.IsNewer("v4.0.0.503", baseVersion), "stable revision not accepted");
 Require(!GitHubAutoUpdateService.IsNewer("v4.0.0.502", baseVersion), "same release accepted");
