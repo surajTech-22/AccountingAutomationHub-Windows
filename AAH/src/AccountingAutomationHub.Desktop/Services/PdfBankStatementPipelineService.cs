@@ -31,6 +31,16 @@ public sealed class PdfBankStatementPipelineService
         bool automationMode = false,
         IReadOnlyList<string>? passwordCandidates = null)
     {
+        // Final fail-closed boundary: even if a caller bypasses the Banking UI
+        // and Auto Import router, image-only or mixed PDFs MUST NOT launch the
+        // normal external digital-PDF Python pipeline or alter source-side XLSX.
+        // The caller must use the existing BankOcrExcelConversionService instead.
+        var sourceKind = BankPdfDocumentClassifier.Classify(pdfPath);
+        if (sourceKind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed)
+            return PdfPipelineFileResult.Failed(
+                pdfPath, BankImportErrorCode.O002_OcrSourceUnreadable,
+                $"This {sourceKind} PDF requires the existing Advanced Bank OCR pathway. Digital PDF extraction was not started. No workbook or source file was changed.");
+
         var sourceFile = Path.GetFileName(pdfPath);
         var script = ResolvePipelineScript();
         if (script is null)
