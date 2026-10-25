@@ -1,0 +1,42 @@
+name: AAH Private HDFC Bank OCR Probe (Windows binary only)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'AAH/Tools/AAH.BankOcrProbe/**'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/BankOcrProbeFriend.cs'
+      - '.github/workflows/aah-bank-ocr-live-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish-private-source-free-probe:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build self-contained Windows read-only OCR probe
+        shell: pwsh
+        run: |
+          dotnet publish AAH/Tools/AAH.BankOcrProbe/AAH.BankOcrProbe.csproj --configuration Release --runtime win-x64 --self-contained true --output "$env:RUNNER_TEMP/AAH-BankOCR-Probe" -p:PublishSingleFile=false
+          if ($LASTEXITCODE -ne 0) { throw 'AAH Bank OCR probe compile failed.' }
+          if (-not (Test-Path "$env:RUNNER_TEMP/AAH-BankOCR-Probe/AAH.BankOcrProbe.exe")) {
+            throw 'Read-only Bank OCR executable missing.'
+          }
+      - name: Verify executable help without customer data or OCR runtime
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/AAH-BankOCR-Probe/AAH.BankOcrProbe.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw 'Bank OCR probe smoke test failed.' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AAH-BankOCR-Probe-win-x64
+          path: ${{ runner.temp }}/AAH-BankOCR-Probe/
+          retention-days: 7
+          if-no-files-found: error
