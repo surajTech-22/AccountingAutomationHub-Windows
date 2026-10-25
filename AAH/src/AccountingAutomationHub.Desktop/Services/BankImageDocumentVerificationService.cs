@@ -135,7 +135,47 @@ internal sealed class BankImageDocumentVerificationService
         if (profiles.Count == 0)
             return BankVerifiedDocumentBatch.Failed("Raw OCR was produced, but AAH could not parse a Bank Statement page.", parseIssues);
 
-        progress?.Invoke($"Bank OCR • AAH parsed {profiles.Count:N0} OCR page(s); grouping statement documents");
+        // Keep the exact source-backed rectangular transaction candidates on
+        // disk before document-level balance/summary verification. An OCR page
+        // containing only free-form text still reports zero tabular candidates.
+        // This is a diagnostic artifact, NOT a verified accounting workbook.
+        var tabularPath = Path.Combine(runRoot, "AAH_OCR_TABULAR_NORMALIZATION.json");
+        try
+        {
+            var snapshot = new
+            {
+                stage = "POST_OCR_PRE_FINANCIAL_VERIFICATION",
+                created_utc = DateTime.UtcNow,
+                physical_pages = profiles.Count,
+                candidate_rows = profiles.Sum(page => page.Transactions.Count),
+                pages = profiles.OrderBy(page => page.SourcePage).Select(page => new
+                {
+                    page.SourcePage,
+                    page.SourcePath,
+                    page.Bank,
+                    page.AccountNumber,
+                    page.BranchName,
+                    source_columns = page.TransactionMapping,
+                    unresolved_narration = page.NarrationIssues,
+                    rows = page.Transactions.Select(row => new
+                    {
+                        row.SourceRow, row.DateRaw, row.ValueDateRaw,
+                        row.Description, row.Reference,
+                        row.DebitRaw, row.CreditRaw, row.BalanceRaw,
+                        has_posting_date = row.Date is not null,
+                        has_running_balance = row.Balance is not null
+                    }).ToArray()
+                }).ToArray()
+            };
+            File.WriteAllText(tabularPath,
+                JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+        }
+        catch (Exception exception)
+        {
+            parseIssues.Add("Could not preserve local pre-verification OCR table evidence: " + exception.Message);
+        }
+        progress?.Invoke($"Bank OCR • structured OCR into {profiles.Sum(page => page.Transactions.Count):N0} tabular candidate row(s) across {profiles.Count:N0} page(s); verifying documents");
         var groups = GroupPages(profiles);
         var documents = new List<BankVerifiedDocument>();
 
