@@ -460,7 +460,11 @@ internal sealed class BankImageDocumentVerificationService
             var balanceRaw = Get(row, "balance");
             var descriptionUpper = NormalizeUpper(description);
 
-            if (dateRaw.Length == 0 && descriptionUpper.Contains("BROUGHT FORWARD", StringComparison.Ordinal))
+            // Printed opening balance is not a posted transaction even when OCR
+            // includes its printed date. Never turn its misaligned deposit or
+            // missing balance cell into an accounting voucher.
+            if (descriptionUpper.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
+                descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal))
             {
                 broughtForward = new BalanceEvidence(balanceRaw, ParseSignedMoney(balanceRaw));
                 continue;
@@ -872,6 +876,8 @@ internal sealed class BankImageDocumentVerificationService
             openingSource = "DERIVED_FROM_FIRST_TRANSACTION";
         }
 
+        if (firstBroughtForward is not null && firstBroughtForward.Value is null)
+            issues.Add("Printed brought-forward running balance was not recognized. Its debit/credit cells cannot substitute for a source-visible opening balance.");
         if (summary?.Opening is not null && firstBroughtForward?.Value is not null && !MoneyEqual(summary.Opening, firstBroughtForward.Value))
             issues.Add("Statement summary opening does not match first-page BROUGHT FORWARD.");
 
@@ -1110,7 +1116,12 @@ internal sealed class BankImageDocumentVerificationService
         // Without a statement summary, the first transaction's inferred
         // opening balance is circular evidence. Require an independently printed
         // BROUGHT FORWARD amount before accepting a genuinely summary-free document.
+        var multiPageScannedPdfWithoutSummary = summary is null && ordered.Count > 1 &&
+            ordered.Any(page => Path.GetExtension(page.SourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
+        if (multiPageScannedPdfWithoutSummary)
+            issues.Add("Multi-page scanned PDF has no readable statement summary: cannot establish whether printed financial controls were omitted by OCR. Review source pages.");
         var pageVerifiedWithoutSummary = summary is null &&
+            !multiPageScannedPdfWithoutSummary &&
             !unparsedPrintedSummary &&
             firstBroughtForward?.Value is not null &&
             openingSource == "FIRST_PAGE_BROUGHT_FORWARD" &&
