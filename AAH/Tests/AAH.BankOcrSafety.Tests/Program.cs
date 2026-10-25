@@ -326,7 +326,10 @@ try
     {
         parsing_res_list = new[]
         {
-            new { block_label = "text", block_content = longIdentity + "Page No. 2 of 2" },
+            // A headerless OCR continuation can also lose the account number,
+            // bank name and statement period. Same physical PDF pages must
+            // still be grouped unless identity actually conflicts.
+            new { block_label = "text", block_content = "Page No. 2 of 2" },
             new { block_label = "table", block_content = HtmlTableWithStatementMetadata(p2Rows, "Generated On: 30/09/2026 Statement of account") },
             new { block_label = "table", block_content = string.Join(Environment.NewLine,
                 "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |",
