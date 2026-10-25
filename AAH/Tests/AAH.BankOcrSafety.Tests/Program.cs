@@ -145,7 +145,12 @@ try
             doc.OpeningBalance != 0.01m || doc.BroughtForwardCredit != 0.01m ||
             doc.TotalCredits != 100.00m || doc.CreditCount != 1 ||
             doc.PrintedSummaryOpeningBalance != (test.IncludeSummary ? 0.00m : null))
-            throw new Exception(test.Name + ": opening was lost, duplicated, or counted as voucher.");
+            throw new Exception(test.Name + ": opening was lost, duplicated, or counted as voucher. " +
+                "tx=" + doc.Transactions.Count + ", opening=" + doc.OpeningBalance +
+                ", bfCr=" + doc.BroughtForwardCredit + ", totalCr=" + doc.TotalCredits +
+                ", crCount=" + doc.CreditCount + ", summaryOpening=" + doc.PrintedSummaryOpeningBalance +
+                ", first=" + doc.Transactions.FirstOrDefault()?.Description +
+                ", issues=" + string.Join("; ", doc.Issues));
         var verified = doc.Status is "VERIFIED" or "VERIFIED_WITH_CORRECTIONS";
         if (verified != test.ExpectVerified)
             throw new Exception(test.Name + ": unexpected status " + doc.Status +
