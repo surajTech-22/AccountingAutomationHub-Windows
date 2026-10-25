@@ -460,11 +460,19 @@ internal sealed class BankImageDocumentVerificationService
             var balanceRaw = Get(row, "balance");
             var descriptionUpper = NormalizeUpper(description);
 
-            // Printed opening balance is not a posted transaction even when OCR
-            // includes its printed date. Never turn its misaligned deposit or
-            // missing balance cell into an accounting voucher.
-            if (descriptionUpper.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
-                descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal))
+            // Many statements use BROUGHT FORWARD only as opening-balance
+            // metadata, but others print an actual dated credit on this row.
+            // The source-backed Debit/Credit cells decide whether it is a
+            // financial transaction candidate, never the narration alone.
+            // An ambiguous dated movement stays REVIEW_REQUIRED downstream.
+            var isBroughtForward = descriptionUpper.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
+                descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal);
+            var broughtForwardDebit = ParseMoney(Get(row, "debit"));
+            var broughtForwardCredit = ParseMoney(Get(row, "credit"));
+            var hasDatedBroughtForwardMovement = ParseDate(dateRaw) is not null &&
+                ((broughtForwardDebit is not null && Math.Abs(broughtForwardDebit.Value) > 0.009m) ||
+                 (broughtForwardCredit is not null && Math.Abs(broughtForwardCredit.Value) > 0.009m));
+            if (isBroughtForward && !hasDatedBroughtForwardMovement)
             {
                 broughtForward = new BalanceEvidence(balanceRaw, ParseSignedMoney(balanceRaw));
                 continue;
@@ -1017,6 +1025,10 @@ internal sealed class BankImageDocumentVerificationService
         // a transaction date, narration, or supplied value-date is unreadable.
         if (transactions.Count == 0)
             issues.Add("No transaction rows were recognized; automatic import is blocked.");
+        if (transactions.Any(row =>
+                NormalizeUpper(row.Description).Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
+                NormalizeUpper(row.Description).StartsWith("BROUGHT FORWARD", StringComparison.Ordinal)))
+            issues.Add("Dated BROUGHT FORWARD row contains a debit/credit movement: preserve its amount but verify source and printed summary before accounting import.");
 
         var statementStart = ParseDate(metadata.PeriodStart);
         var statementEnd = ParseDate(metadata.PeriodEnd);
