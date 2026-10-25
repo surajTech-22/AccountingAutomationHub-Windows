@@ -37,6 +37,11 @@ internal static class GitHubAutoUpdateService
     // GitHub release, protocol, publisher and SHA256 checks below.
     internal const string ReleaseSignalUrl =
         "https://ntfy.sh/aah-surajtech22-windows-release-signal-v1/sse";
+    // Replay the latest cached release hint when reconnecting. A release hint
+    // is untrusted; GitHub's latest stable manifest and SHA256 remain authority.
+    // This is one persistent event subscription, NOT periodic GitHub polling.
+    internal const string ReleaseSignalReplayUrl = ReleaseSignalUrl + "?since=latest";
+    internal static readonly TimeSpan ReleaseStreamIdleTimeout = TimeSpan.FromMinutes(3);
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
@@ -59,31 +64,38 @@ internal static class GitHubAutoUpdateService
             bool connected = false;
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseSignalUrl);
+                using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseSignalReplayUrl);
                 using var response = await Client.SendAsync(
                     request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
                 connected = true;
-                // Recover any release missed while the event connection was offline.
+                Log("release event stream connected (cached latest event replay enabled)");
+                // A reconnect can be the first indication of an update missed
+                // during a DNS failure, router stall, sleep or stale SSE stream.
                 try { await CheckOnceAsync().ConfigureAwait(false); }
                 catch (Exception ex) { Log("event reconnect catch-up failed: " + ex.Message); }
                 await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                 using var reader = new StreamReader(stream, Encoding.UTF8);
-                while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+                while (true)
                 {
-                    if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
-                    try
+                    // ntfy sends keepalives. A connection which silently stops
+                    // delivering even those must not remain blocked forever.
+                    using var idle = new CancellationTokenSource(ReleaseStreamIdleTimeout);
+                    string? line;
+                    try { line = await reader.ReadLineAsync(idle.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (idle.IsCancellationRequested)
                     {
-                        using var notice = JsonDocument.Parse(line.Substring(6));
-                        var payload = notice.RootElement;
-                        if (!payload.TryGetProperty("event", out var kind) ||
-                            kind.GetString() != "message" ||
-                            !payload.TryGetProperty("message", out var message) ||
-                            ParseStableVersion(message.GetString()) is null)
-                            continue;
-                        await CheckOnceAsync().ConfigureAwait(false);
+                        Log("release SSE stream idle beyond 3 minutes; reconnecting and checking the latest verified GitHub release");
+                        break;
                     }
-                    catch (JsonException) { /* ignore malformed relay notifications */ }
+                    if (line is null)
+                    {
+                        Log("release SSE stream ended; reconnecting");
+                        break;
+                    }
+                    if (!TryGetReleaseSignalVersion(line, out var releaseTag)) continue;
+                    Log("release event received: " + releaseTag);
+                    await CheckOnceAsync().ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -95,6 +107,30 @@ internal static class GitHubAutoUpdateService
             await Task.Delay(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
             if (!connected) Log("release stream unavailable; no GitHub update check was attempted");
         }
+    }
+
+    // The relay cannot authorize installations. Accept only a single
+    // ntfy message event containing a four-component stable-version hint.
+    internal static bool TryGetReleaseSignalVersion(string line, out string releaseTag)
+    {
+        releaseTag = string.Empty;
+        if (!line.StartsWith("data:", StringComparison.Ordinal)) return false;
+        try
+        {
+            using var notice = JsonDocument.Parse(line.Substring(5).TrimStart());
+            var payload = notice.RootElement;
+            if (!payload.TryGetProperty("event", out var kind) ||
+                kind.GetString() != "message" ||
+                !payload.TryGetProperty("message", out var message))
+                return false;
+            var tag = message.GetString();
+            if (tag is null || !tag.StartsWith("v", StringComparison.Ordinal) ||
+                ParseStableVersion(tag) is null) return false;
+            releaseTag = tag;
+            return true;
+        }
+        catch (JsonException) { return false; }
+        catch (InvalidOperationException) { return false; }
     }
 
     internal static Version? ParseStableVersion(string? tag)
