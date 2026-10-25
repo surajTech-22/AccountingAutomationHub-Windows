@@ -181,7 +181,7 @@ public sealed class ActionCenterViewModel : PageViewModel
         private set => SetProperty(ref _statusText, value);
     }
 
-    public string SelectedDetail => SelectedAction?.Detail ?? "Select a failed/blocked import to see why the file was not imported.";
+    public string SelectedDetail => FormatLegacyBankOcrDetail(SelectedAction?.Detail ?? "Select a failed/blocked import to see why the file was not imported.");
     public string SelectedSourcePath => ExtractSourcePath(SelectedAction?.Detail);
     public string SelectedClientText => SelectedAction is null
         ? string.Empty
@@ -780,9 +780,19 @@ public sealed class ActionCenterViewModel : PageViewModel
                stem.EndsWith("_CONFIRMED", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Existing OCR review actions were persisted with literal "\\n" separators.
+    // Repair only recognized metadata delimiters, NOT every "\n": doing that
+    // would corrupt legitimate Windows source paths such as C:\new\bank.pdf.
+    private static string FormatLegacyBankOcrDetail(string detail) =>
+        detail.Replace("\\nGrouped pages:", "\nGrouped source files:", StringComparison.Ordinal)
+              .Replace("\\nSource:", "\nSource:", StringComparison.Ordinal)
+              .Replace("\\nVerification audit:", "\nVerification audit:", StringComparison.Ordinal)
+              .Replace("\\nOCR Log:", "\nOCR Log:", StringComparison.Ordinal);
+
     private static string ExtractSourcePath(string? detail)
     {
         if (string.IsNullOrWhiteSpace(detail)) return string.Empty;
+        detail = FormatLegacyBankOcrDetail(detail);
         foreach (var rawLine in detail.Replace("\r", string.Empty).Split('\n'))
         {
             var line = rawLine.Trim();
