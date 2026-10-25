@@ -96,6 +96,63 @@ try
         Console.WriteLine("PASS: " + scene.Name + " (" + doc.Status + ")");
         passed++;
     }
+    // The real scanned HDFC summary is printed at the bottom of the last page.
+    // PaddleOCR may emit the same printed six financial controls as a text block
+    // or as prose, not a TABLE block. Parsing must preserve their source values,
+    // and a single bad digit must still block accounting.
+    var textSummaryCases = new (string Name, string SummaryText, bool ExpectedVerified, string ExpectedSummaryStatus)[]
+    {
+        ("Markdown summary mislabeled text",
+            "STATEMENT SUMMARY\n| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n| 0.00 | 1 | 1 | 25.00 | 100.00 | 75.00 |",
+            true, "VERIFIED"),
+        ("Plain printed summary six aligned values",
+            "STATEMENT SUMMARY\nOpening Balance Dr Count Cr Count Debits Credits Closing Bal\n0.00 1 1 25.00 100.00 75.00",
+            true, "VERIFIED"),
+        ("Plain summary one paisa mismatch rejected",
+            "STATEMENT SUMMARY\nOpening Balance Dr Count Cr Count Debits Credits Closing Bal\n0.00 1 1 25.00 100.01 75.00",
+            false, "REVIEW_REQUIRED"),
+        ("Damaged printed amount cannot be inferred",
+            "STATEMENT SUMMARY\nOpening Balance Dr Count Cr Count Debits Credits Closing Bal\n0.00 1 1 25.O0 100.00 75.00",
+            false, "NOT_AVAILABLE"),
+    };
+    foreach (var scene in textSummaryCases)
+    {
+        var directory = Path.Combine(root, "summary-text-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var jsonPath = Path.Combine(directory, "page.json");
+        File.WriteAllText(jsonPath, JsonSerializer.Serialize(new
+        {
+            parsing_res_list = new[]
+            {
+                new { block_label = "text", block_content = "HDFC BANK\nStatement of Account\nAccount No: 9999999999" },
+                new { block_label = "table", block_content =
+                    "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
+                    "| 29/08/25 | CREDIT TEST | S123 | 29/08/25 | 0.00 | 100.00 | 100.00 |\n" +
+                    "| 01/09/25 | DEBIT TEST | S124 | 01/09/25 | 25.00 | 0.00 | 75.00 |" },
+                new { block_label = "text", block_content = scene.SummaryText }
+            }
+        }));
+        var recognition = new BankOcrRecognitionBatch
+        {
+            WasSuccessful = true,
+            Pages = new[] { new BankOcrRecognitionPage
+            {
+                Id = "S001P001", SourcePath = "synthetic-scan.pdf",
+                SourceIndex = 1, SourcePage = 1, JsonPath = jsonPath
+            } }
+        };
+        var verifiedSummary = new BankImageDocumentVerificationService()
+            .Verify(recognition, directory, null, CancellationToken.None);
+        if (verifiedSummary.Documents.Count != 1)
+            throw new Exception(scene.Name + ": statement grouping changed.");
+        var doc = verifiedSummary.Documents[0];
+        var isVerified = doc.Status is "VERIFIED" or "VERIFIED_WITH_CORRECTIONS";
+        if (isVerified != scene.ExpectedVerified || doc.SummaryStatus != scene.ExpectedSummaryStatus)
+            throw new Exception(scene.Name + ": actual doc=" + doc.Status +
+                                " summary=" + doc.SummaryStatus +
+                                " issues=" + string.Join("; ", doc.Issues));
+        Console.WriteLine("PASS: " + scene.Name + " (" + doc.SummaryStatus + ")");
+    }
     // Regression for the original failure mode: one page recognized from a
     // two-page bank statement must never be treated as a complete import.
     var incompleteDir = Path.Combine(root, "missing-page");
@@ -278,7 +335,7 @@ try
         !longDoc.Transactions[5].Description.Contains("SUPPLEMENTAL UPI REFERENCE TEXT", StringComparison.Ordinal))
         throw new Exception("22-row page boundary or wrapped narration handling failed.");
     Console.WriteLine("PASS: 22-row, 16-debit, six-credit, two-page bank statement reconciled.");
-    Console.WriteLine($"PASS: {passed + 3}/{scenarios.Length + 3} Bank OCR verifier safety scenarios.");
+    Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
 }
 finally
 {
