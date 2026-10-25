@@ -59,6 +59,14 @@ internal sealed class AutomationFileClassifier
             // catches image-only HDFC statements and mixed scanned/digital documents,
             // including scanners that add a misleading searchable text overlay.
             var pageKind = BankPdfDocumentClassifier.Classify(path);
+            // Specialized tax-return formats retain their own import authority
+            // if native content unambiguously identifies them. Generic Bank PDF
+            // parsing MUST remain downstream of the physical scan detector.
+            var pdf = UniversalPdfContentInspector.Inspect(path);
+            if (pdf.Kind.Equals(UniversalPdfContentInspector.Gstr3b, StringComparison.OrdinalIgnoreCase))
+                return new(AutomationFileKind.Gstr3bPdf, pdf.Confidence, pdf.Reason);
+            if (pdf.Kind.Equals(UniversalPdfContentInspector.Form26As, StringComparison.OrdinalIgnoreCase))
+                return new(AutomationFileKind.Form26AsPdf, pdf.Confidence, pdf.Reason);
             if (pageKind is BankPdfDocumentKind.Scanned or BankPdfDocumentKind.Mixed)
                 return new(
                     AutomationFileKind.BankOcrSource,
@@ -66,11 +74,6 @@ internal sealed class AutomationFileClassifier
                     $"Physical PDF classification: {pageKind}. Route directly to the existing Bank PaddleOCR-VL and AAH verified OCR workbook flow; never run digital PDF extraction.",
                     BankScore: 8);
 
-            var pdf = UniversalPdfContentInspector.Inspect(path);
-            if (pdf.Kind.Equals(UniversalPdfContentInspector.Gstr3b, StringComparison.OrdinalIgnoreCase))
-                return new(AutomationFileKind.Gstr3bPdf, pdf.Confidence, pdf.Reason);
-            if (pdf.Kind.Equals(UniversalPdfContentInspector.Form26As, StringComparison.OrdinalIgnoreCase))
-                return new(AutomationFileKind.Form26AsPdf, pdf.Confidence, pdf.Reason);
             if (pdf.Kind.Equals(UniversalPdfContentInspector.BankStatement, StringComparison.OrdinalIgnoreCase))
                 return new(AutomationFileKind.BankPdf, pdf.Confidence, pdf.Reason, BankScore: Math.Max(6, pdf.Confidence / 10));
 
