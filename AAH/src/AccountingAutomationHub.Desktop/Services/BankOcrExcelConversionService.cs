@@ -317,6 +317,15 @@ public sealed class BankOcrExcelConversionService
             try
             {
                 WritePipelineWorkbook(outputPath, document, verified.AuditPath);
+                // Keep the normalized workbook from a blocked document available
+                // for source-backed review, even if normal transient workbooks are
+                // deleted after the import attempt. This is not an import request.
+                if (!IsVerified(document.Status))
+                {
+                    var reviewCopy = Path.Combine(runRoot,
+                        $"AAH_OCR_REVIEW_ONLY_DOCUMENT_{document.DocumentNumber:000}.xlsx");
+                    File.Copy(outputPath, reviewCopy, overwrite: true);
+                }
                 documents.Add(new BankOcrDocumentConversionResult
                 {
                     DocumentNumber = document.DocumentNumber,
@@ -470,6 +479,7 @@ public sealed class BankOcrExcelConversionService
             new[] { "Account Name", document.AccountName },
             new[] { "Account Number", document.AccountNumber.Length > 0 ? document.AccountNumber : "Unknown" },
             new[] { "Account Type", document.AccountType },
+            new[] { "Branch", document.BranchName },
             new[] { "IFSC", document.Ifsc },
             new[] { "Statement Start Date", document.StatementFrom },
             new[] { "Statement End Date", document.StatementTo },
@@ -480,6 +490,7 @@ public sealed class BankOcrExcelConversionService
             new[] { "OCR Engine", "PaddleOCR-VL 1.6 local GGUF + llama.cpp (raw recognition only)" },
             new[] { "OCR Verification", "Accounting Automation Hub production document verifier" },
             new[] { "OCR Overall Status", document.Status },
+            new[] { "OCR Import Authorization", IsVerified(document.Status) ? "ELIGIBLE_FOR_NORMAL_BANK_IMPORT" : "REVIEW_ONLY_NO_IMPORT" },
             new[] { "OCR Page Status", document.PageStatus },
             new[] { "OCR Summary Status", document.SummaryStatus },
             new[] { "OCR Corrections Applied", document.Corrections.Count.ToString(CultureInfo.InvariantCulture) },
