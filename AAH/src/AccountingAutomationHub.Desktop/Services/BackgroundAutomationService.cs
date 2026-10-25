@@ -6293,7 +6293,7 @@ public sealed class BackgroundAutomationService : IDisposable
                         "Banking",
                         "Bank OCR Document Review",
                         Path.GetFileName(primary),
-                        $"{reviewMessage}\\nGrouped pages: {documentSources.Length:N0}\\nSource: {primary}\\nVerification audit: {document.VerificationAuditPath}\\nOCR Log: {batch.LogPath}",
+                        $"{reviewMessage}\nOCR pages in this document: {document.PageCount:N0}\nSource files: {documentSources.Length:N0}\nTransaction rows detected: {document.TransactionRowsPrepared:N0}\nVerification issues: {document.VerificationIssueCount:N0}\nSource: {primary}\nVerification audit: {document.VerificationAuditPath}\nOCR Log: {batch.LogPath}",
                         primaryHash);
 
                     continue;
