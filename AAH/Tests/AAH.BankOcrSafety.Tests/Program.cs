@@ -287,7 +287,10 @@ try
         string row = $"| {date} | TEST TRANSACTION {i + 1:D2} | REF{i + 1:D5} | {date} | {debit:0.00} | {credit:0.00} | {running:0.00} |";
         (i < 16 ? p1Rows : p2Rows).Add(row);
         if (i == 5)
+        {
             p1Rows.Add("| | SUPPLEMENTAL UPI REFERENCE TEXT | | | | | |");
+            p1Rows.Add($"| {date} | SAME DATE CONTINUATION TEXT | | | | | |");
+        }
     }
     if (creditIndex != 6 || debitIndex != 16 || running != 0m)
         throw new Exception("Synthetic control construction failed.");
@@ -351,7 +354,8 @@ try
             longDoc.Status + " (summary=" + longDoc.SummaryStatus + ", page=" + longDoc.PageStatus + ", corrections=" + longDoc.Corrections.Count + ", " + string.Join("; ", longDoc.Issues) + ").");
     if (longDoc.Transactions.Count(row => row.InferredPage == 1) != 16 ||
         longDoc.Transactions.Count(row => row.InferredPage == 2) != 6 ||
-        !longDoc.Transactions[5].Description.Contains("SUPPLEMENTAL UPI REFERENCE TEXT", StringComparison.Ordinal))
+        !longDoc.Transactions[5].Description.Contains("SUPPLEMENTAL UPI REFERENCE TEXT", StringComparison.Ordinal) ||
+        !longDoc.Transactions[5].Description.Contains("SAME DATE CONTINUATION TEXT", StringComparison.Ordinal))
         throw new Exception("22-row page boundary or wrapped narration handling failed.");
     Console.WriteLine("PASS: synthetic 22-row HTML/colspan two-page Bank OCR statement reconciled.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
