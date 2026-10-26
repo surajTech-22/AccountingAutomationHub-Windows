@@ -2900,18 +2900,8 @@ public sealed partial class BankStatementImportService(
         return parsed;
     }
 
-    private static bool TryParseDate(string text,bool uses1904,out DateTime date)
-    {
-        date=default;
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        if (double.TryParse(text,NumberStyles.Any,CultureInfo.InvariantCulture,out var serial) && serial is > 0 and < 100000)
-        {
-            date=(uses1904?new DateTime(1904,1,1).AddDays(serial):DateTime.FromOADate(serial)).Date;
-            return true;
-        }
-        var formats=new[]{"dd/MM/yyyy","d/M/yyyy","dd-MM-yyyy","d-M-yyyy","dd.MM.yyyy","d.M.yyyy","yyyy-MM-dd","dd-MMM-yyyy","d-MMM-yyyy","MM/dd/yyyy"};
-        return DateTime.TryParseExact(text.Trim(),formats,CultureInfo.InvariantCulture,DateTimeStyles.AllowWhiteSpaces,out date) || DateTime.TryParse(text,CultureInfo.GetCultureInfo("en-IN"),DateTimeStyles.AllowWhiteSpaces,out date);
-    }
+    private static bool TryParseDate(string text, bool uses1904, out DateTime date) =>
+        BankStatementDateClassification.TryParseImportedDate(text, uses1904, out date);
 
     private readonly record struct DetectedCoverage(DateTime From, DateTime To, bool MetadataBalancesTrusted);
 
@@ -2952,18 +2942,11 @@ public sealed partial class BankStatementImportService(
         return new DetectedCoverage(ClipFrom(parsedFrom), ClipTo(parsedTo), metadataBalancesTrusted);
     }
 
-    private static bool IsInsideFinancialYear(DateTime date, string financialYear)
-    {
-        var (start, end) = GetFinancialYearBounds(financialYear);
-        return !start.HasValue || !end.HasValue || date.Date >= start.Value && date.Date <= end.Value;
-    }
+    private static bool IsInsideFinancialYear(DateTime date, string financialYear) =>
+        BankStatementDateClassification.IsInsideFinancialYear(date, financialYear);
 
-    private static (DateTime? Start, DateTime? End) GetFinancialYearBounds(string financialYear)
-    {
-        var first = financialYear.Split('-', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        if (!int.TryParse(first, out var startYear)) return (null, null);
-        return (new DateTime(startYear, 4, 1), new DateTime(startYear + 1, 3, 31));
-    }
+    private static (DateTime? Start, DateTime? End) GetFinancialYearBounds(string financialYear) =>
+        BankStatementDateClassification.FinancialYearBounds(financialYear);
 
     private static bool SameSourcePath(string? first, string? second)
     {
