@@ -868,7 +868,12 @@ internal sealed class BankImageDocumentVerificationService
                 !block.Content.Contains("<table", StringComparison.OrdinalIgnoreCase)) continue;
             var rows = TableRows(block.Content);
             if (rows.Count < 2) continue;
-            var header = rows[0].Select(NormalizeUpper).ToList();
+            // A cropped OCR response may retain STATEMENT SUMMARY as the
+            // first HTML/Markdown table row. Find the actual column header
+            // anywhere in the same source table, not only at index zero.
+            for (var headerRow = 0; headerRow + 1 < rows.Count; headerRow++)
+            {
+            var header = rows[headerRow].Select(NormalizeUpper).ToList();
 
             int? Find(params string[] words)
             {
@@ -885,7 +890,7 @@ internal sealed class BankImageDocumentVerificationService
             var closing = Find("CLOSING BALANCE", "CLOSING BAL");
             if (new[] { opening, drCount, crCount, totalDebits, totalCredits, closing }.Count(value => value is not null) < 4) continue;
 
-            var row = rows[1];
+            var row = rows[headerRow + 1];
             string Cell(int? index) => index is not null && index.Value < row.Count ? Clean(row[index.Value]) : string.Empty;
             return new StatementSummary
             {
@@ -896,7 +901,14 @@ internal sealed class BankImageDocumentVerificationService
                 TotalCredits = AbsNullable(ParseMoney(Cell(totalCredits))),
                 Closing = ParseSignedMoney(Cell(closing))
             };
+            } // Candidate source-table header row
         }
+        // Recovered source crops can put printed controls in a two-column
+        // label/value table or six separate labeled text rows. Parse only
+        // explicitly labeled money/count cells adjacent to STATEMENT SUMMARY.
+        // Never infer any financial amount from computed transaction totals.
+        var verticalSummary = ExtractLabeledSummaryControls(blocks);
+        if (verticalSummary is not null) return verticalSummary;
         // Text-only fallback requires the explicit printed summary title, all
         // six labeled controls in source order, and an adjacent line with
         // exactly six numeric cells. It must NEVER fill missing OCR values
@@ -959,6 +971,99 @@ internal sealed class BankImageDocumentVerificationService
             }
         }
         return null;
+    }
+
+    private static StatementSummary? ExtractLabeledSummaryControls(IReadOnlyList<OcrBlock> blocks)
+    {
+        // Keep the region bounded: old OCR blocks may contain account numbers,
+        // transaction dates, unrelated bank fees and other numeric text.
+        var start = -1;
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (!NormalizeUpper(blocks[i].Content).Contains("STATEMENT SUMMARY", StringComparison.Ordinal))
+                continue;
+            start = i;
+            break;
+        }
+        if (start < 0) return null;
+
+        var labelPatterns = new[]
+        {
+            @"^OPENING\s+BAL(?:ANCE)?$",
+            @"^(?:DR|DEBIT)\s+COUNT$",
+            @"^(?:CR|CREDIT)\s+COUNT$",
+            @"^(?:TOTAL\s+)?DEBITS?$",
+            @"^(?:TOTAL\s+)?CREDITS?$",
+            @"^CLOSING\s+BAL(?:ANCE)?$"
+        };
+        int Field(string label)
+        {
+            var normalized = NormalizeUpper(label).Trim().Trim(':', '-', ' ');
+            for (var index = 0; index < labelPatterns.Length; index++)
+                if (Regex.IsMatch(normalized, labelPatterns[index], RegexOptions.CultureInvariant))
+                    return index;
+            return -1;
+        }
+        // Require precise printed numeric shapes; do not repair O/0, guess
+        // separators, or use arithmetic to invent OCR values.
+        const string moneyPattern = @"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?";
+        var entries = new Dictionary<int, string>();
+        var conflict = false;
+        void Add(string label, string value)
+        {
+            var id = Field(label);
+            if (id < 0) return;
+            value = Normalize(value);
+            if (!Regex.IsMatch(value, "^" + moneyPattern + "$", RegexOptions.CultureInvariant))
+                return;
+            if (id is 1 or 2 && !Regex.IsMatch(value, @"^\d+$")) return;
+            if (entries.TryGetValue(id, out var previous) &&
+                !previous.Equals(value, StringComparison.Ordinal))
+                conflict = true;
+            else
+                entries[id] = value;
+        }
+
+        // The visual summary may be emitted as a single OCR TABLE, a set of
+        // separately labeled text blocks, or pipe rows. Only exact label/value
+        // associations are accepted, not two unrelated lists of numbers.
+        foreach (var block in blocks.Skip(start).Take(12))
+        {
+            var tableRows = TableRows(block.Content);
+            foreach (var row in tableRows)
+            {
+                var cells = row.Where(cell => Normalize(cell).Length > 0).ToArray();
+                if (cells.Length != 2) continue;
+                Add(cells[0], cells[1]);
+            }
+            foreach (var rawLine in block.Content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = Normalize(WebUtility.HtmlDecode(HtmlTagRegex.Replace(rawLine, " ")));
+                var match = Regex.Match(line, @"^(?<key>[A-Za-z ]{3,36})\s*[:=\-]?\s+(?<value>" + moneyPattern + @")\s*$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                if (match.Success)
+                    Add(match.Groups["key"].Value, match.Groups["value"].Value);
+            }
+        }
+        if (conflict || entries.Count != 6) return null;
+        var opening = ParseSignedMoney(entries[0]);
+        var debitCount = ParseNullableInt(entries[1]);
+        var creditCount = ParseNullableInt(entries[2]);
+        var debits = ParseMoney(entries[3]);
+        var credits = ParseMoney(entries[4]);
+        var closing = ParseSignedMoney(entries[5]);
+        if (opening is null || debitCount is null || creditCount is null ||
+            debits is null || credits is null || closing is null)
+            return null;
+        return new StatementSummary
+        {
+            Opening = opening,
+            DebitCount = debitCount,
+            CreditCount = creditCount,
+            TotalDebits = Math.Abs(debits.Value),
+            TotalCredits = Math.Abs(credits.Value),
+            Closing = closing
+        };
     }
 
     private static List<List<PageProfile>> GroupPages(IReadOnlyList<PageProfile> profiles)
