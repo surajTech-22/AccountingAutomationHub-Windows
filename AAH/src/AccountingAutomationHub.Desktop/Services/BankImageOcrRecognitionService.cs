@@ -70,8 +70,10 @@ def _summary_visible(data):
     blocks = data.get('parsing_res_list', [])
     text = '\n'.join(str(b.get('block_content', '')) for b in blocks if isinstance(b, dict)).upper()
     # Do not claim that a summary exists from inferred transaction totals.
-    return 'STATEMENT SUMMARY' in text or all(
-        label in text for label in ('OPENING BAL', 'DR COUNT', 'CR COUNT', 'CLOSING BAL'))
+    # A title alone does not establish that all six source-printed controls
+    # were read. Retry when any mandatory control heading is absent.
+    return all(label in text for label in (
+        'OPENING BAL', 'DR COUNT', 'CR COUNT', 'DEBITS', 'CREDITS', 'CLOSING BAL'))
 
 def _recheck_printed_summary(source, page_num, original, raw_root, pipeline):
     # First-pass page layout frequently omits a printed summary directly below
