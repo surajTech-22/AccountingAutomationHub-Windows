@@ -66,6 +66,67 @@ def result_json(res):
         data = data['res']
     return data if isinstance(data, dict) else None
 
+def _summary_visible(data):
+    blocks = data.get('parsing_res_list', [])
+    text = '\n'.join(str(b.get('block_content', '')) for b in blocks if isinstance(b, dict)).upper()
+    # Do not claim that a summary exists from inferred transaction totals.
+    return 'STATEMENT SUMMARY' in text or all(
+        label in text for label in ('OPENING BAL', 'DR COUNT', 'CR COUNT', 'CLOSING BAL'))
+
+def _recheck_printed_summary(source, page_num, original, raw_root, pipeline):
+    # First-pass page layout frequently omits a printed summary directly below
+    # the last transaction table. Re-read an enlarged SOURCE-PDF crop with the
+    # installed PaddleOCR-VL model, not a guessed/arithmetically built summary.
+    if source.suffix.lower() != '.pdf' or _summary_visible(original):
+        return original, False
+    try:
+        try:
+            import fitz
+        except ImportError:
+            import pymupdf as fitz
+        with fitz.open(str(source)) as pdf:
+            if not (0 < page_num <= pdf.page_count):
+                return original, False
+            page = pdf[page_num - 1]
+            shape = page.rect
+            detector = original.get('layout_det_res', {})
+            layout_h = max(1, int(original.get('height', 0) or 0))
+            bottoms = [
+                box.get('coordinate', [0, 0, 0, 0])[3] / layout_h
+                for box in detector.get('boxes', [])
+                if isinstance(box, dict) and box.get('label') == 'table'
+                and len(box.get('coordinate', [])) == 4
+            ]
+            if bottoms:
+                start = max(.12, min(.70, max(bottoms) - .13))
+                regions = [(start, min(.95, start + .38)), (.42, .85)]
+            else:
+                regions = [(.42, .85), (.65, .98)]
+            for attempt, (top, bottom) in enumerate(regions[:2], 1):
+                region = fitz.Rect(shape.x0, shape.y0 + shape.height * top,
+                                   shape.x1, shape.y0 + shape.height * bottom)
+                if region.height < 40:
+                    continue
+                crop_file = raw_root / f'summary_source_{page_num:03d}_{attempt:02d}.png'
+                page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), clip=region,
+                                alpha=False).save(str(crop_file))
+                for output in pipeline.predict_iter(
+                    input=str(crop_file),
+                    use_doc_orientation_classify=True,
+                    use_doc_unwarping=False,
+                    use_layout_detection=True):
+                    parsed = result_json(output)
+                    if parsed and _summary_visible(parsed):
+                        candidate = parsed.get('parsing_res_list', [])
+                        original.setdefault('parsing_res_list', []).extend(candidate)
+                        # The verifier independently parses the source fields
+                        # and requires every control to reconcile exactly.
+                        return original, True
+    except Exception as exc:
+        status('SUMMARY_RECOVERY_SKIPPED',
+               f'Source summary re-recognition unavailable: {type(exc).__name__}: {exc}')
+    return original, False
+
 try:
     sources = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
     if not isinstance(sources, list) or not sources:
@@ -161,6 +222,33 @@ try:
             except Exception:
                 pass
             gc.collect()
+            if page_count and source.suffix.lower() == '.pdf':
+                # Amend the original last-page result, never create a phantom
+                # physical page or an independent accounting document.
+                last_record = records[-1]
+                last_page_file = Path(last_record['json_path'])
+                last_page = json.loads(last_page_file.read_text(encoding='utf-8'))
+                if isinstance(last_page.get('res'), dict):
+                    original_page = last_page['res']
+                else:
+                    original_page = last_page
+                if not _summary_visible(original_page):
+                    status('SUMMARY_REGION_RECHECK',
+                           'Printed summary not in OCR output; checking the original last-page region.',
+                           source=str(source), page=page_count)
+                    recovered_page, recovered = _recheck_printed_summary(
+                        source, page_count, original_page, raw_root, pipeline)
+                    if recovered:
+                        last_page_file.write_text(
+                            json.dumps(last_page, ensure_ascii=False, indent=2),
+                            encoding='utf-8')
+                        status('SUMMARY_REGION_RECOVERED',
+                               'Additional source-backed summary blocks saved for verifier.',
+                               source=str(source), page=page_count)
+                    else:
+                        status('SUMMARY_REGION_UNREADABLE',
+                               'Printed summary not recovered; normal AAH review gate remains active.',
+                               source=str(source), page=page_count)
             if page_count == 0:
                 source_errors.append({'source': str(source), 'error': 'PaddleOCR-VL returned no page result.'})
         except Exception as exc:
