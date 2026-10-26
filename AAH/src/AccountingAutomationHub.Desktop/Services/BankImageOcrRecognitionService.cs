@@ -85,12 +85,35 @@ def _recheck_printed_summary(source, page_num, original, raw_root, pipeline):
         try:
             import fitz
         except ImportError:
-            import pymupdf as fitz
-        with fitz.open(str(source)) as pdf:
-            if not (0 < page_num <= pdf.page_count):
+            try:
+                import pymupdf as fitz
+            except ImportError:
+                fitz = None
+        if fitz is not None:
+            pdf = fitz.open(str(source))
+            page_count = pdf.page_count
+            page = pdf[page_num - 1] if 0 < page_num <= page_count else None
+            def save_region(top, bottom, path):
+                shape = page.rect
+                clip = fitz.Rect(shape.x0, shape.y0 + shape.height * top,
+                                 shape.x1, shape.y0 + shape.height * bottom)
+                page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), clip=clip,
+                                alpha=False).save(str(path))
+        else:
+            # PaddleOCR deployments frequently bundle PDFium instead of
+            # PyMuPDF. Use that existing local renderer, never a cloud API.
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(str(source))
+            page_count = len(pdf)
+            page = pdf[page_num - 1] if 0 < page_num <= page_count else None
+            def save_region(top, bottom, path):
+                width, height = page.get_size()
+                bitmap = page.render(scale=2.4, crop=(
+                    0, height * (1.0 - bottom), 0, height * top))
+                bitmap.to_pil().save(str(path))
+        try:
+            if page is None:
                 return original, False
-            page = pdf[page_num - 1]
-            shape = page.rect
             detector = original.get('layout_det_res', {})
             layout_h = max(1, int(original.get('height', 0) or 0))
             bottoms = [
@@ -105,13 +128,8 @@ def _recheck_printed_summary(source, page_num, original, raw_root, pipeline):
             else:
                 regions = [(.42, .85), (.65, .98)]
             for attempt, (top, bottom) in enumerate(regions[:2], 1):
-                region = fitz.Rect(shape.x0, shape.y0 + shape.height * top,
-                                   shape.x1, shape.y0 + shape.height * bottom)
-                if region.height < 40:
-                    continue
                 crop_file = raw_root / f'summary_source_{page_num:03d}_{attempt:02d}.png'
-                page.get_pixmap(matrix=fitz.Matrix(2.4, 2.4), clip=region,
-                                alpha=False).save(str(crop_file))
+                save_region(top, bottom, crop_file)
                 for output in pipeline.predict_iter(
                     input=str(crop_file),
                     use_doc_orientation_classify=True,
@@ -124,6 +142,8 @@ def _recheck_printed_summary(source, page_num, original, raw_root, pipeline):
                         # The verifier independently parses the source fields
                         # and requires every control to reconcile exactly.
                         return original, True
+        finally:
+            pdf.close()
     except Exception as exc:
         status('SUMMARY_RECOVERY_SKIPPED',
                f'Source summary re-recognition unavailable: {type(exc).__name__}: {exc}')
