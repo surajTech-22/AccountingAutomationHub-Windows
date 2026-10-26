@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using UglyToad.PdfPig;
+using AccountingAutomationHub.Domain.Banking;
 
 namespace AccountingAutomationHub.Desktop.Services;
 
@@ -17,8 +18,6 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// </summary>
 internal sealed class BankImageDocumentVerificationService
 {
-    private static readonly string[] DateFormats = ["dd-MM-yyyy", "dd/MM/yyyy", "dd.MM.yyyy", "dd-MM-yy", "dd/MM/yy", "dd.MM.yy", "d-M-yy", "d/M/yy"];
-
     private static readonly IReadOnlyDictionary<string, string[]> BankAliases =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1966,17 +1965,17 @@ internal sealed class BankImageDocumentVerificationService
 
     private static DateTime? ParseDate(string? value)
     {
+        // Use the same existing date-classification authority as normal Bank
+        // Statement import. A clean source date is mandatory for any voucher;
+        // value-date or adjacent-row values cannot replace a missing posting date.
         var text = Clean(value);
-        // Local OCR occasionally reads the source date separator as a colon
-        // (14:08/26 instead of 14/08/26). Only repair this strict DD:MM/YY
-        // shape; retain the unmodified DateRaw in financial audit evidence.
-        if (Regex.IsMatch(text, @"^\d{1,2}:\d{1,2}[/.-]\d{2,4}$"))
-            text = text.Replace(':', '/');
-        foreach (var format in DateFormats)
-            if (DateTime.TryParseExact(text, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) return date;
+        var direct = BankStatementDateClassification.ParseScannedDate(text);
+        if (direct is not null) return direct;
+        // Preserve the existing source-labeled statement-period extraction,
+        // which sometimes includes surrounding header text.
         var match = DateTextRegex.Match(text);
         if (!match.Success) return null;
-        return DateTime.TryParseExact($"{match.Groups[1].Value}-{match.Groups[2].Value}-{match.Groups[3].Value}", "d-M-yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed : null;
+        return BankStatementDateClassification.ParseScannedDate(match.Value);
     }
 
     private static string NormalizeDate(string value) => ParseDate(value)?.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture) ?? Normalize(value);
