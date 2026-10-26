@@ -358,6 +358,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = "HDFC BANK\nPage No. 1 of 2\n" },
+            new { block_label = "text", block_content = "MS NORTHERN ALPHANUMERIC TRADERS" },
             new { block_label = "vision_footnote", block_content = "Account branch GSTN:29AAAAC123456H1ZW" },
             new { block_label = "text", block_content = "50200000000000 OTHER" },
             new { block_label = "table", block_content = P1Table }
@@ -368,6 +369,7 @@ try
         parsing_res_list = new[]
         {
             new { block_label = "text", block_content = "HDFC BANK\nPage No. 2 of 2\nAccount No : 50200000000000 OTHER\nAccount Branch : TEST CITY" },
+            new { block_label = "text", block_content = "MS NORTHERN ALPHANUMERK TRADERS" },
             new { block_label = "table", block_content = P2Table },
             new { block_label = "table", block_content = P2Summary }
         }
@@ -400,6 +402,30 @@ try
             throw new Exception("Source account evidence or second-page rectangular transactions not preserved.");
     }
     Console.WriteLine("PASS: GSTN footer is not a bank account; two-page PDF is grouped with four transaction rows.");
+    if (gstnResult.Documents[0].Issues.Any(issue => issue.Contains("account-holder name differs", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Tiny source-page OCR account-holder spelling variation blocked one physical bank PDF.");
+
+    // A genuinely different holder name remains review-required. Never apply
+    // fuzzy matching to unrelated documents, bank accounts or ledger identity.
+    var conflictingNamePage = Path.Combine(gstnFolder, "second-conflicting-name.json");
+    File.WriteAllText(conflictingNamePage,
+        File.ReadAllText(gstnPage2).Replace("MS NORTHERN ALPHANUMERK TRADERS", "MS UNRELATED DIFFERENT PERSON", StringComparison.Ordinal));
+    var conflictBatch = new BankOcrRecognitionBatch
+    {
+        WasSuccessful = true,
+        Pages = new[]
+        {
+            new BankOcrRecognitionPage { Id="S001P001", SourcePath=twoPagePdf, SourceIndex=1, SourcePage=1, JsonPath=gstnPage1 },
+            new BankOcrRecognitionPage { Id="S001P002", SourcePath=twoPagePdf, SourceIndex=1, SourcePage=2, JsonPath=conflictingNamePage }
+        }
+    };
+    var nameConflict = new BankImageDocumentVerificationService()
+        .Verify(conflictBatch, gstnFolder, null, CancellationToken.None).Documents.Single();
+    if (nameConflict.Status != "REVIEW_REQUIRED" ||
+        !nameConflict.Issues.Any(issue => issue.Contains("account-holder name differs", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Unrelated OCR account-holder names must still block automatic import.");
+    Console.WriteLine("PASS: source name OCR variants do not block, unrelated holder names still require review.");
+
     // The real HDFC scan can return a headerless page with date OCR as
     // 14:08/26 and a separate HTML row whose date cell is rowspan=2.
     // The leading date/narration row has no money, the second contains it.

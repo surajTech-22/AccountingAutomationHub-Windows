@@ -1101,8 +1101,17 @@ internal sealed class BankImageDocumentVerificationService
             issues.Add("Bank metadata missing: bank name or IFSC must be recognized from the original statement.");
         if (metadata.AccountNumber.Length == 0)
             issues.Add("Bank metadata missing: account number must be recognized from a source-labeled field.");
-        if (ordered.Select(page => NormalizeUpper(page.AccountName)).Where(value => value.Length > 0)
-                .Distinct(StringComparer.Ordinal).Count() > 1)
+        // Within a single physical statement PDF, tiny OCR spelling shifts
+        // must not override bank/account identity or create a false blocker.
+        // Preserve the raw names in the audit; unrelated names still block.
+        var sourceNames = ordered.Select(page => NormalizeUpper(page.AccountName))
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var samePhysicalPdf = ordered.All(page =>
+            Path.GetExtension(page.SourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase) &&
+            page.SourcePath.Equals(ordered[0].SourcePath, StringComparison.OrdinalIgnoreCase));
+        if (sourceNames.Length > 1 &&
+            !(samePhysicalPdf && sourceNames.All(name => IsMinorAccountNameOcrVariation(sourceNames[0], name))))
             issues.Add("OCR account-holder name differs across statement pages; verify source spelling before import.");
 
         var printedSeen = new List<int>();
@@ -1875,6 +1884,28 @@ internal sealed class BankImageDocumentVerificationService
     private static bool MatchOrNotPrinted(int? printed, int calculated) => printed is null || printed == calculated;
     private static string MoneyText(decimal value) => Math.Abs(value).ToString("N2", CultureInfo.GetCultureInfo("en-IN"));
     private static int? ParseNullableInt(string? value) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : null;
+    private static bool IsMinorAccountNameOcrVariation(string first, string second)
+    {
+        // Only tolerate <=2 OCR letter errors in a long account-holder label.
+        // This is not a fuzzy account-number match, nor a new ledger identity.
+        var a = Regex.Replace(NormalizeUpper(first), @"[^A-Z0-9]", "");
+        var b = Regex.Replace(NormalizeUpper(second), @"[^A-Z0-9]", "");
+        if (a.Equals(b, StringComparison.Ordinal)) return true;
+        if (Math.Min(a.Length, b.Length) < 18 || Math.Abs(a.Length - b.Length) > 2) return false;
+        var previous = Enumerable.Range(0, b.Length + 1).ToArray();
+        for (var i = 1; i <= a.Length; i++)
+        {
+            var current = new int[b.Length + 1];
+            current[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+                current[j] = Math.Min(
+                    Math.Min(previous[j] + 1, current[j - 1] + 1),
+                    previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            previous = current;
+        }
+        return previous[b.Length] <= 2;
+    }
+
     private static string MostCommon(IEnumerable<string> values) => values.Where(value => value.Length > 0).GroupBy(value => value, StringComparer.OrdinalIgnoreCase).OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault() ?? string.Empty;
     private static string JsonText(JsonElement element, string name) => element.TryGetProperty(name, out var value) ? value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString() : string.Empty;
 
