@@ -9,5 +9,6 @@
   <ItemGroup>
     <PackageReference Include="PdfPig" Version="0.1.16" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/BankImageDocumentVerificationService.cs" Link="BankImageDocumentVerificationService.cs" />
+    <Compile Include="../../src/AccountingAutomationHub.Domain/Banking/BankStatementDateClassification.cs" Link="BankStatementDateClassification.cs" />
   </ItemGroup>
 </Project>
