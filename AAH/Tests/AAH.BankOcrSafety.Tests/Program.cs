@@ -177,6 +177,21 @@ try
         ("Damaged printed amount cannot be inferred",
             "STATEMENT SUMMARY\nOpening Balance Dr Count Cr Count Debits Credits Closing Bal\n0.00 1 1 25.O0 100.00 75.00",
             false, "NOT_AVAILABLE"),
+        ("Vertical label/value table recovered from PDF crop",
+            "STATEMENT SUMMARY\n| Opening Balance | 0.00 |\n| Dr Count | 1 |\n| Cr Count | 1 |\n| Debits | 25.00 |\n| Credits | 100.00 |\n| Closing Bal | 75.00 |",
+            true, "VERIFIED"),
+        ("Plain individually labeled summary values",
+            "STATEMENT SUMMARY\nOpening Balance: 0.00\nDr Count: 1\nCr Count: 1\nDebits: 25.00\nCredits: 100.00\nClosing Bal: 75.00",
+            true, "VERIFIED"),
+        ("Summary heading occupies first table row",
+            "STATEMENT SUMMARY\n| STATEMENT SUMMARY |\n| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n| 0.00 | 1 | 1 | 25.00 | 100.00 | 75.00 |",
+            true, "VERIFIED"),
+        ("Vertical summary contains one-paisa printed mismatch",
+            "STATEMENT SUMMARY\n| Opening Balance | 0.00 |\n| Dr Count | 1 |\n| Cr Count | 1 |\n| Debits | 25.00 |\n| Credits | 100.01 |\n| Closing Bal | 75.00 |",
+            false, "REVIEW_REQUIRED"),
+        ("Conflicting vertical printed closing values blocked",
+            "STATEMENT SUMMARY\n| Opening Balance | 0.00 |\n| Dr Count | 1 |\n| Cr Count | 1 |\n| Debits | 25.00 |\n| Credits | 100.00 |\n| Closing Bal | 75.00 |\n| Closing Bal | 76.00 |",
+            false, "NOT_AVAILABLE"),
     };
     foreach (var scene in textSummaryCases)
     {
