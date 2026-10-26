@@ -46,6 +46,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'AAH close-to-tray/background worker regression.' }
           python ci/test_aah_bank_scanned_pdf_route.py
           if ($LASTEXITCODE -ne 0) { throw 'AAH scanned PDF routing regression.' }
+          python ci/test_aah_bank_ocr_summary_recheck.py
+          if ($LASTEXITCODE -ne 0) { throw 'AAH source-backed summary-region OCR regression.' }
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
