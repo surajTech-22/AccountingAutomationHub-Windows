@@ -96,6 +96,69 @@ try
         Console.WriteLine("PASS: " + scene.Name + " (" + doc.Status + ")");
         passed++;
     }
+    // A bank can print a dated BALANCE BROUGHT FORWARD credit as the first
+    // line while including it in the printed bank credit count/total. AAH must
+    // display it as opening metadata and create NO voucher for it.
+    foreach (var test in new (string Name, string BfBalance, string SummaryCredits,
+        string SummaryCreditCount, bool IncludeSummary, bool ExpectVerified)[]
+    {
+        ("dated opening movement included in printed summary", "0.01", "100.01", "2", true, true),
+        ("opening amount is not a voucher even without balance OCR", "", "100.01", "2", false, false),
+        ("wrong printed bank credit count remains blocked", "0.01", "100.01", "1", true, false),
+        ("one paisa printed bank credit mismatch remains blocked", "0.01", "100.00", "2", true, false)
+    })
+    {
+        var directory = Path.Combine(root, "brought-forward-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var blocks = new List<object>
+        {
+            new { block_label = "text", block_content =
+                "HDFC BANK\nStatement of Account\nAccount No: 9999999999" },
+            new { block_label = "table", block_content =
+                "| Date | Narration | Chq/Ref.No. | Value Dt | Withdrawal Amt. | Deposit Amt. | Closing Balance |\n" +
+                $"| 31/07/25 | BALANCE BROUGHT FORWARD | BF00001 | 31/07/25 | 0.00 | 0.01 | {test.BfBalance} |\n" +
+                "| 29/08/25 | DIGITAL CREDIT | S00001 | 29/08/25 | 0.00 | 100.00 | 100.01 |\n" +
+                "| 01/09/25 | DIGITAL DEBIT | S00002 | 01/09/25 | 25.00 | 0.00 | 75.01 |" }
+        };
+        if (test.IncludeSummary)
+            blocks.Add(new { block_label = "table", block_content =
+                "| Opening Balance | Dr Count | Cr Count | Debits | Credits | Closing Bal |\n" +
+                $"| 0.00 | 1 | {test.SummaryCreditCount} | 25.00 | {test.SummaryCredits} | 75.01 |" });
+        var path = Path.Combine(directory, "page.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new { parsing_res_list = blocks }));
+        var batch = new BankOcrRecognitionBatch
+        {
+            WasSuccessful = true,
+            Pages = new[] { new BankOcrRecognitionPage
+            {
+                Id = "S001P001", SourcePath = "synthetic-scan.pdf",
+                SourceIndex = 1, SourcePage = 1, JsonPath = path
+            } }
+        };
+        var result = new BankImageDocumentVerificationService()
+            .Verify(batch, directory, null, CancellationToken.None);
+        if (result.Documents.Count != 1)
+            throw new Exception(test.Name + ": expected one document.");
+        var doc = result.Documents[0];
+        if (doc.Transactions.Count != 2 ||
+            doc.Transactions.Any(tx => tx.Description.Contains("BROUGHT FORWARD", StringComparison.Ordinal)) ||
+            doc.OpeningBalance != 0.01m || doc.BroughtForwardCredit != 0.01m ||
+            doc.TotalCredits != 100.00m || doc.CreditCount != 1 ||
+            doc.PrintedSummaryOpeningBalance != (test.IncludeSummary ? 0.00m : null))
+            throw new Exception(test.Name + ": opening was lost, duplicated, or counted as voucher. " +
+                "tx=" + doc.Transactions.Count + ", opening=" + doc.OpeningBalance +
+                ", bfCr=" + doc.BroughtForwardCredit + ", totalCr=" + doc.TotalCredits +
+                ", crCount=" + doc.CreditCount + ", summaryOpening=" + doc.PrintedSummaryOpeningBalance +
+                ", first=" + doc.Transactions.FirstOrDefault()?.Description +
+                ", issues=" + string.Join("; ", doc.Issues));
+        var verified = doc.Status is "VERIFIED" or "VERIFIED_WITH_CORRECTIONS";
+        if (verified != test.ExpectVerified)
+            throw new Exception(test.Name + ": unexpected status " + doc.Status +
+                " issues: " + string.Join("; ", doc.Issues));
+        Console.WriteLine("PASS: " + test.Name + " (" + doc.Status + ")");
+        passed++;
+    }
+
     // The real scanned HDFC summary is printed at the bottom of the last page.
     // PaddleOCR may emit the same printed six financial controls as a text block
     // or as prose, not a TABLE block. Parsing must preserve their source values,
@@ -551,18 +614,18 @@ try
     };
     var damagedOpeningDoc = new BankImageDocumentVerificationService()
         .Verify(damagedOpeningBatch, longDir, null, CancellationToken.None).Documents.Single();
-    // Unlike a metadata-only brought-forward row, this dated row contains a
-    // real nonzero 0.01 deposit. The scan's printed credit count/total can
-    // include it, so it MUST be retained as an ambiguous financial candidate.
-    // Missing source balance and printed-summary mismatch keep it blocked.
+    // A source-visible dated brought-forward credit belongs to the opening
+    // section, not to a transaction. With an unreadable balance and summary
+    // mismatch it must remain review-only; never create a voucher for it.
     if (damagedOpeningDoc.Status != "REVIEW_REQUIRED" ||
-        damagedOpeningDoc.Transactions.Count != 23 ||
-        damagedOpeningDoc.Transactions[0].OriginalCredit != 0.01m ||
-        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("Dated BROUGHT FORWARD row contains a debit/credit movement", StringComparison.OrdinalIgnoreCase)) ||
-        !damagedOpeningDoc.Issues.Any(issue => issue.Contains("running balance could not be parsed", StringComparison.OrdinalIgnoreCase)))
-        throw new Exception("The dated 0.01 brought-forward credit must be retained, but never auto-approved with unreadable financial proof.");
-    Console.WriteLine("PASS: dated 0.01 brought-forward movement retained as review-only financial candidate.");
-    Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 7} Bank OCR verifier safety scenarios.");
+        damagedOpeningDoc.Transactions.Count != 22 ||
+        damagedOpeningDoc.BroughtForwardCredit != 0.01m ||
+        damagedOpeningDoc.OpeningBalance != 0.01m ||
+        damagedOpeningDoc.OpeningSource != "BROUGHT_FORWARD_MOVEMENT_PENDING_BALANCE_PROOF" ||
+        damagedOpeningDoc.Transactions.Any(tx => tx.Description.Contains("BROUGHT FORWARD", StringComparison.Ordinal)))
+        throw new Exception("The dated 0.01 brought-forward credit must be opening metadata, never a voucher or auto-approved without proof.");
+    Console.WriteLine("PASS: dated 0.01 brought-forward amount held in opening metadata with missing balance proof.");
+    Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 11} Bank OCR verifier safety scenarios.");
 }
 finally
 {

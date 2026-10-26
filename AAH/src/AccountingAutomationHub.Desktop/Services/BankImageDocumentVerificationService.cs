@@ -241,6 +241,10 @@ internal sealed class BankImageDocumentVerificationService
         document.StatementFrom,
         document.StatementTo,
         document.OpeningBalance,
+        document.OpeningSource,
+        document.PrintedSummaryOpeningBalance,
+        document.BroughtForwardDebit,
+        document.BroughtForwardCredit,
         document.ClosingBalance,
         document.DebitCount,
         document.CreditCount,
@@ -548,21 +552,31 @@ internal sealed class BankImageDocumentVerificationService
             var balanceRaw = Get(row, "balance");
             var descriptionUpper = NormalizeUpper(description);
 
-            // Many statements use BROUGHT FORWARD only as opening-balance
-            // metadata, but others print an actual dated credit on this row.
-            // The source-backed Debit/Credit cells decide whether it is a
-            // financial transaction candidate, never the narration alone.
-            // An ambiguous dated movement stays REVIEW_REQUIRED downstream.
+            // A BALANCE BROUGHT FORWARD control belongs in opening-balance
+            // metadata, even when a bank prints it as a dated debit/credit row.
+            // Never produce a voucher for this line. Retain the source movement
+            // separately so the printed summary (which may count it) reconciles.
             var isBroughtForward = descriptionUpper.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
                 descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal);
-            var broughtForwardDebit = ParseMoney(Get(row, "debit"));
-            var broughtForwardCredit = ParseMoney(Get(row, "credit"));
-            var hasDatedBroughtForwardMovement = ParseDate(dateRaw) is not null &&
-                ((broughtForwardDebit is not null && Math.Abs(broughtForwardDebit.Value) > 0.009m) ||
-                 (broughtForwardCredit is not null && Math.Abs(broughtForwardCredit.Value) > 0.009m));
-            if (isBroughtForward && !hasDatedBroughtForwardMovement)
+            if (isBroughtForward)
             {
-                broughtForward = new BalanceEvidence(balanceRaw, ParseSignedMoney(balanceRaw));
+                if (broughtForward is not null)
+                    narrationIssues.Add("Multiple BROUGHT FORWARD controls appear on one statement page.");
+                var debit = ParseMoney(Get(row, "debit"));
+                var credit = ParseMoney(Get(row, "credit"));
+                var printedBalance = ParseSignedMoney(balanceRaw);
+                if (debit is null || credit is null || (Math.Abs(debit.Value) > 0.009m && Math.Abs(credit.Value) > 0.009m))
+                    narrationIssues.Add("BROUGHT FORWARD debit/credit cells are ambiguous; review the original statement.");
+                // For a credit-only/debit-only row whose balance OCR is blank,
+                // expose its amount in the opening section, but do NOT treat
+                // this as independent proof of the original running balance.
+                decimal? inferredFromMovement = debit is not null && credit is not null &&
+                    (Math.Abs(debit.Value) < 0.01m || Math.Abs(credit.Value) < 0.01m)
+                    ? RoundMoney(credit.Value - debit.Value) : null;
+                broughtForward = new BalanceEvidence(
+                    balanceRaw, printedBalance ?? inferredFromMovement,
+                    Math.Abs(debit ?? 0m), Math.Abs(credit ?? 0m),
+                    printedBalance is null);
                 continue;
             }
             if (dateRaw.Length == 0 && (descriptionUpper.Contains("CLOSING BALANCE", StringComparison.Ordinal) || descriptionUpper.Contains("CARRIED FORWARD", StringComparison.Ordinal)))
@@ -1108,8 +1122,14 @@ internal sealed class BankImageDocumentVerificationService
         var firstBroughtForward = ordered.FirstOrDefault()?.BroughtForward;
         decimal? opening = null;
         var openingSource = "UNKNOWN";
-        if (summary?.Opening is not null) { opening = summary.Opening; openingSource = "STATEMENT_SUMMARY"; }
-        else if (firstBroughtForward?.Value is not null) { opening = firstBroughtForward.Value; openingSource = "FIRST_PAGE_BROUGHT_FORWARD"; }
+        if (firstBroughtForward?.Value is not null)
+        {
+            opening = firstBroughtForward.Value;
+            openingSource = firstBroughtForward.DerivedFromMovement
+                ? "BROUGHT_FORWARD_MOVEMENT_PENDING_BALANCE_PROOF"
+                : "FIRST_PAGE_BROUGHT_FORWARD";
+        }
+        else if (summary?.Opening is not null) { opening = summary.Opening; openingSource = "STATEMENT_SUMMARY"; }
         else if (transactions.FirstOrDefault()?.Balance is not null)
         {
             var first = transactions[0];
@@ -1118,9 +1138,17 @@ internal sealed class BankImageDocumentVerificationService
         }
 
         if (firstBroughtForward is not null && firstBroughtForward.Value is null)
-            issues.Add("Printed brought-forward running balance was not recognized. Its debit/credit cells cannot substitute for a source-visible opening balance.");
-        if (summary?.Opening is not null && firstBroughtForward?.Value is not null && !MoneyEqual(summary.Opening, firstBroughtForward.Value))
-            issues.Add("Statement summary opening does not match first-page BROUGHT FORWARD.");
+            issues.Add("BROUGHT FORWARD opening balance could not be recognized from its balance or unambiguous movement cells.");
+        // Printed statement opening is before a dated brought-forward movement.
+        // A bank may count that movement in its printed credit/debit totals,
+        // while AAH displays the post-movement amount as effective opening.
+        var printedOpeningFromControl = firstBroughtForward?.Value is not null
+            ? RoundMoney(firstBroughtForward.Value.Value +
+                firstBroughtForward.Debit - firstBroughtForward.Credit)
+            : (decimal?)null;
+        if (summary?.Opening is not null && printedOpeningFromControl is not null &&
+            !MoneyEqual(summary.Opening, printedOpeningFromControl))
+            issues.Add("Statement summary opening plus BROUGHT FORWARD movement does not match effective opening balance.");
 
         decimal? previous = opening;
         foreach (var row in transactions)
@@ -1156,8 +1184,8 @@ internal sealed class BankImageDocumentVerificationService
             if (row.Balance is not null) previous = row.Balance;
         }
 
-        var rawEval = EvaluateSummary(summary, opening, transactions, useRequired: false);
-        var correctedEval = EvaluateSummary(summary, opening, transactions, useRequired: true);
+        var rawEval = EvaluateSummary(summary, opening, transactions, firstBroughtForward, useRequired: false);
+        var correctedEval = EvaluateSummary(summary, opening, transactions, firstBroughtForward, useRequired: true);
         var summaryHasAllControls = summary is not null &&
             summary.Opening is not null && summary.DebitCount is not null &&
             summary.CreditCount is not null && summary.TotalDebits is not null &&
@@ -1242,11 +1270,16 @@ internal sealed class BankImageDocumentVerificationService
                 issues.Add("Statement summary contains unrecognized financial control fields.");
             var checks = new[]
             {
-                CompareMoney("opening", summary.Opening, opening),
-                CompareCount("dr_count", summary.DebitCount, debitCount),
-                CompareCount("cr_count", summary.CreditCount, creditCount),
-                CompareMoney("total_debits", summary.TotalDebits, totalDebits),
-                CompareMoney("total_credits", summary.TotalCredits, totalCredits),
+                CompareMoney("opening", summary.Opening, firstBroughtForward is null
+                    ? opening : printedOpeningFromControl),
+                CompareCount("dr_count", summary.DebitCount, debitCount +
+                    (firstBroughtForward?.Debit > 0.009m ? 1 : 0)),
+                CompareCount("cr_count", summary.CreditCount, creditCount +
+                    (firstBroughtForward?.Credit > 0.009m ? 1 : 0)),
+                CompareMoney("total_debits", summary.TotalDebits, RoundMoney(totalDebits +
+                    (firstBroughtForward?.Debit ?? 0m))),
+                CompareMoney("total_credits", summary.TotalCredits, RoundMoney(totalCredits +
+                    (firstBroughtForward?.Credit ?? 0m))),
                 CompareMoney("closing", summary.Closing, closing)
             };
             foreach (var check in checks.Where(check => check.Status == "MISMATCH")) issues.Add($"Statement summary {check.Name} mismatch.");
@@ -1258,10 +1291,8 @@ internal sealed class BankImageDocumentVerificationService
         // a transaction date, narration, or supplied value-date is unreadable.
         if (transactions.Count == 0)
             issues.Add("No transaction rows were recognized; automatic import is blocked.");
-        if (transactions.Any(row =>
-                NormalizeUpper(row.Description).Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
-                NormalizeUpper(row.Description).StartsWith("BROUGHT FORWARD", StringComparison.Ordinal)))
-            issues.Add("Dated BROUGHT FORWARD row contains a debit/credit movement: preserve its amount but verify source and printed summary before accounting import.");
+        // BROUGHT FORWARD is an audited opening-balance control, not a transaction.
+        // The source amount is retained for printed-summary reconciliation above.
 
         var statementStart = ParseDate(metadata.PeriodStart);
         var statementEnd = ParseDate(metadata.PeriodEnd);
@@ -1369,6 +1400,7 @@ internal sealed class BankImageDocumentVerificationService
             !multiPageScannedPdfWithoutSummary &&
             !unparsedPrintedSummary &&
             firstBroughtForward?.Value is not null &&
+            !firstBroughtForward.DerivedFromMovement &&
             openingSource == "FIRST_PAGE_BROUGHT_FORWARD" &&
             (pageStatus.Equals("VERIFIED", StringComparison.Ordinal) ||
              pageStatus.Equals("INFERRED_VERIFIED", StringComparison.Ordinal));
@@ -1396,6 +1428,9 @@ internal sealed class BankImageDocumentVerificationService
             StatementTo = metadata.PeriodEnd,
             OpeningBalance = opening,
             OpeningSource = openingSource,
+            PrintedSummaryOpeningBalance = summary?.Opening,
+            BroughtForwardDebit = firstBroughtForward?.Debit ?? 0m,
+            BroughtForwardCredit = firstBroughtForward?.Credit ?? 0m,
             OpeningRowStatus = openingRowStatus,
             ClosingBalance = closing,
             ClosingRowStatus = closingRowStatus,
@@ -1527,7 +1562,7 @@ internal sealed class BankImageDocumentVerificationService
         return (rows, duplicates);
     }
 
-    private static SummaryEvaluation EvaluateSummary(StatementSummary? summary, decimal? opening, IReadOnlyList<BankVerifiedTransaction> rows, bool useRequired)
+    private static SummaryEvaluation EvaluateSummary(StatementSummary? summary, decimal? opening, IReadOnlyList<BankVerifiedTransaction> rows, BalanceEvidence? broughtForward, bool useRequired)
     {
         var debits = rows.Select(row => useRequired ? row.RequiredDebit : row.OriginalDebit).ToArray();
         var credits = rows.Select(row => useRequired ? row.RequiredCredit : row.OriginalCredit).ToArray();
@@ -1538,12 +1573,18 @@ internal sealed class BankImageDocumentVerificationService
         var closing = rows.LastOrDefault(row => row.Balance is not null)?.Balance;
         if (summary is null) return new SummaryEvaluation(false);
 
+        // Printed bank controls may include a dated brought-forward row.
+        // Adjust only the printed-summary side; AAH transaction/voucher totals
+        // always exclude that opening row.
+        var printedOpening = broughtForward is null || opening is null
+            ? opening
+            : RoundMoney(opening.Value + broughtForward.Debit - broughtForward.Credit);
         var exact =
-            MatchOrNotPrinted(summary.Opening, opening) &&
-            MatchOrNotPrinted(summary.DebitCount, debitCount) &&
-            MatchOrNotPrinted(summary.CreditCount, creditCount) &&
-            MatchOrNotPrinted(summary.TotalDebits, totalDebits) &&
-            MatchOrNotPrinted(summary.TotalCredits, totalCredits) &&
+            MatchOrNotPrinted(summary.Opening, printedOpening) &&
+            MatchOrNotPrinted(summary.DebitCount, debitCount + (broughtForward?.Debit > 0.009m ? 1 : 0)) &&
+            MatchOrNotPrinted(summary.CreditCount, creditCount + (broughtForward?.Credit > 0.009m ? 1 : 0)) &&
+            MatchOrNotPrinted(summary.TotalDebits, RoundMoney(totalDebits + (broughtForward?.Debit ?? 0m))) &&
+            MatchOrNotPrinted(summary.TotalCredits, RoundMoney(totalCredits + (broughtForward?.Credit ?? 0m))) &&
             MatchOrNotPrinted(summary.Closing, closing);
         return new SummaryEvaluation(exact);
     }
@@ -1844,7 +1885,9 @@ internal sealed class BankImageDocumentVerificationService
 
     private sealed class OcrBlock { public string Label { get; set; } = string.Empty; public string Content { get; set; } = string.Empty; }
     private sealed record BankNameMatch(int Start, int End, string Bank, string Alias);
-    private sealed record BalanceEvidence(string Raw, decimal? Value);
+    private sealed record BalanceEvidence(
+        string Raw, decimal? Value, decimal Debit = 0m, decimal Credit = 0m,
+        bool DerivedFromMovement = false);
     private sealed record IdentifiedTable(
         IReadOnlyList<IReadOnlyList<string>> Rows,
         IReadOnlyDictionary<string, int> Mapping,
@@ -1984,6 +2027,9 @@ internal sealed class BankVerifiedDocument
     public string StatementTo { get; set; } = string.Empty;
     public decimal? OpeningBalance { get; set; }
     public string OpeningSource { get; set; } = string.Empty;
+    public decimal? PrintedSummaryOpeningBalance { get; set; }
+    public decimal BroughtForwardDebit { get; set; }
+    public decimal BroughtForwardCredit { get; set; }
     public string OpeningRowStatus { get; set; } = string.Empty;
     public decimal? ClosingBalance { get; set; }
     public string ClosingRowStatus { get; set; } = string.Empty;
