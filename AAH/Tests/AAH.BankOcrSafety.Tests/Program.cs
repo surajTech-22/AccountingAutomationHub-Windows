@@ -192,6 +192,12 @@ try
         ("Conflicting vertical printed closing values blocked",
             "STATEMENT SUMMARY\n| Opening Balance | 0.00 |\n| Dr Count | 1 |\n| Cr Count | 1 |\n| Debits | 25.00 |\n| Credits | 100.00 |\n| Closing Bal | 75.00 |\n| Closing Bal | 76.00 |",
             false, "NOT_AVAILABLE"),
+        ("Real crop geometry: opening amount embedded in rowspan title and debits colspan two",
+            "<table><tr><td colspan='2'>SYNTHETIC REFERENCE</td><td>01/09/25</td><td>25.00</td><td>0.00</td><td>75.00</td></tr><tr><td rowspan='2'>STATEMENT SUMMARY :-\\nOpening Balance\\n0.00</td><td>Dr Count</td><td>Cr Count</td><td colspan='2'>Debits</td><td>Credits</td><td>Closing Bal</td></tr><tr><td>1</td><td>1</td><td colspan='2'>25.00</td><td>100.00</td><td>75.00</td></tr></table>",
+            true, "VERIFIED"),
+        ("Real crop geometry: one-paisa printed credit mismatch still blocked",
+            "<table><tr><td colspan='2'>SYNTHETIC REFERENCE</td><td>01/09/25</td><td>25.00</td><td>0.00</td><td>75.00</td></tr><tr><td rowspan='2'>STATEMENT SUMMARY :-\\nOpening Balance\\n0.00</td><td>Dr Count</td><td>Cr Count</td><td colspan='2'>Debits</td><td>Credits</td><td>Closing Bal</td></tr><tr><td>1</td><td>1</td><td colspan='2'>25.00</td><td>100.01</td><td>75.00</td></tr></table>",
+            false, "REVIEW_REQUIRED"),
     };
     foreach (var scene in textSummaryCases)
     {
