@@ -892,9 +892,24 @@ internal sealed class BankImageDocumentVerificationService
 
             var row = rows[headerRow + 1];
             string Cell(int? index) => index is not null && index.Value < row.Count ? Clean(row[index.Value]) : string.Empty;
+            // Production Paddle output can merge the printed title, opening
+            // label and 0.00 into a single rowspan=2 cell:
+            // 'STATEMENT SUMMARY :- Opening Balance 0.00'.
+            // The source label and adjacent money are independently visible.
+            // Do not take the number from another cell or account arithmetic.
+            decimal? printedOpening = ParseSignedMoney(Cell(opening));
+            if (printedOpening is null && opening is not null)
+            {
+                var sourceLabelCell = Clean(header[opening.Value]);
+                var embedded = Regex.Match(sourceLabelCell,
+                    @"\bOPENING\s+BAL(?:ANCE)?\s*[:=\-]?\s*(?<amount>-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                if (embedded.Success)
+                    printedOpening = ParseSignedMoney(embedded.Groups["amount"].Value);
+            }
             return new StatementSummary
             {
-                Opening = ParseSignedMoney(Cell(opening)),
+                Opening = printedOpening,
                 DebitCount = ParseNullableInt(Regex.Replace(Cell(drCount), @"[^0-9]", string.Empty)),
                 CreditCount = ParseNullableInt(Regex.Replace(Cell(crCount), @"[^0-9]", string.Empty)),
                 TotalDebits = AbsNullable(ParseMoney(Cell(totalDebits))),
