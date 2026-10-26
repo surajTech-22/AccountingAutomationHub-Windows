@@ -1,5 +1,34 @@
 using System.Text.Json;
 using AccountingAutomationHub.Desktop.Services;
+using AccountingAutomationHub.Domain.Banking;
+
+// Existing Bank Statement date/FY authority is reused by scanned Bank OCR.
+var bankDateCases = new (string Source, DateTime? Expected)[]
+{
+    ("29/08/25", new DateTime(2025, 8, 29)),
+    ("3/02/26", new DateTime(2026, 2, 3)),
+    ("14:08/26", new DateTime(2026, 8, 14)),
+    ("03/09/26", new DateTime(2026, 9, 3)),
+    ("01/04/26", new DateTime(2026, 4, 1)),
+    ("", null), // A posting date must not be silently borrowed from Value Date.
+    ("03/99/26", null),
+    ("not-a-date", null)
+};
+foreach (var entry in bankDateCases)
+{
+    var parsed = BankStatementDateClassification.ParseScannedDate(entry.Source);
+    if (parsed != entry.Expected)
+        throw new Exception($"Shared OCR/import date classification: {entry.Source}: {parsed} vs {entry.Expected}.");
+}
+if (!BankStatementDateClassification.IsInsideFinancialYear(new DateTime(2026, 3, 31), "2025-26") ||
+    BankStatementDateClassification.IsInsideFinancialYear(new DateTime(2026, 4, 1), "2025-26") ||
+    !BankStatementDateClassification.IsInsideFinancialYear(new DateTime(2026, 4, 1), "2026-27") ||
+    !BankStatementDateClassification.IsInsideFinancialYear(new DateTime(2025, 4, 1), "2025-26"))
+    throw new Exception("Existing April-to-March bank financial-year classification changed.");
+if (!BankStatementDateClassification.TryParseImportedDate("03-09-2026", false, out var workbookDate) ||
+    workbookDate.Date != new DateTime(2026, 9, 3))
+    throw new Exception("Workbook importer date classification no longer recognizes source OCR dates.");
+Console.WriteLine("PASS: Bank OCR and Bank Statement importer share date classification and April-March FY authority.");
 
 // Compile the actual production verifier in isolation with the same OCR DTO shape.
 // All test fixtures are synthetic: no bank data, passwords or customer identifiers.
