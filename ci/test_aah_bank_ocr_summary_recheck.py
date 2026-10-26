@@ -48,6 +48,8 @@ class Doc:
     def __getitem__(self, index):
         assert index == 0
         return Page()
+    def close(self):
+        pass
 
 fitz = types.ModuleType("fitz")
 fitz.open = lambda source: Doc()
