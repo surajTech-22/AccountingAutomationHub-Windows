@@ -900,7 +900,13 @@ internal sealed class BankImageDocumentVerificationService
             decimal? printedOpening = ParseSignedMoney(Cell(opening));
             if (printedOpening is null && opening is not null)
             {
-                var sourceLabelCell = Clean(header[opening.Value]);
+                // Paddle's table HTML sometimes stores literal backslash-n
+                // characters inside this one source cell instead of line
+                // breaks. Normalize those cell delimiters only, never PDF
+                // paths, narration, or whole-document OCR content.
+                var sourceLabelCell = Clean(header[opening.Value])
+                    .Replace(@"\n", " ", StringComparison.Ordinal)
+                    .Replace(@"\r", " ", StringComparison.Ordinal);
                 var embedded = Regex.Match(sourceLabelCell,
                     @"\bOPENING\s+BAL(?:ANCE)?\s*[:=\-]?\s*(?<amount>-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
