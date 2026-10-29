@@ -728,7 +728,11 @@ public sealed class SqliteClientRepository :
             client.GstProfileUpdatedUtc = DateTime.UtcNow;
         }
 
-        return changed ? Save(client) : client;
+        if (!changed) return client;
+        // GST profile refresh can update the primary name/state but must not
+        // replace or reorder secondary GSTINs saved by the Client Editor.
+        client.AdditionalGstins = null;
+        return Save(client);
     }
 
     public void SetCurrent(
