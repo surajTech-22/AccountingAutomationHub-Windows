@@ -29,7 +29,11 @@ public sealed partial class Gstr3bPdfImportService(SqliteGstRepository repositor
             processed++;
             try
             {
-                var record = Parse(path, clientId, financialYear, fallbackGstin);
+                // Existing single-GSTIN imports retain their usual fallback.
+                // For multi-GSTIN clients require the source PDF's actual
+                // printed GSTIN, never assign an unlabeled PDF to the primary.
+                var record = Parse(path, clientId, financialYear,
+                    additionalGstins is { Count: > 0 } ? string.Empty : fallbackGstin);
                 if (record.PeriodKey.Length == 0)
                 {
                     rejected++;
