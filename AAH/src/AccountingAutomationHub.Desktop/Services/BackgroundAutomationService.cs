@@ -3151,6 +3151,44 @@ public sealed class BackgroundAutomationService : IDisposable
                 string.IsNullOrWhiteSpace(result.CompanyName) ? client.ClientName : result.CompanyName,
                 result.Records);
             result.PersistedRows = _salesRecordRepository.ReplaceAutomaticImport(client.Id, client.FinancialYear, result);
+            // Recheck a GSTIN-only Client Name after source-backed Sales data
+            // becomes available. This is a client-profile repair only; it does
+            // not alter Sales vouchers, GST journals, or Tally records.
+            if (GstClientNameRecognitionPolicy.IsUnresolvedName(client.ClientName, client.Gstin))
+            {
+                try
+                {
+                    _gstinProfileLookupService.Invalidate(client.Gstin);
+                    var nameEvidence = await _gstinProfileLookupService.LookupAsync(
+                        client.Gstin, root, cancellationToken).ConfigureAwait(false);
+                    var sourceName = nameEvidence.TradeName.Length > 0
+                        ? nameEvidence.TradeName : nameEvidence.LegalName;
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(sourceName, client.Gstin))
+                    {
+                        _clientRepository.ApplyImportedGstProfile(client.Id,
+                            new GstinProfileLookupResult
+                            {
+                                Gstin = client.Gstin,
+                                TradeName = nameEvidence.TradeName,
+                                LegalName = nameEvidence.LegalName
+                                // Do not overwrite GSTR-3B period metadata with
+                                // a saved-Sales-only source.
+                            });
+                        ClientRegistryChanged?.Invoke(this, EventArgs.Empty);
+                        AutomationDiagnosticLog.Write("GST-CLIENT-NAME",
+                            $"Restored source-backed Client Name for {client.Gstin}.", client.ClientCode);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    AutomationDiagnosticLog.Write("GST-CLIENT-NAME",
+                        $"Client Name evidence lookup skipped: {exception.Message}", client.ClientCode);
+                }
+            }
             if (_accountingRefreshCoordinator is not null)
                 await _accountingRefreshCoordinator.RefreshAsync(client, cancellationToken).ConfigureAwait(false);
 
