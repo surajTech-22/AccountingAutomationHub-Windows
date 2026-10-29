@@ -680,7 +680,7 @@ public sealed class SqliteClientRepository :
         }
 
         if (!client.LegalNameIsManual &&
-            profile.LegalName.Length > 0 &&
+            GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.LegalName, client.Gstin) &&
             !client.LegalName.Equals(profile.LegalName, StringComparison.Ordinal))
         {
             client.LegalName = profile.LegalName;
@@ -688,7 +688,7 @@ public sealed class SqliteClientRepository :
         }
 
         if (!client.TradeNameIsManual &&
-            profile.TradeName.Length > 0 &&
+            GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.TradeName, client.Gstin) &&
             !client.TradeName.Equals(profile.TradeName, StringComparison.Ordinal))
         {
             client.TradeName = profile.TradeName;
