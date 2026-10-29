@@ -114,11 +114,11 @@ try
             TradeName = "SOURCE VERIFIED TRADERS",
             LegalName = "SOURCE VERIFIED TRADERS PRIVATE LIMITED"
         });
-    if (profileRecovered.ClientName != "SOURCE VERIFIED TRADERS" ||
+    if (!profileRecovered.ClientName.Equals("Source Verified Traders", StringComparison.Ordinal) ||
         profileRecovered.TradeName != "SOURCE VERIFIED TRADERS" ||
         profileRecovered.LegalName != "SOURCE VERIFIED TRADERS PRIVATE LIMITED" ||
         store.GetById(placeholderClient.Id)?.AdditionalGstins?.Single() != "27ABCDE1234F1Z5")
-        throw new Exception("Source name recovery lost business identity or additional GSTIN.");
+        throw new Exception($"Source name recovery lost business identity or additional GSTIN: ClientName={profileRecovered.ClientName}; TradeName={profileRecovered.TradeName}; LegalName={profileRecovered.LegalName}; Additional={string.Join(",", store.GetById(placeholderClient.Id)?.AdditionalGstins ?? [])}.");
 
     var manualClient = store.Save(new ClientProfile
     {
