@@ -1505,8 +1505,12 @@ public sealed partial class GstinProfileLookupService :
         return new GstinProfileLookupResult
         {
             Gstin = gstin,
-            LegalName = reader.GetString(0),
-            TradeName = reader.GetString(1),
+            // Old caches may contain a GSTIN-as-business-name fallback.
+            // Do not allow those placeholders to outrank actual source names.
+            LegalName = GstClientNameRecognitionPolicy.HasSourceBusinessName(reader.GetString(0), gstin)
+                ? reader.GetString(0) : string.Empty,
+            TradeName = GstClientNameRecognitionPolicy.HasSourceBusinessName(reader.GetString(1), gstin)
+                ? reader.GetString(1) : string.Empty,
             Pan = reader.GetString(2),
             State = reader.GetString(3),
             SourceType = reader.GetString(4),
