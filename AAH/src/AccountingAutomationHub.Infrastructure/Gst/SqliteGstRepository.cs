@@ -225,6 +225,9 @@ public sealed class SqliteGstRepository : IGstRepository
             command.ExecuteNonQuery();
         }
         command.CommandText = """
+            UPDATE Gstr3bReturns SET Gstin=COALESCE(
+                (SELECT Gstin FROM Clients WHERE Clients.Id=Gstr3bReturns.ClientId),'')
+            WHERE Gstin='';
             UPDATE GstLedgerPeriods SET Gstin=COALESCE(
                 (SELECT Gstin FROM Clients WHERE Clients.Id=GstLedgerPeriods.ClientId),'')
             WHERE Gstin='';
