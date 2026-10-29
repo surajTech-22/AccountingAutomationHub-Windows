@@ -181,7 +181,8 @@ public sealed class GstPortalAutoImportService(
                     existing.SourcePath,
                     client.Id,
                     client.FinancialYear,
-                    client.Gstin);
+                    client.AdditionalGstins is { Count: > 0 }
+                        ? string.Empty : client.Gstin);
                 if (!MatchesClient(parsed.Gstin, client.Gstin) ||
                     !IsPeriodInFinancialYear(parsed.PeriodKey, client.FinancialYear) ||
                     !parsed.PeriodKey.Equals(existing.PeriodKey, StringComparison.OrdinalIgnoreCase))
@@ -258,7 +259,8 @@ public sealed class GstPortalAutoImportService(
                     candidate.Path,
                     client.Id,
                     client.FinancialYear,
-                    client.Gstin);
+                    client.AdditionalGstins is { Count: > 0 }
+                        ? string.Empty : client.Gstin);
 
                 // Files for another registration under this same client
                 // must not be marked Ignored or cached as this registration.
