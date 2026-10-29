@@ -1154,6 +1154,26 @@ public sealed class BackgroundAutomationService : IDisposable
         return registration;
     }
 
+    private static void EnsureClientGstinFolders(
+        AutomationFolderRegistration registration, ClientProfile client)
+    {
+        if (client.AdditionalGstins is not { Count: > 0 } ||
+            !Directory.Exists(registration.FolderPath))
+            return;
+
+        // Multi-GSTIN clients get predictable registration folders. Legacy
+        // single-GSTIN clients retain their current GST folder layout.
+        foreach (var gstin in new[] { client.Gstin }.Concat(client.AdditionalGstins)
+                     .Select(NormalizeGstin).Where(value => value.Length == 15)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var root = Path.Combine(registration.FolderPath, "GST", gstin);
+            Directory.CreateDirectory(Path.Combine(root, "GSTR-3B"));
+            Directory.CreateDirectory(Path.Combine(root, "Electronic Credit Ledger"));
+            Directory.CreateDirectory(Path.Combine(root, "Electronic Cash Ledger"));
+        }
+    }
+
     private void ScheduleRegisteredClientGstBootstrap(
         AutomationFolderRegistration registration,
         long clientId,
@@ -1172,6 +1192,7 @@ public sealed class BackgroundAutomationService : IDisposable
             {
                 var client = _clientRepository.GetById(clientId);
                 if (client is null || NormalizeGstin(client.Gstin).Length != 15) return;
+                EnsureClientGstinFolders(registration, client);
 
                 var eReturnsRoot = _settings.Get(EReturnsRootContext.PreferenceKey).Trim();
                 if (!force && !_gstPortalAutoImportService.HasPotentialChanges(
