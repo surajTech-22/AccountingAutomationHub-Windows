@@ -18,6 +18,10 @@ public sealed class ClientProfile
 
     public string Gstin { get; set; } = string.Empty;
 
+    // Null preserves saved registrations on legacy single-GSTIN update paths.
+    // Non-null explicitly replaces only the secondary GSTIN list.
+    public IReadOnlyList<string>? AdditionalGstins { get; set; }
+
     public string Pan { get; set; } = string.Empty;
 
     public string State { get; set; } = string.Empty;
@@ -75,6 +79,7 @@ public sealed class ClientProfile
             LegalNameIsManual = LegalNameIsManual,
             TradeNameIsManual = TradeNameIsManual,
             Gstin = Gstin,
+            AdditionalGstins = AdditionalGstins?.ToArray(),
             Pan = Pan,
             State = State,
             FinancialYear = FinancialYear,
