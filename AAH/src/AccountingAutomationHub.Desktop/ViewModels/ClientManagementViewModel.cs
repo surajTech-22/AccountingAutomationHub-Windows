@@ -86,6 +86,7 @@ public sealed partial class ClientManagementViewModel :
     private string _legalName = string.Empty;
     private string _tradeName = string.Empty;
     private string _gstin = string.Empty;
+    private string _additionalGstinsText = string.Empty;
     private string _pan = string.Empty;
     private string _state = string.Empty;
     private string _financialYear = string.Empty;
@@ -708,6 +709,14 @@ public sealed partial class ClientManagementViewModel :
         }
     }
 
+    // One secondary GSTIN per line. The primary GSTIN remains the existing
+    // identity and compatibility authority for older accounting workflows.
+    public string AdditionalGstinsText
+    {
+        get => _additionalGstinsText;
+        set => SetProperty(ref _additionalGstinsText, value ?? string.Empty);
+    }
+
     public string Pan
     {
         get => _pan;
@@ -912,8 +921,9 @@ public sealed partial class ClientManagementViewModel :
 
     public int VisibleCount => Clients.Count;
 
-    public int GstinCount => _allClients.Count(client =>
-        !client.IsArchived && client.Gstin.Length == 15);
+    public int GstinCount => _allClients.Where(client => !client.IsArchived)
+        .Sum(client => (client.Gstin.Length == 15 ? 1 : 0) +
+            (client.AdditionalGstins?.Count ?? 0));
 
     public int NeedsProfileCount => _allClients.Count(client =>
         !client.IsArchived &&
@@ -2280,6 +2290,7 @@ public sealed partial class ClientManagementViewModel :
                Contains(client.LegalName, searchText) ||
                Contains(client.TradeName, searchText) ||
                Contains(client.Gstin, searchText) ||
+               (client.AdditionalGstins?.Any(value => Contains(value, searchText)) ?? false) ||
                Contains(client.Pan, searchText) ||
                Contains(client.State, searchText);
     }
@@ -2800,6 +2811,7 @@ public sealed partial class ClientManagementViewModel :
             LegalName = string.Empty;
             TradeName = string.Empty;
             Gstin = string.Empty;
+            AdditionalGstinsText = string.Empty;
             Pan = string.Empty;
             State = string.Empty;
             FinancialYear = GetDefaultFinancialYear();
@@ -2854,6 +2866,7 @@ public sealed partial class ClientManagementViewModel :
             LegalName = client.LegalName;
             TradeName = client.TradeName;
             Gstin = client.Gstin;
+            AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
             Pan = client.Pan;
             State = client.State;
             FinancialYear = client.FinancialYear;
@@ -2993,6 +3006,7 @@ public sealed partial class ClientManagementViewModel :
                     LegalNameIsManual = _legalNameIsManual,
                     TradeNameIsManual = _tradeNameIsManual,
                     Gstin = normalizedGstin,
+                    AdditionalGstins = ParseAdditionalGstins(AdditionalGstinsText),
                     Pan = normalizedPan,
                     State = State,
                     FinancialYear = normalizedFinancialYear,
@@ -3107,6 +3121,7 @@ public sealed partial class ClientManagementViewModel :
             LegalName = source.LegalName;
             TradeName = source.TradeName;
             Gstin = source.Gstin;
+            AdditionalGstinsText = string.Join(Environment.NewLine, source.AdditionalGstins ?? []);
             Pan = source.Pan;
             State = source.State;
             FinancialYear = NextFinancialYear(source.FinancialYear);
@@ -3297,6 +3312,25 @@ public sealed partial class ClientManagementViewModel :
         }
 
         var normalizedPan = NormalizeTaxNumber(Pan);
+        var additions = ParseAdditionalGstins(AdditionalGstinsText);
+        if (additions.Count > 0 && normalizedGstin.Length != 15)
+            return "Enter the primary GSTIN before adding secondary registrations.";
+        if (additions.Count > 100)
+            return "A client can have at most 100 additional GSTIN registrations.";
+        var expectedPan = normalizedGstin.Length == 15 ? DerivePan(normalizedGstin) : normalizedPan;
+        if (expectedPan.Length == 10 && normalizedPan.Length > 0 &&
+            !normalizedPan.Equals(expectedPan, StringComparison.OrdinalIgnoreCase))
+            return "Client PAN must match the PAN embedded in the primary GSTIN.";
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in additions)
+        {
+            if (!GstinRegex().IsMatch(extra))
+                return $"Invalid additional GSTIN: {extra}. Enter one 15-character GSTIN per line.";
+            if (extra.Equals(normalizedGstin, StringComparison.OrdinalIgnoreCase) || !seen.Add(extra))
+                return $"Duplicate registration: {extra}. Each GSTIN must be unique.";
+            if (expectedPan.Length == 10 && !DerivePan(extra).Equals(expectedPan, StringComparison.OrdinalIgnoreCase))
+                return $"Additional GSTIN {extra} belongs to a different PAN. Register it under the correct client.";
+        }
 
         if (normalizedPan.Length > 0 &&
             !PanRegex().IsMatch(normalizedPan))
@@ -3731,6 +3765,14 @@ public sealed partial class ClientManagementViewModel :
             _ => string.Empty
         };
     }
+
+    private static IReadOnlyList<string> ParseAdditionalGstins(string text) =>
+        (text ?? string.Empty)
+            .Split(['\\r', '\\n', ',', ';', ' ', '\\t'],
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeTaxNumber)
+            .Where(value => value.Length > 0)
+            .ToArray();
 
     private static string NormalizeTaxNumber(
         string value) =>
