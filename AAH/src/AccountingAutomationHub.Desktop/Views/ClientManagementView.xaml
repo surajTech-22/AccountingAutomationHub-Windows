@@ -361,10 +361,10 @@
                         </DataGridTemplateColumn.Header>
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Gstin}"
+                                <TextBlock Text="{Binding GstinRegistrationDisplay}"
                                            VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis"
-                                           ToolTip="{Binding Gstin}" />
+                                           ToolTip="{Binding GstinRegistrationTooltip}" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
