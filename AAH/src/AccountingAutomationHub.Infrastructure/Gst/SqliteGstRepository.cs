@@ -10,12 +10,18 @@ public sealed class SqliteGstRepository : IGstRepository
 {
     private readonly string _connectionString;
 
-    public SqliteGstRepository()
+    public SqliteGstRepository() : this(ApplicationDataPaths.DatabasePath) { }
+
+    // Disposable isolated SQLite target for migration and multi-registration
+    // regression tests. Production still uses the existing database path.
+    public SqliteGstRepository(string databasePath)
     {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("Database path is required.", nameof(databasePath));
         ApplicationDataPaths.EnsureFolders();
         _connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = ApplicationDataPaths.DatabasePath,
+            DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Private
         }.ToString();
