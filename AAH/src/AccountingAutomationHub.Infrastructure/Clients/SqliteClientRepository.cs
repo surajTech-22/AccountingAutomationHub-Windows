@@ -93,6 +93,18 @@ public sealed class SqliteClientRepository :
                 IX_Clients_Gstin
             ON Clients(Gstin COLLATE NOCASE);
 
+            CREATE TABLE IF NOT EXISTS ClientAdditionalGstins
+            (
+                ClientId    INTEGER NOT NULL,
+                Gstin       TEXT NOT NULL COLLATE NOCASE,
+                CreatedUtc  TEXT NOT NULL,
+                PRIMARY KEY (ClientId, Gstin),
+                FOREIGN KEY (ClientId) REFERENCES Clients(Id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS IX_ClientAdditionalGstins_Gstin
+            ON ClientAdditionalGstins(Gstin COLLATE NOCASE);
+
             CREATE TABLE IF NOT EXISTS AppSettings
             (
                 SettingKey      TEXT PRIMARY KEY COLLATE NOCASE,
@@ -281,6 +293,9 @@ public sealed class SqliteClientRepository :
             clients.Add(client);
         }
 
+        reader.Close();
+        foreach (var client in clients)
+            client.AdditionalGstins = ReadAdditionalGstins(connection, client.Id);
         return clients;
     }
 
@@ -351,6 +366,7 @@ public sealed class SqliteClientRepository :
             client.Id ==
             currentClientId.Value;
 
+        client.AdditionalGstins = ReadAdditionalGstins(connection, client.Id);
         return client;
     }
 
@@ -426,7 +442,8 @@ public sealed class SqliteClientRepository :
             ReadClient(reader);
 
         client.IsCurrent = true;
-
+        reader.Close();
+        client.AdditionalGstins = ReadAdditionalGstins(connection, client.Id);
         return client;
     }
 
@@ -438,6 +455,12 @@ public sealed class SqliteClientRepository :
 
         var normalized =
             Normalize(client);
+
+        // Only explicit client-editor edits replace the registrations.
+        // All legacy/background updates preserve the existing secondary list.
+        var additional = normalized.AdditionalGstins;
+        if (additional is not null)
+            ValidateGstinRegistrationSet(normalized, additional);
 
         using var connection =
             OpenConnection();
@@ -596,8 +619,31 @@ public sealed class SqliteClientRepository :
                 now;
         }
 
+        if (additional is not null)
+        {
+            using var remove = connection.CreateCommand();
+            remove.Transaction = transaction;
+            remove.CommandText =
+                "DELETE FROM ClientAdditionalGstins WHERE ClientId=$ClientId;";
+            remove.Parameters.AddWithValue("$ClientId", normalized.Id);
+            remove.ExecuteNonQuery();
+            foreach (var registration in additional
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                using var insertGstin = connection.CreateCommand();
+                insertGstin.Transaction = transaction;
+                insertGstin.CommandText =
+                    "INSERT INTO ClientAdditionalGstins (ClientId,Gstin,CreatedUtc) VALUES ($ClientId,$Gstin,$Utc);";
+                insertGstin.Parameters.AddWithValue("$ClientId", normalized.Id);
+                insertGstin.Parameters.AddWithValue("$Gstin", registration);
+                insertGstin.Parameters.AddWithValue("$Utc", now.ToString("O"));
+                insertGstin.ExecuteNonQuery();
+            }
+        }
+
         transaction.Commit();
 
+        normalized.AdditionalGstins = additional ?? ReadAdditionalGstins(connection, normalized.Id);
         return normalized;
     }
 
@@ -1031,6 +1077,41 @@ public sealed class SqliteClientRepository :
         return SqliteConnectionPolicy.Open(_connectionString);
     }
 
+    private static string[] ReadAdditionalGstins(SqliteConnection connection, long clientId)
+    {
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT Gstin FROM ClientAdditionalGstins WHERE ClientId=$ClientId ORDER BY Gstin;";
+        read.Parameters.AddWithValue("$ClientId", clientId);
+        using var reader = read.ExecuteReader();
+        var values = new List<string>();
+        while (reader.Read()) values.Add(reader.GetString(0));
+        return values.ToArray();
+    }
+
+    private static void ValidateGstinRegistrationSet(ClientProfile client, IReadOnlyList<string> registrations)
+    {
+        if (registrations.Count > 100)
+            throw new InvalidOperationException("A client cannot have more than 100 additional GSTIN registrations.");
+        var primary = client.Gstin;
+        if (registrations.Count > 0 && primary.Length != 15)
+            throw new InvalidOperationException("Save a primary GSTIN before adding secondary registrations.");
+        var expectedPan = primary.Length == 15 ? primary.Substring(2, 10) : client.Pan;
+        if (client.Pan.Length > 0 && expectedPan.Length > 0 &&
+            !client.Pan.Equals(expectedPan, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Primary GSTIN and client PAN do not match.");
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in registrations)
+        {
+            if (value.Length != 15 || !char.IsDigit(value[0]) || !char.IsDigit(value[1]) ||
+                !value.Skip(2).All(char.IsLetterOrDigit))
+                throw new InvalidOperationException("Every additional GSTIN must contain 15 alphanumeric characters starting with a State code.");
+            if (!known.Add(value) || value.Equals(primary, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The same GSTIN cannot be registered more than once for a client.");
+            if (expectedPan.Length == 10 && !value.Substring(2, 10).Equals(expectedPan, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("All GSTINs for one client must belong to the same PAN.");
+        }
+    }
+
     private static ClientProfile Normalize(
         ClientProfile source) =>
         new()
@@ -1055,6 +1136,10 @@ public sealed class SqliteClientRepository :
                         source.Gstin.Where(
                             char.IsLetterOrDigit))
                     .ToUpperInvariant(),
+            AdditionalGstins = source.AdditionalGstins?.Select(value =>
+                    string.Concat((value ?? string.Empty).Where(char.IsLetterOrDigit))
+                        .ToUpperInvariant())
+                .ToArray(),
             Pan =
                 string.Concat(
                         source.Pan.Where(
