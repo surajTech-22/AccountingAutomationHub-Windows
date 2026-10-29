@@ -2935,7 +2935,8 @@ public sealed partial class ClientManagementViewModel :
 
         var normalizedGstin = NormalizeTaxNumber(Gstin);
 
-        if (ClientName.Trim().Length == 0 && normalizedGstin.Length == 15)
+        if (normalizedGstin.Length == 15 &&
+            GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
         {
             CancelLookup();
             try
@@ -2952,7 +2953,7 @@ public sealed partial class ClientManagementViewModel :
                 _isApplyingGstinData = true;
                 try
                 {
-                    if (discoveredClientName.Length > 0)
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(discoveredClientName, normalizedGstin))
                         ClientName = AccountingText.DisplayName(discoveredClientName);
                     if (profile.LegalName.Length > 0 && LegalName.Length == 0)
                     {
@@ -2977,11 +2978,17 @@ public sealed partial class ClientManagementViewModel :
                 LookupStatusText = $"GST profile name lookup could not complete: {exception.Message}";
             }
 
-            if (ClientName.Trim().Length == 0)
+            if (GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
             {
-                LookupStatusText = "GSTIN was not found in the available GST JSON/profile data. Enter the client Name manually to continue.";
-                StatusText = "Client Name is required because the GSTIN could not be resolved from available GST JSON/profile data.";
-                return;
+                LookupStatusText = "No legal or trade name was found in the available GST source records. The GSTIN can remain as a temporary Client Name until verified name evidence or a manual name is provided.";
+                if (ClientName.Trim().Length == 0)
+                {
+                    StatusText = "Client Name is required because GST source name recognition did not return a business name.";
+                    return;
+                }
+                // Preserve the preexisting GSTIN-as-name client workflow if
+                // the operator already has such a client. A real source name
+                // can replace this placeholder later without altering vouchers.
             }
         }
 
@@ -3434,7 +3441,11 @@ public sealed partial class ClientManagementViewModel :
                 var discoveredClientName = result.TradeName.Length > 0
                     ? result.TradeName
                     : result.LegalName;
-                if (discoveredClientName.Length > 0 && ClientName.Trim().Length == 0)
+                // Existing linked clients may have their GSTIN saved as the
+                // Client Name when a source contained no legal/trade name.
+                // Treat that as unresolved, without replacing user names.
+                if (GstClientNameRecognitionPolicy.HasSourceBusinessName(discoveredClientName, normalizedGstin) &&
+                    GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
                 {
                     ClientName = AccountingText.DisplayName(discoveredClientName);
                 }

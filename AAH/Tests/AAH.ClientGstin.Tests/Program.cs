@@ -81,6 +81,60 @@ try
         store.GetById(created.Id)?.Gstin != "29ABCDE1234F1Z5")
         throw new Exception("Explicit secondary clear changed the primary GSTIN.");
 
+    // AAH previously saved some GSTIN-only clients with the GSTIN as
+    // Client Name. Source name recognition must repair those placeholders
+    // without modifying a manually entered business name or GSTIN list.
+    var unresolvedGstin = "29ABCDE1234F1Z5";
+    if (!GstClientNameRecognitionPolicy.IsUnresolvedName(unresolvedGstin, unresolvedGstin) ||
+        !GstClientNameRecognitionPolicy.IsUnresolvedName(" 29-ABCDE1234F1Z5 ", unresolvedGstin) ||
+        GstClientNameRecognitionPolicy.IsUnresolvedName("Registered Business", unresolvedGstin) ||
+        GstClientNameRecognitionPolicy.HasSourceBusinessName(unresolvedGstin, unresolvedGstin) ||
+        GstClientNameRecognitionPolicy.HasSourceBusinessName("ABCDE1234F", unresolvedGstin) ||
+        !GstClientNameRecognitionPolicy.HasSourceBusinessName("SOURCE VERIFIED TRADERS", unresolvedGstin))
+        throw new Exception("Client-name source recognition accepted GSTIN placeholders or rejected valid names.");
+
+    var placeholderClient = store.Save(new ClientProfile
+    {
+        ClientCode = "GST-NAME-RECOVER",
+        ClientName = unresolvedGstin,
+        Gstin = unresolvedGstin,
+        Pan = "ABCDE1234F",
+        FinancialYear = "2025-26",
+        AdditionalGstins = ["27ABCDE1234F1Z5"]
+    });
+    store.ApplyImportedGstProfile(placeholderClient.Id,
+        new GstinProfileLookupResult { Gstin = unresolvedGstin, TradeName = unresolvedGstin });
+    if (store.GetById(placeholderClient.Id)!.ClientName != unresolvedGstin)
+        throw new Exception("GSTIN placeholder presented as authoritative trade name.");
+
+    var profileRecovered = store.ApplyImportedGstProfile(placeholderClient.Id,
+        new GstinProfileLookupResult
+        {
+            Gstin = unresolvedGstin,
+            TradeName = "SOURCE VERIFIED TRADERS",
+            LegalName = "SOURCE VERIFIED TRADERS PRIVATE LIMITED"
+        });
+    if (!profileRecovered.ClientName.Equals("Source Verified Traders", StringComparison.Ordinal) ||
+        profileRecovered.TradeName != "SOURCE VERIFIED TRADERS" ||
+        profileRecovered.LegalName != "SOURCE VERIFIED TRADERS PRIVATE LIMITED" ||
+        store.GetById(placeholderClient.Id)?.AdditionalGstins?.Single() != "27ABCDE1234F1Z5")
+        throw new Exception($"Source name recovery lost business identity or additional GSTIN: ClientName={profileRecovered.ClientName}; TradeName={profileRecovered.TradeName}; LegalName={profileRecovered.LegalName}; Additional={string.Join(",", store.GetById(placeholderClient.Id)?.AdditionalGstins ?? [])}.");
+
+    var manualClient = store.Save(new ClientProfile
+    {
+        ClientCode = "GST-NAME-MANUAL",
+        ClientName = "MY HAND-ENTERED COMPANY",
+        Gstin = unresolvedGstin,
+        Pan = "ABCDE1234F",
+        FinancialYear = "2024-25",
+        AdditionalGstins = ["27ABCDE1234F1Z5"]
+    });
+    store.ApplyImportedGstProfile(manualClient.Id,
+        new GstinProfileLookupResult { Gstin = unresolvedGstin, TradeName = "Different GST Source Name" });
+    if (store.GetById(manualClient.Id)?.ClientName != "MY HAND-ENTERED COMPANY")
+        throw new Exception("GST profile lookup replaced user's manual Client Name.");
+    Console.WriteLine("PASS: 4/4 source-backed Client Name recovery and manual-name preservation checks.");
+
     Console.WriteLine("PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.");
 }
 finally

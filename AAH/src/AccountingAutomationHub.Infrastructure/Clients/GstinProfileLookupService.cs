@@ -1432,34 +1432,39 @@ public sealed partial class GstinProfileLookupService :
                     ELSE CreatedUtc
                 END DESC,
                 Id DESC
-            LIMIT 1;
+            LIMIT 30;
             """;
         command.Parameters.AddWithValue("$Gstin", gstin);
 
         using var reader = command.ExecuteReader();
 
-        if (!reader.Read())
+        // Legacy imports may have stored the raw GSTIN in CompanyName.
+        // Those rows are not name evidence. Inspect older source-backed rows
+        // instead of returning the first placeholder and poisoning the cache.
+        while (reader.Read())
         {
-            return;
+            var sourceName = reader.GetString(0);
+            if (!GstClientNameRecognitionPolicy.HasSourceBusinessName(sourceName, gstin))
+                continue;
+            var derived = BuildDerived(gstin);
+            var updatedUtc = DateTime.TryParse(reader.GetString(2), out var parsed)
+                ? parsed
+                : DateTime.MinValue;
+
+            candidates.Add((
+                new GstinProfileLookupResult
+                {
+                    Gstin = gstin,
+                    TradeName = sourceName,
+                    Pan = derived.Pan,
+                    State = derived.State,
+                    SourceType = "Saved accounting data",
+                    SourcePath = reader.GetString(1),
+                    SourceModifiedUtc = updatedUtc
+                },
+                updatedUtc));
+            break;
         }
-
-        var derived = BuildDerived(gstin);
-        var updatedUtc = DateTime.TryParse(reader.GetString(2), out var parsed)
-            ? parsed
-            : DateTime.MinValue;
-
-        candidates.Add((
-            new GstinProfileLookupResult
-            {
-                Gstin = gstin,
-                TradeName = reader.GetString(0),
-                Pan = derived.Pan,
-                State = derived.State,
-                SourceType = "Saved accounting data",
-                SourcePath = reader.GetString(1),
-                SourceModifiedUtc = updatedUtc
-            },
-            updatedUtc));
     }
 
     private GstinProfileLookupResult? ReadCached(string gstin)
@@ -1500,8 +1505,12 @@ public sealed partial class GstinProfileLookupService :
         return new GstinProfileLookupResult
         {
             Gstin = gstin,
-            LegalName = reader.GetString(0),
-            TradeName = reader.GetString(1),
+            // Old caches may contain a GSTIN-as-business-name fallback.
+            // Do not allow those placeholders to outrank actual source names.
+            LegalName = GstClientNameRecognitionPolicy.HasSourceBusinessName(reader.GetString(0), gstin)
+                ? reader.GetString(0) : string.Empty,
+            TradeName = GstClientNameRecognitionPolicy.HasSourceBusinessName(reader.GetString(1), gstin)
+                ? reader.GetString(1) : string.Empty,
             Pan = reader.GetString(2),
             State = reader.GetString(3),
             SourceType = reader.GetString(4),

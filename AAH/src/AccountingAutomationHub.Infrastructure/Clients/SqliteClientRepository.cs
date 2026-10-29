@@ -672,18 +672,15 @@ public sealed class SqliteClientRepository :
 
         var preferredClientName = AccountingText.DisplayName(
             profile.TradeName.Length > 0 ? profile.TradeName : profile.LegalName);
-        var normalizedClientIdentity = string.Concat(client.ClientName.Where(char.IsLetterOrDigit)).ToUpperInvariant();
-        var normalizedClientGstin = string.Concat(client.Gstin.Where(char.IsLetterOrDigit)).ToUpperInvariant();
-        if (preferredClientName.Length > 0 &&
-            (client.ClientName.Trim().Length == 0 ||
-             (normalizedClientGstin.Length == 15 && normalizedClientIdentity == normalizedClientGstin)))
+        if (GstClientNameRecognitionPolicy.HasSourceBusinessName(preferredClientName, client.Gstin) &&
+            GstClientNameRecognitionPolicy.IsUnresolvedName(client.ClientName, client.Gstin))
         {
             client.ClientName = preferredClientName;
             changed = true;
         }
 
         if (!client.LegalNameIsManual &&
-            profile.LegalName.Length > 0 &&
+            GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.LegalName, client.Gstin) &&
             !client.LegalName.Equals(profile.LegalName, StringComparison.Ordinal))
         {
             client.LegalName = profile.LegalName;
@@ -691,7 +688,7 @@ public sealed class SqliteClientRepository :
         }
 
         if (!client.TradeNameIsManual &&
-            profile.TradeName.Length > 0 &&
+            GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.TradeName, client.Gstin) &&
             !client.TradeName.Equals(profile.TradeName, StringComparison.Ordinal))
         {
             client.TradeName = profile.TradeName;
