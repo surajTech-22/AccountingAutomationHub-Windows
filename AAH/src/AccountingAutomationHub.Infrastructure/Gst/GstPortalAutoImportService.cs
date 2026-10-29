@@ -84,7 +84,7 @@ public sealed class GstPortalAutoImportService(
             if (gstin.Equals(client.Gstin, StringComparison.OrdinalIgnoreCase)) continue;
             var registration = client.Clone();
             registration.Gstin = gstin;
-            registration.AdditionalGstins = [];
+            registration.AdditionalGstins = client.AdditionalGstins;
             yield return registration;
         }
     }
@@ -168,6 +168,7 @@ public sealed class GstPortalAutoImportService(
         var repaired = 0;
         foreach (var existing in repository.GetReturns(client.Id, client.FinancialYear))
         {
+            if (!Normalize(existing.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal)) continue;
             if (existing.RawFields.TryGetValue("nil_parser_version", out var version) &&
                 version.Equals("FIX44", StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -229,6 +230,7 @@ public sealed class GstPortalAutoImportService(
 
                 if (!force &&
                     existingState is not null &&
+                    Normalize(existingState.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal) &&
                     existingState.MetadataFingerprint.Equals(candidate.MetadataFingerprint, StringComparison.Ordinal))
                 {
                     continue;
@@ -237,6 +239,7 @@ public sealed class GstPortalAutoImportService(
                 var contentHash = SafeHash(candidate.Path);
                 if (!force &&
                     existingState is not null &&
+                    Normalize(existingState.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal) &&
                     existingState.ContentHash.Length > 0 &&
                     existingState.ContentHash.Equals(contentHash, StringComparison.OrdinalIgnoreCase))
                 {
@@ -257,8 +260,12 @@ public sealed class GstPortalAutoImportService(
                     client.FinancialYear,
                     client.Gstin);
 
-                if (!MatchesClient(record.Gstin, client.Gstin) ||
-                    !IsPeriodInFinancialYear(record.PeriodKey, client.FinancialYear))
+                // Files for another registration under this same client
+                // must not be marked Ignored or cached as this registration.
+                // Their owner processes them in its own import pass.
+                if (!MatchesClient(record.Gstin, client.Gstin))
+                    continue;
+                if (!IsPeriodInFinancialYear(record.PeriodKey, client.FinancialYear))
                 {
                     repository.UpsertPortalSourceState(ToState(
                         client, "GSTR-3B", candidate, record.PeriodKey,
@@ -353,6 +360,9 @@ public sealed class GstPortalAutoImportService(
                 Score = CandidateScore(path, client)
             })
             .Where(item => item.Score >= 20)
+            .Where(item => client.AdditionalGstins is not { Count: > 0 } ||
+                ledgerImportService.IsValidSourceForClient(
+                    item.Candidate.Path, client.Gstin, client.FinancialYear))
             .OrderByDescending(item => item.Score)
             .ThenByDescending(item => item.Candidate.WrittenUtc)
             .Take(40)
