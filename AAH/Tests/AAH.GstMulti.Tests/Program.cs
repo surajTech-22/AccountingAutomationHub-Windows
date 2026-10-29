@@ -2,6 +2,8 @@ using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Domain.Gst;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Infrastructure.Gst;
+using Microsoft.Data.Sqlite;
+using System.Reflection;
 
 var dir = Path.Combine(Path.GetTempPath(), "AAH-GST-MULTI-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(dir);
@@ -68,7 +70,64 @@ try
     if(gst.GetReturns(client.Id,fy).Count!=2 || gst.GetLedgerPeriods(client.Id,fy).Count!=2)
         throw new Exception("GST initialization lost per-GSTIN records.");
 
-    Console.WriteLine("PASS: 7/7 isolated multi-GSTIN return, ledger, reimport, and merged totals checks.");
+    // Simulate the exact legacy one-period-per-client indexes and an older
+    // ledger table without a Gstin column. The migration must retain existing
+    // records and then allow a second GSTIN for the same period.
+    var oldPath=Path.Combine(dir,"legacy.sqlite");
+    var oldClients=new SqliteClientRepository(oldPath);
+    oldClients.Initialize();
+    var oldClient=oldClients.Save(new ClientProfile {
+        ClientCode="LEGACY", ClientName="Existing Single-GSTIN",
+        FinancialYear=fy, Gstin=a, Pan="ABCDE1234F"
+    });
+    var oldStore=new SqliteGstRepository(oldPath);
+    oldStore.Initialize();
+    oldStore.ReplaceReturn(new Gstr3bReturnRecord {
+        ClientId=oldClient.Id, FinancialYear=fy, Gstin=a,PeriodKey="202607",
+        PeriodLabel="July 2026",OutwardIgst=33m,SourcePath="old-return.pdf",
+        ImportedUtc=DateTime.UtcNow
+    });
+    oldStore.ReplaceLedgerPeriods(oldClient.Id,fy,"Electronic Credit Ledger",
+        [new GstLedgerPeriodBalance {
+            ClientId=oldClient.Id,FinancialYear=fy,Gstin=a,
+            LedgerType="Electronic Credit Ledger",PeriodKey="202607",
+            ClosingIgst=50m,SourcePath="legacy-ledger.csv"
+        }],a);
+    using(var db=new SqliteConnection(new SqliteConnectionStringBuilder{ DataSource=oldPath }.ToString()))
+    {
+        db.Open();
+        using var command=db.CreateCommand();
+        command.CommandText = """
+            DROP INDEX IF EXISTS UX_Gstr3bReturns_ClientFyGstinPeriod;
+            CREATE UNIQUE INDEX UX_Gstr3bReturns_ClientFyPeriod
+                ON Gstr3bReturns(ClientId,FinancialYear,PeriodKey);
+            DROP INDEX IF EXISTS UX_GstLedgerPeriods_ClientFyGstinTypePeriod;
+            ALTER TABLE GstLedgerPeriods DROP COLUMN Gstin;
+            CREATE UNIQUE INDEX UX_GstLedgerPeriods_ClientFyTypePeriod
+                ON GstLedgerPeriods(ClientId,FinancialYear,LedgerType,PeriodKey);
+            """;
+        command.ExecuteNonQuery();
+    }
+    var migrate=typeof(SqliteGstRepository).GetMethod(
+        "InitializeCore",BindingFlags.Instance|BindingFlags.NonPublic)
+        ?? throw new Exception("GST repository migration method unavailable.");
+    try { migrate.Invoke(oldStore,null); }
+    catch (TargetInvocationException ex) { throw ex.InnerException ?? ex; }
+    var migratedReturns=oldStore.GetReturns(oldClient.Id,fy);
+    var migratedLedgers=oldStore.GetLedgerPeriods(oldClient.Id,fy);
+    if(migratedReturns.Count!=1 || migratedReturns[0].OutwardIgst!=33m ||
+        migratedLedgers.Count!=1 || migratedLedgers[0].ClosingIgst!=50m ||
+        migratedLedgers[0].Gstin!=a)
+        throw new Exception("Legacy GST table migration lost existing return or ledger rows.");
+    oldStore.ReplaceReturn(new Gstr3bReturnRecord {
+        ClientId=oldClient.Id,FinancialYear=fy,Gstin=b,PeriodKey="202607",
+        PeriodLabel="July 2026",OutwardIgst=44m,SourcePath="new-return.pdf",
+        ImportedUtc=DateTime.UtcNow
+    });
+    if(oldStore.GetReturns(oldClient.Id,fy).Count!=2)
+        throw new Exception("Migrated GST index still blocks a second registration.");
+
+    Console.WriteLine("PASS: 9/9 multi-GSTIN storage, legacy migration, and merged GST module checks.");
 }
 finally
 {
