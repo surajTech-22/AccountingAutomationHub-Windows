@@ -618,11 +618,28 @@ public sealed class SqliteGstRepository : IGstRepository
     }
 
     public void ReplaceLedgerPeriods(
+        long clientId, string financialYear, string ledgerType,
+        IEnumerable<GstLedgerPeriodBalance> periods)
+    {
+        // Preserve the existing four-parameter IGstRepository contract for
+        // all old consumers. Legacy single-GSTIN calls resolve their normal
+        // primary registration; multi-GSTIN flows use the explicit overload.
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Gstin FROM Clients WHERE Id=$ClientId LIMIT 1;";
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        var primaryGstin = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
+        foreach (var row in periods)
+            row.Gstin = primaryGstin.Trim().ToUpperInvariant();
+        ReplaceLedgerPeriods(clientId, financialYear, ledgerType, periods, primaryGstin);
+    }
+
+    public void ReplaceLedgerPeriods(
         long clientId,
         string financialYear,
         string ledgerType,
         IEnumerable<GstLedgerPeriodBalance> periods,
-        string gstin = "")
+        string gstin)
     {
         gstin = gstin.Trim().ToUpperInvariant();
         using var connection = OpenConnection();
