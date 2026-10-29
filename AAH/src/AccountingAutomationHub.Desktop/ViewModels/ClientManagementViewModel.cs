@@ -3768,7 +3768,7 @@ public sealed partial class ClientManagementViewModel :
 
     private static IReadOnlyList<string> ParseAdditionalGstins(string text) =>
         (text ?? string.Empty)
-            .Split(['\\r', '\\n', ',', ';', ' ', '\\t'],
+            .Split(['\r', '\n', ',', ';', ' ', '\t'],
                 StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Select(NormalizeTaxNumber)
             .Where(value => value.Length > 0)
