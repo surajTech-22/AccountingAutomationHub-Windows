@@ -202,19 +202,25 @@ public sealed class GstReconciliationService(
                 StringComparer.OrdinalIgnoreCase)
             .Select(group =>
             {
+                // Apply the quarterly-over-monthly preference *inside each
+                // registration*, not across GSTINs. One quarterly registration
+                // must never suppress another registration's monthly return.
                 IReadOnlyList<Gstr3bReturnRecord> selected = group
+                    .GroupBy(row => row.Gstin, StringComparer.OrdinalIgnoreCase)
+                    .SelectMany(registration =>
+                    {
+                        var values = registration.OrderBy(row => row.ImportedUtc).ToArray();
+                        if (filingFrequency.Contains("Quarter", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var quarterly = values.Where(row =>
+                                row.FilingFrequency.Contains("Quarter", StringComparison.OrdinalIgnoreCase))
+                                .ToArray();
+                            if (quarterly.Length > 0) return quarterly;
+                        }
+                        return values;
+                    })
                     .OrderBy(row => row.ImportedUtc)
                     .ToArray();
-                if (filingFrequency.Contains("Quarter", StringComparison.OrdinalIgnoreCase))
-                {
-                    var quarterly = selected
-                        .Where(row => row.FilingFrequency.Contains("Quarter", StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-                    if (quarterly.Length > 0)
-                    {
-                        selected = quarterly;
-                    }
-                }
 
                 var identity = selected.Last();
                 var periodKey = group.Key;
@@ -310,6 +316,18 @@ public sealed class GstReconciliationService(
                     .ToArray();
                 var first = ordered.First();
                 var last = ordered.Last();
+                // Each GSTIN has an independent opening and closing ledger
+                // position. Summing the first registration's opening with the
+                // last registration's closing would silently lose balances.
+                var eachRegistration = ordered
+                    .GroupBy(row => row.Gstin, StringComparer.OrdinalIgnoreCase)
+                    .Select(registration =>
+                    {
+                        var sorted = registration.OrderBy(row => row.PeriodKey, StringComparer.Ordinal)
+                            .ThenBy(row => row.ImportedUtc).ToArray();
+                        return (First: sorted.First(), Last: sorted.Last());
+                    })
+                    .ToArray();
                 var reportingKey = NormalizeReportingKey(last.PeriodKey, filingFrequency);
                 return new GstLedgerPeriodBalance
                 {
@@ -318,14 +336,14 @@ public sealed class GstReconciliationService(
                     LedgerType = first.LedgerType,
                     PeriodKey = reportingKey,
                     PeriodLabel = GstJournalGenerationService.PeriodLabel(reportingKey, filingFrequency),
-                    OpeningIgst = first.OpeningIgst,
-                    OpeningCgst = first.OpeningCgst,
-                    OpeningSgst = first.OpeningSgst,
-                    OpeningCess = first.OpeningCess,
-                    ClosingIgst = last.ClosingIgst,
-                    ClosingCgst = last.ClosingCgst,
-                    ClosingSgst = last.ClosingSgst,
-                    ClosingCess = last.ClosingCess,
+                    OpeningIgst = eachRegistration.Sum(registration => registration.First.OpeningIgst),
+                    OpeningCgst = eachRegistration.Sum(registration => registration.First.OpeningCgst),
+                    OpeningSgst = eachRegistration.Sum(registration => registration.First.OpeningSgst),
+                    OpeningCess = eachRegistration.Sum(registration => registration.First.OpeningCess),
+                    ClosingIgst = eachRegistration.Sum(registration => registration.Last.ClosingIgst),
+                    ClosingCgst = eachRegistration.Sum(registration => registration.Last.ClosingCgst),
+                    ClosingSgst = eachRegistration.Sum(registration => registration.Last.ClosingSgst),
+                    ClosingCess = eachRegistration.Sum(registration => registration.Last.ClosingCess),
                     SourcePath = string.Join(
                         "; ",
                         ordered.Select(row => row.SourcePath)
