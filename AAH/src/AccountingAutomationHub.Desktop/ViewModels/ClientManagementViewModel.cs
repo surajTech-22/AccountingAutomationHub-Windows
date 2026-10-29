@@ -2980,9 +2980,15 @@ public sealed partial class ClientManagementViewModel :
 
             if (GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
             {
-                LookupStatusText = "No legal or trade name was found in GST source records. Enter a business name manually or provide a matching GSTR-3B/profile source.";
-                StatusText = "Client Name is required because the GSTIN could not be resolved from available GST JSON/profile data.";
-                return;
+                LookupStatusText = "No legal or trade name was found in the available GST source records. The GSTIN can remain as a temporary Client Name until verified name evidence or a manual name is provided.";
+                if (ClientName.Trim().Length == 0)
+                {
+                    StatusText = "Client Name is required because GST source name recognition did not return a business name.";
+                    return;
+                }
+                // Preserve the preexisting GSTIN-as-name client workflow if
+                // the operator already has such a client. A real source name
+                // can replace this placeholder later without altering vouchers.
             }
         }
 
