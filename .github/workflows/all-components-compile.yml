@@ -177,6 +177,8 @@ jobs:
             marker: 'PASS: 20/20 Bank OCR verifier safety scenarios.'
           - project: AAH.ClientGstin.Tests
             marker: 'PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.'
+          - project: AAH.GstMulti.Tests
+            marker: 'PASS: 7/7 isolated multi-GSTIN return, ledger, reimport, and merged totals checks.'
           - project: AAH.BankPdfRouting.Tests
             marker: 'PASS: 8/8 Bank PDF routing scenarios.'
           - project: AAH.BankXmlValidator.Tests
