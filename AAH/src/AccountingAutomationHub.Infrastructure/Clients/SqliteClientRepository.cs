@@ -15,15 +15,21 @@ public sealed class SqliteClientRepository :
 
     private readonly string _connectionString;
 
-    public SqliteClientRepository()
+    public SqliteClientRepository() : this(ApplicationDataPaths.DatabasePath) { }
+
+    // Test-only/diagnostic alternate database target. Production remains on
+    // the existing ApplicationDataPaths.DatabasePath by default.
+    public SqliteClientRepository(string databasePath)
     {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("A SQLite database path is required.", nameof(databasePath));
         ApplicationDataPaths.EnsureFolders();
 
         var builder =
             new SqliteConnectionStringBuilder
             {
                 DataSource =
-                    ApplicationDataPaths.DatabasePath,
+                    databasePath,
                 Mode =
                     SqliteOpenMode.ReadWriteCreate,
                 Cache =
