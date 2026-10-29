@@ -1690,11 +1690,13 @@ public sealed class BackgroundAutomationService : IDisposable
                 // Validation is deliberately performed against the source path with the exact
                 // Client GSTIN/FY and official From/To range. Filename matching alone can never
                 // cause cross-client movement; a zero-transaction ledger is still valid evidence.
-                if (!_gstLedgerImportService.IsValidSourceForClient(
-                        sourcePath,
-                        client.Gstin,
-                        client.FinancialYear))
-                    continue;
+                var verifiedGstin = new[] { client.Gstin }
+                    .Concat(client.AdditionalGstins ?? [])
+                    .Select(NormalizeGstin)
+                    .Where(gstin => gstin.Length == 15)
+                    .FirstOrDefault(gstin => _gstLedgerImportService.IsValidSourceForClient(
+                        sourcePath, gstin, client.FinancialYear));
+                if (verifiedGstin is null) continue;
 
                 // An official Electronic Credit Ledger can legitimately contain only
                 // Opening/Closing Balance and no dated transaction rows. Such evidence
@@ -1709,7 +1711,7 @@ public sealed class BackgroundAutomationService : IDisposable
                         ledgerType,
                         client.Id,
                         client.FinancialYear,
-                        client.Gstin).Count;
+                        verifiedGstin).Count;
                 }
                 catch (InvalidDataException exception) when (exception.Message.Contains("No dated", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1720,7 +1722,9 @@ public sealed class BackgroundAutomationService : IDisposable
                 var subFolder = ledgerType.Equals("Electronic Cash Ledger", StringComparison.OrdinalIgnoreCase)
                     ? "Electronic Cash Ledger"
                     : "Electronic Credit Ledger";
-                var destinationFolder = Path.Combine(registration.FolderPath, "GST", subFolder);
+                var destinationFolder = client.AdditionalGstins is { Count: > 0 }
+                    ? Path.Combine(registration.FolderPath, "GST", verifiedGstin, subFolder)
+                    : Path.Combine(registration.FolderPath, "GST", subFolder);
                 Directory.CreateDirectory(destinationFolder);
                 var target = BuildCollisionSafeTarget(destinationFolder, Path.GetFileName(sourcePath));
                 var normalizedTarget = Path.GetFullPath(target);
@@ -1735,11 +1739,11 @@ public sealed class BackgroundAutomationService : IDisposable
                         SafeHash(target),
                         ledgerType,
                         "Moved",
-                        $"Verified {ledgerType} moved to linked Client/FY GST folder. GSTIN={client.Gstin}; FY={client.FinancialYear}.",
+                        $"Verified {ledgerType} moved to linked Client/FY GST folder. GSTIN={verifiedGstin}; FY={client.FinancialYear}.",
                         periodCount);
                     AutomationDiagnosticLog.Write(
                         "GST-LEDGER-MOVE",
-                        $"Verified {ledgerType} moved to linked Client/FY folder. GSTIN={client.Gstin}; FY={client.FinancialYear}; periods={periodCount}.",
+                        $"Verified {ledgerType} moved to linked Client/FY folder. GSTIN={verifiedGstin}; FY={client.FinancialYear}; periods={periodCount}.",
                         target);
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
