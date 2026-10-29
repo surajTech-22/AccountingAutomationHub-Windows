@@ -175,6 +175,8 @@ jobs:
             marker: 'PASS: 8/8 AAH UpdateHost transactional safety scenarios.'
           - project: AAH.BankOcrSafety.Tests
             marker: 'PASS: 20/20 Bank OCR verifier safety scenarios.'
+          - project: AAH.ClientGstin.Tests
+            marker: 'PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.'
           - project: AAH.BankPdfRouting.Tests
             marker: 'PASS: 8/8 Bank PDF routing scenarios.'
           - project: AAH.BankXmlValidator.Tests
