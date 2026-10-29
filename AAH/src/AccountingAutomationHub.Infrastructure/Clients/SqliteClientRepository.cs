@@ -672,11 +672,8 @@ public sealed class SqliteClientRepository :
 
         var preferredClientName = AccountingText.DisplayName(
             profile.TradeName.Length > 0 ? profile.TradeName : profile.LegalName);
-        var normalizedClientIdentity = string.Concat(client.ClientName.Where(char.IsLetterOrDigit)).ToUpperInvariant();
-        var normalizedClientGstin = string.Concat(client.Gstin.Where(char.IsLetterOrDigit)).ToUpperInvariant();
-        if (preferredClientName.Length > 0 &&
-            (client.ClientName.Trim().Length == 0 ||
-             (normalizedClientGstin.Length == 15 && normalizedClientIdentity == normalizedClientGstin)))
+        if (GstClientNameRecognitionPolicy.HasSourceBusinessName(preferredClientName, client.Gstin) &&
+            GstClientNameRecognitionPolicy.IsUnresolvedName(client.ClientName, client.Gstin))
         {
             client.ClientName = preferredClientName;
             changed = true;
