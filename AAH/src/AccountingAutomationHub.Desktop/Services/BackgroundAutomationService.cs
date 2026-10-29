@@ -1550,7 +1550,7 @@ public sealed class BackgroundAutomationService : IDisposable
             return moved;
         }
 
-        var validCandidates = new List<(string Path, string PeriodKey, DateTime WrittenUtc)>();
+        var validCandidates = new List<(string Path, string PeriodKey, DateTime WrittenUtc, string Gstin)>();
         foreach (var source in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1566,13 +1566,15 @@ public sealed class BackgroundAutomationService : IDisposable
                     client.Id,
                     client.FinancialYear,
                     string.Empty);
-                if (!NormalizeGstin(record.Gstin).Equals(NormalizeGstin(client.Gstin), StringComparison.OrdinalIgnoreCase))
+                var allowedGstins = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? []);
+                var sourceGstin = NormalizeGstin(record.Gstin);
+                if (!allowedGstins.Any(gstin => NormalizeGstin(gstin).Equals(sourceGstin, StringComparison.OrdinalIgnoreCase)))
                     continue;
                 if (!IsPeriodInFinancialYear(record.PeriodKey, client.FinancialYear))
                     continue;
 
                 var writtenUtc = SafeGetLastWriteTimeUtc(source);
-                validCandidates.Add((source, record.PeriodKey, writtenUtc));
+                validCandidates.Add((source, record.PeriodKey, writtenUtc, sourceGstin));
             }
             catch (Exception exception)
             {
@@ -1585,9 +1587,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
         if (validCandidates.Count == 0) return moved;
 
-        var destinationFolder = Path.Combine(registration.FolderPath, "GST", "GSTR-3B");
-        Directory.CreateDirectory(destinationFolder);
-
+        var hasMultipleGstins = client.AdditionalGstins is { Count: > 0 };
         foreach (var candidate in validCandidates.OrderBy(item => item.WrittenUtc).ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1602,6 +1602,10 @@ public sealed class BackgroundAutomationService : IDisposable
                 continue;
             }
 
+            var destinationFolder = hasMultipleGstins
+                ? Path.Combine(registration.FolderPath, "GST", candidate.Gstin, "GSTR-3B")
+                : Path.Combine(registration.FolderPath, "GST", "GSTR-3B");
+            Directory.CreateDirectory(destinationFolder);
             var target = BuildCollisionSafeTarget(destinationFolder, Path.GetFileName(source));
             var normalizedTarget = Path.GetFullPath(target);
             _generatedWorkbookPaths.TryAdd(normalizedTarget, 0);
@@ -1611,7 +1615,7 @@ public sealed class BackgroundAutomationService : IDisposable
                 moved.Add(new MovedGstr3bDownload(source, target, candidate.PeriodKey, candidate.WrittenUtc));
                 AutomationDiagnosticLog.Write(
                     "GST-DOWNLOAD-MOVE",
-                    $"Verified GSTR-3B moved to linked client folder for immediate background import. GSTIN={client.Gstin}; FY={client.FinancialYear}.",
+                    $"Verified GSTR-3B moved to linked client folder for immediate background import. GSTIN={candidate.Gstin}; FY={client.FinancialYear}.",
                     target);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
