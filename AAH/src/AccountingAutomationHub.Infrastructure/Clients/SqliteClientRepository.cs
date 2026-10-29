@@ -300,8 +300,12 @@ public sealed class SqliteClientRepository :
         }
 
         reader.Close();
+        // The Client Directory enumerates every Client/FY. Read GSTIN rows in
+        // one ordered query rather than issuing N queries per directory refresh.
+        var allRegistrations = ReadAllAdditionalGstins(connection);
         foreach (var client in clients)
-            client.AdditionalGstins = ReadAdditionalGstins(connection, client.Id);
+            client.AdditionalGstins = allRegistrations.TryGetValue(client.Id, out var values)
+                ? values : Array.Empty<string>();
         return clients;
     }
 
@@ -1081,6 +1085,25 @@ public sealed class SqliteClientRepository :
     private SqliteConnection OpenConnection()
     {
         return SqliteConnectionPolicy.Open(_connectionString);
+    }
+
+    private static Dictionary<long, string[]> ReadAllAdditionalGstins(SqliteConnection connection)
+    {
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT ClientId, Gstin FROM ClientAdditionalGstins ORDER BY ClientId, Gstin;";
+        using var reader = read.ExecuteReader();
+        var values = new Dictionary<long, List<string>>();
+        while (reader.Read())
+        {
+            var clientId = reader.GetInt64(0);
+            if (!values.TryGetValue(clientId, out var list))
+            {
+                list = [];
+                values.Add(clientId, list);
+            }
+            list.Add(reader.GetString(1));
+        }
+        return values.ToDictionary(item => item.Key, item => item.Value.ToArray());
     }
 
     private static string[] ReadAdditionalGstins(SqliteConnection connection, long clientId)
