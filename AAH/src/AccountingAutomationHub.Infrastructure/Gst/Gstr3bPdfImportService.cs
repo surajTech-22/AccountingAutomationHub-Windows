@@ -12,8 +12,13 @@ public sealed partial class Gstr3bPdfImportService(SqliteGstRepository repositor
         IEnumerable<string> paths,
         long clientId,
         string financialYear,
-        string fallbackGstin)
+        string fallbackGstin,
+        IReadOnlyList<string>? additionalGstins = null)
     {
+        var accepted = new[] { fallbackGstin }.Concat(additionalGstins ?? [])
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
         var processed = 0;
         var imported = 0;
@@ -32,6 +37,8 @@ public sealed partial class Gstr3bPdfImportService(SqliteGstRepository repositor
                     continue;
                 }
 
+                if (accepted.Count > 0 && !accepted.Contains(record.Gstin.Trim().ToUpperInvariant()))
+                    throw new InvalidDataException("GSTR-3B GSTIN does not belong to the selected client.");
                 repository.ReplaceReturn(record);
                 imported++;
                 if (!record.ParseValid)
