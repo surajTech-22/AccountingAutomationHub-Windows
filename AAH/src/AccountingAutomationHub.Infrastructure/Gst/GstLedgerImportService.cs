@@ -13,21 +13,32 @@ public sealed class GstLedgerImportService(SqliteGstRepository repository)
         string ledgerType,
         long clientId,
         string financialYear,
-        string expectedGstin = "")
+        string expectedGstin = "",
+        IReadOnlyList<string>? additionalGstins = null)
     {
         var normalizedType = NormalizeLedgerType(ledgerType);
+        var registrationGstin = expectedGstin;
+        if (additionalGstins is { Count: > 0 })
+        {
+            registrationGstin = new[] { expectedGstin }.Concat(additionalGstins)
+                .FirstOrDefault(gstin => IsValidSourceForClient(path, gstin, financialYear))
+                ?? throw new InvalidDataException("GST ledger does not match any registered GSTIN for this client.");
+        }
         var periods = Parse(
             path,
             normalizedType,
             clientId,
             financialYear,
-            expectedGstin);
+            registrationGstin);
 
+        foreach (var period in periods)
+            period.Gstin = registrationGstin.Trim().ToUpperInvariant();
         repository.ReplaceLedgerPeriods(
             clientId,
             financialYear,
             normalizedType,
-            periods);
+            periods,
+            registrationGstin);
 
         return new GstImportResult
         {

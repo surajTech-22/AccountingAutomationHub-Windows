@@ -10,12 +10,18 @@ public sealed class SqliteGstRepository : IGstRepository
 {
     private readonly string _connectionString;
 
-    public SqliteGstRepository()
+    public SqliteGstRepository() : this(ApplicationDataPaths.DatabasePath) { }
+
+    // Disposable isolated SQLite target for migration and multi-registration
+    // regression tests. Production still uses the existing database path.
+    public SqliteGstRepository(string databasePath)
     {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("Database path is required.", nameof(databasePath));
         ApplicationDataPaths.EnsureFolders();
         _connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = ApplicationDataPaths.DatabasePath,
+            DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Private
         }.ToString();
@@ -88,9 +94,6 @@ public sealed class SqliteGstRepository : IGstRepository
                     FOREIGN KEY (ClientId) REFERENCES Clients(Id) ON DELETE CASCADE
                 );
 
-                CREATE UNIQUE INDEX IF NOT EXISTS UX_Gstr3bReturns_ClientFyPeriod
-                ON Gstr3bReturns(ClientId, FinancialYear, PeriodKey);
-
                 CREATE TABLE IF NOT EXISTS GstLedgerPeriods
                 (
                     Id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,9 +114,6 @@ public sealed class SqliteGstRepository : IGstRepository
                     ImportedUtc     TEXT NOT NULL,
                     FOREIGN KEY (ClientId) REFERENCES Clients(Id) ON DELETE CASCADE
                 );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS UX_GstLedgerPeriods_ClientFyTypePeriod
-                ON GstLedgerPeriods(ClientId, FinancialYear, LedgerType, PeriodKey);
 
                 CREATE TABLE IF NOT EXISTS GstPortalSourceState
                 (
@@ -202,6 +202,44 @@ public sealed class SqliteGstRepository : IGstRepository
 
         EnsureReturnColumns(connection);
         EnsureReconciliationColumns(connection);
+        EnsureRegistrationScopedKeys(connection);
+    }
+
+    private static void EnsureRegistrationScopedKeys(SqliteConnection connection)
+    {
+        // Re-index rather than rebuilding GST data tables, preserving all
+        // existing records, source paths, and historical import timestamps.
+        using var transaction = connection.BeginTransaction();
+        using var check = connection.CreateCommand();
+        check.Transaction = transaction;
+        check.CommandText = "PRAGMA table_info(GstLedgerPeriods);";
+        var hasGstin = false;
+        using (var reader = check.ExecuteReader())
+            while (reader.Read())
+                if (reader.GetString(1).Equals("Gstin", StringComparison.OrdinalIgnoreCase)) hasGstin = true;
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        if (!hasGstin)
+        {
+            command.CommandText = "ALTER TABLE GstLedgerPeriods ADD COLUMN Gstin TEXT NOT NULL DEFAULT '';";
+            command.ExecuteNonQuery();
+        }
+        command.CommandText = """
+            UPDATE Gstr3bReturns SET Gstin=COALESCE(
+                (SELECT Gstin FROM Clients WHERE Clients.Id=Gstr3bReturns.ClientId),'')
+            WHERE Gstin='';
+            UPDATE GstLedgerPeriods SET Gstin=COALESCE(
+                (SELECT Gstin FROM Clients WHERE Clients.Id=GstLedgerPeriods.ClientId),'')
+            WHERE Gstin='';
+            DROP INDEX IF EXISTS UX_Gstr3bReturns_ClientFyPeriod;
+            CREATE UNIQUE INDEX IF NOT EXISTS UX_Gstr3bReturns_ClientFyGstinPeriod
+              ON Gstr3bReturns(ClientId,FinancialYear,Gstin,PeriodKey);
+            DROP INDEX IF EXISTS UX_GstLedgerPeriods_ClientFyTypePeriod;
+            CREATE UNIQUE INDEX IF NOT EXISTS UX_GstLedgerPeriods_ClientFyGstinTypePeriod
+              ON GstLedgerPeriods(ClientId,FinancialYear,Gstin,LedgerType,PeriodKey);
+            """;
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public bool HasRecords(long clientId, string financialYear)
@@ -243,14 +281,15 @@ public sealed class SqliteGstRepository : IGstRepository
         return reader.Read() ? ReadPortalSourceState(reader) : null;
     }
 
-    public GstPortalSourceState? GetLatestPortalPeriodState(long clientId, string financialYear, string sourceType, string periodKey)
+    public GstPortalSourceState? GetLatestPortalPeriodState(long clientId, string financialYear, string sourceType, string periodKey, string gstin = "")
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT * FROM GstPortalSourceState
             WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
-              AND SourceType=$SourceType AND PeriodKey=$PeriodKey AND Status='Imported'
+              AND SourceType=$SourceType AND PeriodKey=$PeriodKey
+              AND ($Gstin='' OR Gstin=$Gstin) AND Status='Imported'
             ORDER BY SourceLastWriteUtc DESC, LastImportedUtc DESC, Id DESC
             LIMIT 1;
             """;
@@ -258,6 +297,7 @@ public sealed class SqliteGstRepository : IGstRepository
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
         command.Parameters.AddWithValue("$SourceType", sourceType.Trim());
         command.Parameters.AddWithValue("$PeriodKey", periodKey.Trim());
+        command.Parameters.AddWithValue("$Gstin", gstin.Trim().ToUpperInvariant());
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadPortalSourceState(reader) : null;
     }
@@ -352,11 +392,11 @@ public sealed class SqliteGstRepository : IGstRepository
         using var connection = OpenConnection();
 
         long clientId;
-        string financialYear, sourcePath, currentKey, currentLabel, currentFrequency;
+        string financialYear, currentGstin, sourcePath, currentKey, currentLabel, currentFrequency;
         using (var read = connection.CreateCommand())
         {
             read.CommandText = """
-                SELECT ClientId, FinancialYear, SourcePath, PeriodKey, PeriodLabel, FilingFrequency
+                SELECT ClientId, FinancialYear, Gstin, SourcePath, PeriodKey, PeriodLabel, FilingFrequency
                 FROM Gstr3bReturns WHERE Id=$Id LIMIT 1;
                 """;
             read.Parameters.AddWithValue("$Id", recordId);
@@ -364,10 +404,11 @@ public sealed class SqliteGstRepository : IGstRepository
             if (!reader.Read()) throw new InvalidOperationException("The selected GSTR-3B period no longer exists.");
             clientId = reader.GetInt64(0);
             financialYear = reader.GetString(1);
-            sourcePath = reader.GetString(2);
-            currentKey = reader.GetString(3);
-            currentLabel = reader.GetString(4);
-            currentFrequency = reader.GetString(5);
+            currentGstin = reader.GetString(2);
+            sourcePath = reader.GetString(3);
+            currentKey = reader.GetString(4);
+            currentLabel = reader.GetString(5);
+            currentFrequency = reader.GetString(6);
         }
 
         if (currentKey.Equals(periodKey, StringComparison.OrdinalIgnoreCase) &&
@@ -380,10 +421,11 @@ public sealed class SqliteGstRepository : IGstRepository
             conflict.CommandText = """
                 SELECT COUNT(*) FROM Gstr3bReturns
                 WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
-                  AND PeriodKey=$PeriodKey AND Id<>$Id;
+                  AND Gstin=$Gstin AND PeriodKey=$PeriodKey AND Id<>$Id;
                 """;
             conflict.Parameters.AddWithValue("$ClientId", clientId);
             conflict.Parameters.AddWithValue("$FinancialYear", financialYear);
+            conflict.Parameters.AddWithValue("$Gstin", currentGstin);
             conflict.Parameters.AddWithValue("$PeriodKey", periodKey);
             conflict.Parameters.AddWithValue("$Id", recordId);
             if (Convert.ToInt32(conflict.ExecuteScalar()) > 0)
@@ -447,13 +489,14 @@ public sealed class SqliteGstRepository : IGstRepository
                 SELECT LastEditedUtc
                 FROM Gstr3bReturns
                 WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
-                  AND LastEditedUtc<>''
+                  AND Gstin=$Gstin AND LastEditedUtc<>''
                   AND (PeriodKey=$PeriodKey OR (SourcePath<>'' AND SourcePath=$SourcePath) OR ($Arn<>'' AND Arn=$Arn))
                 ORDER BY ImportedUtc DESC
                 LIMIT 1;
                 """;
             lastEdit.Parameters.AddWithValue("$ClientId", record.ClientId);
             lastEdit.Parameters.AddWithValue("$FinancialYear", record.FinancialYear.Trim());
+            lastEdit.Parameters.AddWithValue("$Gstin", record.Gstin.Trim().ToUpperInvariant());
             lastEdit.Parameters.AddWithValue("$PeriodKey", record.PeriodKey.Trim());
             lastEdit.Parameters.AddWithValue("$SourcePath", record.SourcePath?.Trim() ?? string.Empty);
             lastEdit.Parameters.AddWithValue("$Arn", record.Arn?.Trim() ?? string.Empty);
@@ -471,7 +514,7 @@ public sealed class SqliteGstRepository : IGstRepository
                 """
                 DELETE FROM Gstr3bReturns
                 WHERE ClientId=$ClientId
-                  AND FinancialYear=$FinancialYear
+                  AND FinancialYear=$FinancialYear AND Gstin=$Gstin
                   AND PeriodKey<>$PeriodKey
                   AND (
                         (SourcePath<>'' AND SourcePath=$SourcePath)
@@ -480,6 +523,7 @@ public sealed class SqliteGstRepository : IGstRepository
                 """;
             cleanup.Parameters.AddWithValue("$ClientId", record.ClientId);
             cleanup.Parameters.AddWithValue("$FinancialYear", record.FinancialYear.Trim());
+            cleanup.Parameters.AddWithValue("$Gstin", record.Gstin.Trim().ToUpperInvariant());
             cleanup.Parameters.AddWithValue("$PeriodKey", record.PeriodKey.Trim());
             cleanup.Parameters.AddWithValue("$SourcePath", record.SourcePath?.Trim() ?? string.Empty);
             cleanup.Parameters.AddWithValue("$Arn", record.Arn?.Trim() ?? string.Empty);
@@ -519,7 +563,7 @@ public sealed class SqliteGstRepository : IGstRepository
                 $PaymentRowsJson, $LiabilityBreakupJson, $RawFieldsJson,
                 $IsNilReturn, $ParseValid, $ParseNotes, $SourcePath, $RawText, $ImportedUtc, $LastEditedUtc
             )
-            ON CONFLICT(ClientId, FinancialYear, PeriodKey)
+            ON CONFLICT(ClientId, FinancialYear, Gstin, PeriodKey)
             DO UPDATE SET
                 Gstin = excluded.Gstin,
                 LegalName = excluded.LegalName,
@@ -577,11 +621,30 @@ public sealed class SqliteGstRepository : IGstRepository
     }
 
     public void ReplaceLedgerPeriods(
+        long clientId, string financialYear, string ledgerType,
+        IEnumerable<GstLedgerPeriodBalance> periods)
+    {
+        // Preserve the existing four-parameter IGstRepository contract for
+        // all old consumers. Legacy single-GSTIN calls resolve their normal
+        // primary registration; multi-GSTIN flows use the explicit overload.
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Gstin FROM Clients WHERE Id=$ClientId LIMIT 1;";
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        var primaryGstin = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
+        foreach (var row in periods)
+            row.Gstin = primaryGstin.Trim().ToUpperInvariant();
+        ReplaceLedgerPeriods(clientId, financialYear, ledgerType, periods, primaryGstin);
+    }
+
+    public void ReplaceLedgerPeriods(
         long clientId,
         string financialYear,
         string ledgerType,
-        IEnumerable<GstLedgerPeriodBalance> periods)
+        IEnumerable<GstLedgerPeriodBalance> periods,
+        string gstin)
     {
+        gstin = gstin.Trim().ToUpperInvariant();
         using var connection = OpenConnection();
         using var transaction = connection.BeginTransaction();
         using (var delete = connection.CreateCommand())
@@ -592,8 +655,9 @@ public sealed class SqliteGstRepository : IGstRepository
                 DELETE FROM GstLedgerPeriods
                 WHERE ClientId = $ClientId
                   AND FinancialYear = $FinancialYear
-                  AND LedgerType = $LedgerType;
+                  AND LedgerType = $LedgerType AND Gstin=$Gstin;
                 """;
+            delete.Parameters.AddWithValue("$Gstin", gstin);
             delete.Parameters.AddWithValue("$ClientId", clientId);
             delete.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
             delete.Parameters.AddWithValue("$LedgerType", ledgerType.Trim());
@@ -608,14 +672,14 @@ public sealed class SqliteGstRepository : IGstRepository
                 """
                 INSERT INTO GstLedgerPeriods
                 (
-                    ClientId, FinancialYear, LedgerType, PeriodKey, PeriodLabel,
+                    ClientId, FinancialYear, Gstin, LedgerType, PeriodKey, PeriodLabel,
                     OpeningIgst, OpeningCgst, OpeningSgst, OpeningCess,
                     ClosingIgst, ClosingCgst, ClosingSgst, ClosingCess,
                     SourcePath, ImportedUtc
                 )
                 VALUES
                 (
-                    $ClientId, $FinancialYear, $LedgerType, $PeriodKey, $PeriodLabel,
+                    $ClientId, $FinancialYear, $Gstin, $LedgerType, $PeriodKey, $PeriodLabel,
                     $OpeningIgst, $OpeningCgst, $OpeningSgst, $OpeningCess,
                     $ClosingIgst, $ClosingCgst, $ClosingSgst, $ClosingCess,
                     $SourcePath, $ImportedUtc
@@ -997,6 +1061,7 @@ public sealed class SqliteGstRepository : IGstRepository
     {
         command.Parameters.AddWithValue("$ClientId", row.ClientId);
         command.Parameters.AddWithValue("$FinancialYear", row.FinancialYear.Trim());
+        command.Parameters.AddWithValue("$Gstin", row.Gstin.Trim().ToUpperInvariant());
         command.Parameters.AddWithValue("$LedgerType", row.LedgerType.Trim());
         command.Parameters.AddWithValue("$PeriodKey", row.PeriodKey.Trim());
         command.Parameters.AddWithValue("$PeriodLabel", row.PeriodLabel.Trim());
@@ -1149,6 +1214,7 @@ public sealed class SqliteGstRepository : IGstRepository
             ClientId = ReadInt64(reader, "ClientId"),
             FinancialYear = ReadString(reader, "FinancialYear"),
             LedgerType = ReadString(reader, "LedgerType"),
+            Gstin = ReadString(reader, "Gstin"),
             PeriodKey = ReadString(reader, "PeriodKey"),
             PeriodLabel = ReadString(reader, "PeriodLabel"),
             OpeningIgst = ReadDecimal(reader, "OpeningIgst"),

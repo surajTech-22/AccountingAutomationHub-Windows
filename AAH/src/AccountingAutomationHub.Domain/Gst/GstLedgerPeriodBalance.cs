@@ -5,6 +5,7 @@ public sealed class GstLedgerPeriodBalance
     public long PersistentId { get; set; }
     public long ClientId { get; set; }
     public string FinancialYear { get; set; } = string.Empty;
+    public string Gstin { get; set; } = string.Empty;
     public string LedgerType { get; set; } = string.Empty;
     public string PeriodKey { get; set; } = string.Empty;
     public string PeriodLabel { get; set; } = string.Empty;

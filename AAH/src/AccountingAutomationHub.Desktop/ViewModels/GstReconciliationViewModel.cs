@@ -632,7 +632,8 @@ public sealed class GstReconciliationViewModel : PageViewModel
                 dialog.FileNames,
                 client.Id,
                 client.FinancialYear,
-                client.Gstin);
+                client.Gstin,
+                client.AdditionalGstins);
             _refreshCoordinator.ApplyAutomaticNilSalesControls(client);
             await _refreshCoordinator.RefreshAsync(client);
             if (result.PeriodsImported > 0)
@@ -923,7 +924,8 @@ public sealed class GstReconciliationViewModel : PageViewModel
                 ledgerType,
                 client.Id,
                 client.FinancialYear,
-                client.Gstin);
+                client.Gstin,
+                client.AdditionalGstins);
             await _refreshCoordinator.RefreshAsync(client);
             if (result.PeriodsImported > 0)
                 PublishCommittedGstImport(client.Id, client.FinancialYear, result.PeriodsImported, dialog.FileName, "Manual Import");

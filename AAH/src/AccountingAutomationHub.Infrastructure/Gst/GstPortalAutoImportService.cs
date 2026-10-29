@@ -28,7 +28,14 @@ public sealed class GstPortalAutoImportService(
         IReadOnlyList<string>? additionalRoots = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        return EnumerateRegistrationClients(client)
+            .Any(registration => HasPotentialChangesForRegistration(
+                registration, preferredRoot, additionalRoots));
+    }
 
+    private bool HasPotentialChangesForRegistration(
+        ClientProfile client, string preferredRoot, IReadOnlyList<string>? additionalRoots)
+    {
         // FIXED41 R8 Repair 4 safety bar: the maintenance probe and the real import must
         // fingerprint the SAME authority roots. ImportAvailable includes the linked
         // Automation Folder so moved GST evidence remains durable; comparing that saved
@@ -52,7 +59,40 @@ public sealed class GstPortalAutoImportService(
         IReadOnlyList<string>? additionalRoots = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        var results = EnumerateRegistrationClients(client)
+            .Select(registration => ImportAvailableForRegistration(
+                registration, preferredRoot, force, refreshDiscovery, additionalRoots))
+            .ToArray();
+        return new GstPortalAutoImportResult(
+            results.Max(item => item.SearchRoots),
+            results.Sum(item => item.Gstr3bPeriods),
+            results.Sum(item => item.CreditLedgerPeriods),
+            results.Sum(item => item.CashLedgerPeriods),
+            results.SelectMany(item => item.Warnings).ToArray(),
+            results.All(item => item.CacheHit),
+            results.Max(item => item.CandidateFiles));
+    }
 
+    private static IEnumerable<ClientProfile> EnumerateRegistrationClients(ClientProfile client)
+    {
+        // Preserve the existing normal single-GSTIN import flow. Every
+        // registration uses the SAME parser, source-state and import sequence.
+        yield return client;
+        var registrations = client.AdditionalGstins ?? [];
+        foreach (var gstin in registrations.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (gstin.Equals(client.Gstin, StringComparison.OrdinalIgnoreCase)) continue;
+            var registration = client.Clone();
+            registration.Gstin = gstin;
+            registration.AdditionalGstins = client.AdditionalGstins;
+            yield return registration;
+        }
+    }
+
+    private GstPortalAutoImportResult ImportAvailableForRegistration(
+        ClientProfile client, string preferredRoot, bool force,
+        bool refreshDiscovery, IReadOnlyList<string>? additionalRoots)
+    {
         // Force a fresh metadata snapshot here because BackgroundAutomationService may
         // have moved a newly validated Downloads file immediately before this call.
         var discovery = GetDiscoverySnapshot(
@@ -128,6 +168,7 @@ public sealed class GstPortalAutoImportService(
         var repaired = 0;
         foreach (var existing in repository.GetReturns(client.Id, client.FinancialYear))
         {
+            if (!Normalize(existing.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal)) continue;
             if (existing.RawFields.TryGetValue("nil_parser_version", out var version) &&
                 version.Equals("FIX44", StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -140,7 +181,8 @@ public sealed class GstPortalAutoImportService(
                     existing.SourcePath,
                     client.Id,
                     client.FinancialYear,
-                    client.Gstin);
+                    client.AdditionalGstins is { Count: > 0 }
+                        ? string.Empty : client.Gstin);
                 if (!MatchesClient(parsed.Gstin, client.Gstin) ||
                     !IsPeriodInFinancialYear(parsed.PeriodKey, client.FinancialYear) ||
                     !parsed.PeriodKey.Equals(existing.PeriodKey, StringComparison.OrdinalIgnoreCase))
@@ -189,6 +231,7 @@ public sealed class GstPortalAutoImportService(
 
                 if (!force &&
                     existingState is not null &&
+                    Normalize(existingState.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal) &&
                     existingState.MetadataFingerprint.Equals(candidate.MetadataFingerprint, StringComparison.Ordinal))
                 {
                     continue;
@@ -197,6 +240,7 @@ public sealed class GstPortalAutoImportService(
                 var contentHash = SafeHash(candidate.Path);
                 if (!force &&
                     existingState is not null &&
+                    Normalize(existingState.Gstin).Equals(Normalize(client.Gstin), StringComparison.Ordinal) &&
                     existingState.ContentHash.Length > 0 &&
                     existingState.ContentHash.Equals(contentHash, StringComparison.OrdinalIgnoreCase))
                 {
@@ -215,10 +259,15 @@ public sealed class GstPortalAutoImportService(
                     candidate.Path,
                     client.Id,
                     client.FinancialYear,
-                    client.Gstin);
+                    client.AdditionalGstins is { Count: > 0 }
+                        ? string.Empty : client.Gstin);
 
-                if (!MatchesClient(record.Gstin, client.Gstin) ||
-                    !IsPeriodInFinancialYear(record.PeriodKey, client.FinancialYear))
+                // Files for another registration under this same client
+                // must not be marked Ignored or cached as this registration.
+                // Their owner processes them in its own import pass.
+                if (!MatchesClient(record.Gstin, client.Gstin))
+                    continue;
+                if (!IsPeriodInFinancialYear(record.PeriodKey, client.FinancialYear))
                 {
                     repository.UpsertPortalSourceState(ToState(
                         client, "GSTR-3B", candidate, record.PeriodKey,
@@ -231,7 +280,8 @@ public sealed class GstPortalAutoImportService(
                     client.Id,
                     client.FinancialYear,
                     "GSTR-3B",
-                    record.PeriodKey);
+                    record.PeriodKey,
+                    client.Gstin);
 
                 if (force && forcedImportedPeriods.Contains(record.PeriodKey))
                 {
@@ -312,6 +362,9 @@ public sealed class GstPortalAutoImportService(
                 Score = CandidateScore(path, client)
             })
             .Where(item => item.Score >= 20)
+            .Where(item => client.AdditionalGstins is not { Count: > 0 } ||
+                ledgerImportService.IsValidSourceForClient(
+                    item.Candidate.Path, client.Gstin, client.FinancialYear))
             .OrderByDescending(item => item.Score)
             .ThenByDescending(item => item.Candidate.WrittenUtc)
             .Take(40)
@@ -388,11 +441,14 @@ public sealed class GstPortalAutoImportService(
 
         if (periods.Count == 0) return 0;
 
+        foreach (var period in periods.Values)
+            period.Period.Gstin = Normalize(client.Gstin);
         repository.ReplaceLedgerPeriods(
             client.Id,
             client.FinancialYear,
             ledgerType,
-            periods.Values.Select(item => item.Period));
+            periods.Values.Select(item => item.Period),
+            Normalize(client.Gstin));
 
         var importedUtc = DateTime.UtcNow;
         foreach (var (candidate, hash) in successfulCandidates)
