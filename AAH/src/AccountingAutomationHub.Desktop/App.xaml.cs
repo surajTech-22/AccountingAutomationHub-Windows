@@ -1169,33 +1169,57 @@ public partial class App : System.Windows.Application
     {
         if (Interlocked.Exchange(ref _updateShutdownRequestInProgress, 1) != 0)
             return;
+        var exitStarted = false;
         try
         {
+            // Only the verified updater's PID-specific event reaches this method.
+            // Quiesce NEW automatic observations before testing for idle. The normal
+            // window X, tray visibility and user Auto Import pause remain unchanged.
+            AutomationService?.BeginVerifiedUpdateQuiescence();
             var deadline = DateTime.UtcNow.AddMinutes(10);
             var quietSamples = 0;
-            WriteShutdownDiagnostic("Verified update exit requested; waiting for accounting/Tally queues.");
+            var nextBusyDiagnostic = DateTime.UtcNow;
+            WriteShutdownDiagnostic("Verified updater requested graceful exit; new automation intake quiesced.");
             while (DateTime.UtcNow < deadline && !_isExiting)
             {
-                var busy = (_mainViewModel?.IsTallyBusy ?? false) ||
-                    (AutomationService?.HasPendingWorkForUpdate ?? false) ||
-                    !_distributedImportCancellations.IsEmpty;
-                if (busy) quietSamples = 0;
+                var tallyBusy = _mainViewModel?.IsTallyBusy ?? false;
+                var automationBusy = AutomationService?.HasPendingWorkForUpdate ?? false;
+                var distributedBusy = !_distributedImportCancellations.IsEmpty;
+                if (tallyBusy || automationBusy || distributedBusy)
+                {
+                    quietSamples = 0;
+                    if (DateTime.UtcNow >= nextBusyDiagnostic)
+                    {
+                        WriteShutdownDiagnostic(
+                            $"Verified updater waiting: tally={tallyBusy} distributed={distributedBusy} " +
+                            (AutomationService?.VerifiedUpdateBusySummary ?? "automation=not-started"));
+                        nextBusyDiagnostic = DateTime.UtcNow.AddSeconds(10);
+                    }
+                }
                 else if (++quietSamples >= 3)
                 {
-                    WriteShutdownDiagnostic("Verified update: queues idle for 3 checks; exiting gracefully.");
+                    WriteShutdownDiagnostic("Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.");
+                    exitStarted = true;
                     ExitApplication();
                     return;
                 }
                 await Task.Delay(2000);
             }
-            // No kill, no app replacement while business operations remain active.
-            WriteShutdownDiagnostic("Verified update deferred: active operations did not drain; application left running.");
+            WriteShutdownDiagnostic("Verified updater deferred: active accounting/Tally did not finish. Resuming normal watchers without forced exit.");
         }
         catch (Exception exception)
         {
-            WriteShutdownDiagnostic("Verified update shutdown check failed; app kept alive: " + exception.Message);
+            WriteShutdownDiagnostic("Verified updater shutdown check failed; keeping application alive: " + exception);
         }
-        finally { Interlocked.Exchange(ref _updateShutdownRequestInProgress, 0); }
+        finally
+        {
+            if (!exitStarted && !_isExiting)
+            {
+                try { AutomationService?.EndVerifiedUpdateQuiescence(); }
+                catch (Exception exception) { WriteShutdownDiagnostic("Verified updater resume failed: " + exception); }
+            }
+            Interlocked.Exchange(ref _updateShutdownRequestInProgress, 0);
+        }
     }
 
     private void StartUpdateShutdownListener()
