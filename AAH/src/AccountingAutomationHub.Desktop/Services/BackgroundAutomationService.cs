@@ -1256,10 +1256,11 @@ public sealed class BackgroundAutomationService : IDisposable
         // name, state/PAN derivation, or another client as the business name.
         if (GstClientNameRecognitionPolicy.IsUnresolvedName(savedClient.ClientName, savedClient.Gstin))
         {
+            // Only the primary GSTIN defines the existing client name.
+            // Secondary registrations may have different branch trade names,
+            // and must not silently rename the shared accounting client.
             foreach (var linkedGstin in new[] { savedClient.Gstin }
-                .Concat(savedClient.AdditionalGstins ?? [])
-                .Where(value => value.Length == 15)
-                .Distinct(StringComparer.OrdinalIgnoreCase))
+                .Where(value => value.Length == 15))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var gstinRoot = Path.Combine(registration.FolderPath, "GST", linkedGstin);
