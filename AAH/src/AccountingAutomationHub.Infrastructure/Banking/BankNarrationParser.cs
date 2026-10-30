@@ -244,6 +244,12 @@ public static partial class BankNarrationParser
         if (ContainsAny(text, "CASH DEPOSIT", "BY CASH", "CASH DEP")) return "CASH DEPOSIT";
         if (ContainsAny(text, "CASH WD", "CASH WITHDRAWAL", "ATM WDL", "ATM WITHDRAWAL")) return "CASH WITHDRAWAL";
 
+        // Some Canara non-electronic rows carry a fixed routing wrapper around
+        // the actual counterparty. Recognize only these fully evidenced shapes.
+        // Ordinary cheque/transfer rows still take their established paths.
+        var structuredOtherParty = ExtractStructuredCanaraCounterparty(narration);
+        if (structuredOtherParty.Length > 0) return structuredOtherParty;
+
         // Clearing rows must be parsed before the broad electronic/general extractor.
         // Blank BY INST ... MICR CLG rows contain no party and therefore stay out of
         // Ledger Mapping; rows that do contain a party return only that party.
@@ -381,6 +387,37 @@ public static partial class BankNarrationParser
         if (summary.Length == 0)
             return GetLedgerMappingFallbackCategory(SanitizeMappingNarration(narration), txnMode);
         return IsExcelWorkbookValidPartyName(summary) ? NormalizeSummaryName(summary) : summary.Trim();
+    }
+
+    private static string ExtractStructuredCanaraCounterparty(string narration)
+    {
+        var text = NormalizeWhitespace(narration);
+        // CHQ DEP - CTS CLG1 - GANGAVATHI: PENAJA :CANARA BANK
+        var cheque = Regex.Match(text,
+            @"^CHQ\s+DEP\s*-\s*CTS\s+CLG\d+\s*-\s*[^:]+:\s*(?<party>[^:]+?)\s*:\s*CANARA\s+BANK\s*$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (cheque.Success)
+            return ValidatedParty(cheque.Groups["party"].Value);
+
+        // 99920258882025-TPT-HDFC8F9DD35050C3-GROSS E BIZ PRIVATE LIMITED
+        var tpt = Regex.Match(text,
+            @"^\d{10,20}-TPT-[A-Z0-9]{10,28}-(?<party>[A-Z].+)$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (tpt.Success)
+            return ValidatedParty(tpt.Groups["party"].Value);
+
+        // HGAJP0F5360587114619-TORRENTPOWE-BILLPAY-50200026202917
+        var billpay = Regex.Match(text,
+            @"^[A-Z][A-Z0-9]{12,29}-(?<party>[A-Z][A-Z0-9 ]{3,40})-BILLPAY-\d{8,20}$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        return billpay.Success ? ValidatedParty(billpay.Groups["party"].Value) : string.Empty;
+    }
+
+    private static string ValidatedParty(string raw)
+    {
+        var party = GeneralCleanCandidate(raw);
+        return GeneralIsGoodCandidate(party) && !IsLedgerMappingNoiseSummary(party)
+            ? party : string.Empty;
     }
 
     /// <summary>
