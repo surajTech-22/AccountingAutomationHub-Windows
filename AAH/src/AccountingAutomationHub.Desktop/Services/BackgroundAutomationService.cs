@@ -2917,7 +2917,8 @@ public sealed class BackgroundAutomationService : IDisposable
             // Only after the source owns its identity do we divide it to active Client/FY rows.
             var sourceGstinSet = sourceGstins.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var matchingClients = GetCentralSalesPurchaseActiveClients()
-                .Where(client => sourceGstinSet.Contains(NormalizeGstin(client.Gstin)))
+                .Where(client => new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                    .Any(value => sourceGstinSet.Contains(NormalizeGstin(value))))
                 .Where(client => financialYearHint.Length == 0 ||
                                  NormalizeFinancialYearHint(client.FinancialYear).Equals(financialYearHint, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
@@ -2956,12 +2957,25 @@ public sealed class BackgroundAutomationService : IDisposable
                     var ownerGstin = NormalizeGstin(ownerClient.Gstin);
                     if (ownerGstin.Length == 15)
                     {
-                        SalesPurchaseSourceCache.Record(
-                            path, module, ownerGstin, ownerClient.FinancialYear, fileHash, info.Length, info.LastWriteTimeUtc);
-                        if (isSourceSetCandidate)
-                            QueueSalesPurchaseSourceSet(ownerClient.Id, ownerClient.FinancialYear, module);
-                        else
+                        var linkedGstins = new[] { ownerClient.Gstin }
+                            .Concat(ownerClient.AdditionalGstins ?? [])
+                            .Select(NormalizeGstin)
+                            .Where(sourceGstinSet.Contains)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToArray();
+                        foreach (var linkedGstin in linkedGstins)
+                        {
+                            SalesPurchaseSourceCache.Record(
+                                path, module, linkedGstin, ownerClient.FinancialYear, fileHash, info.Length, info.LastWriteTimeUtc);
+                            if (isSourceSetCandidate)
+                                QueueSalesPurchaseSourceSet(ownerClient.Id, ownerClient.FinancialYear, module, linkedGstin);
+                        }
+                        if (!isSourceSetCandidate && linkedGstins.Length == 1 &&
+                            linkedGstins[0].Equals(ownerGstin, StringComparison.OrdinalIgnoreCase))
                             QueueFile(registeredOwner.FolderId, path, force: true, manualReimport: false, forcedKind: kind, precomputedHash: fileHash);
+                        else if (!isSourceSetCandidate && linkedGstins.Length > 0)
+                            AutomationDiagnosticLog.Write("SALES-PURCHASE-MULTIGST",
+                                "Secondary registration workbook held for GSTIN-specific review instead of posting under primary GSTIN.", path);
                     }
                 }
                 return;
@@ -3011,7 +3025,10 @@ public sealed class BackgroundAutomationService : IDisposable
             foreach (var client in matchingClients)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                QueueSalesPurchaseSourceSet(client.Id, client.FinancialYear, module);
+                foreach (var linkedGstin in new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                    .Select(NormalizeGstin).Where(sourceGstinSet.Contains)
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
+                    QueueSalesPurchaseSourceSet(client.Id, client.FinancialYear, module, linkedGstin);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -3029,7 +3046,7 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
-    private void QueueSalesPurchaseSourceSet(long clientId, string financialYear, string module)
+    private void QueueSalesPurchaseSourceSet(long clientId, string financialYear, string module, string registrationGstin)
     {
         var normalizedModule = module.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales"
             : module.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase"
@@ -3038,7 +3055,9 @@ public sealed class BackgroundAutomationService : IDisposable
         var lifetime = _lifetime;
         if (clientId <= 0 || normalizedModule.Length == 0 || normalizedFy.Length == 0 || lifetime is null || lifetime.IsCancellationRequested) return;
 
-        var key = $"{clientId}|{normalizedFy}|{normalizedModule.ToUpperInvariant()}";
+        var target = NormalizeGstin(registrationGstin);
+        if (target.Length != 15) return;
+        var key = $"{clientId}|{normalizedFy}|{normalizedModule.ToUpperInvariant()}|{target}";
         _salesPurchaseSetVersions.AddOrUpdate(key, 1L, (_, value) => value + 1L);
         if (!_salesPurchaseSetProcessors.TryAdd(key, 0)) return;
 
@@ -3052,7 +3071,7 @@ public sealed class BackgroundAutomationService : IDisposable
                     await Task.Delay(1500, lifetime.Token).ConfigureAwait(false);
                     if (_salesPurchaseSetVersions.TryGetValue(key, out var afterDelay) && afterDelay != version) continue;
 
-                    await ProcessSalesPurchaseSourceSetAsync(clientId, normalizedFy, normalizedModule, lifetime.Token).ConfigureAwait(false);
+                    await ProcessSalesPurchaseSourceSetAsync(clientId, normalizedFy, normalizedModule, target, lifetime.Token).ConfigureAwait(false);
                     if (!_salesPurchaseSetVersions.TryGetValue(key, out var afterRun) || afterRun == version) break;
                 }
             }
@@ -3075,6 +3094,7 @@ public sealed class BackgroundAutomationService : IDisposable
         long clientId,
         string financialYear,
         string module,
+        string targetGstin,
         CancellationToken cancellationToken)
     {
         if (_globalPause || !_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
@@ -3087,8 +3107,11 @@ public sealed class BackgroundAutomationService : IDisposable
 
         var client = _clientRepository.GetById(clientId);
         if (client is null || client.IsArchived || !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase)) return;
-        var gstin = NormalizeGstin(client.Gstin);
-        if (gstin.Length != 15) return;
+        var gstin = NormalizeGstin(targetGstin);
+        if (gstin.Length != 15 ||
+            !new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                .Any(value => NormalizeGstin(value).Equals(gstin, StringComparison.OrdinalIgnoreCase)))
+            return;
 
         var folders = _automationRepository.GetFolders()
             .Where(folder => folder.ClientId == clientId &&
@@ -3125,9 +3148,9 @@ public sealed class BackgroundAutomationService : IDisposable
                 try
                 {
                     if (module.Equals("Sales", StringComparison.OrdinalIgnoreCase))
-                        await ProcessSalesSourceSetAsync(client, folders, currentSetFingerprint, cancellationToken).ConfigureAwait(false);
+                        await ProcessSalesSourceSetAsync(client, folders, currentSetFingerprint, gstin, cancellationToken).ConfigureAwait(false);
                     else
-                        await ProcessPurchaseSourceSetAsync(client, folder, currentSetFingerprint, cancellationToken).ConfigureAwait(false);
+                        await ProcessPurchaseSourceSetAsync(client, folder, currentSetFingerprint, gstin, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -3154,6 +3177,7 @@ public sealed class BackgroundAutomationService : IDisposable
         ClientProfile client,
         IReadOnlyList<AutomationFolderRegistration> folders,
         string setFingerprint,
+        string gstin,
         CancellationToken cancellationToken)
     {
         var folder = folders[0];
@@ -3161,7 +3185,7 @@ public sealed class BackgroundAutomationService : IDisposable
         var result = await _salesAutoImportService.ImportAsync(new SalesAutoImportRequest
         {
             ClientId = client.Id,
-            ClientGstin = client.Gstin,
+            ClientGstin = gstin,
             FinancialYear = client.FinancialYear,
             CompanyName = string.IsNullOrWhiteSpace(client.LegalName) ? client.ClientName : client.LegalName,
             EReturnsRootPath = root,
@@ -3187,8 +3211,8 @@ public sealed class BackgroundAutomationService : IDisposable
         }
 
         var accountingContentFingerprint = SalesPurchaseAccountingContentFingerprint.BuildSales(result);
-        var storedAccountingContentFingerprint = _salesRecordRepository.GetLatestAutomaticImportContentFingerprint(client.Id, client.FinancialYear);
-        var current = _salesRecordRepository.IsAutomaticImportCurrent(client.Id, client.FinancialYear, result.SourceFingerprint) ||
+        var storedAccountingContentFingerprint = _salesRecordRepository.GetLatestAutomaticImportContentFingerprint(client.Id, client.FinancialYear, gstin);
+        var current = _salesRecordRepository.IsAutomaticImportCurrent(client.Id, client.FinancialYear, result.SourceFingerprint, gstin) ||
                       (storedAccountingContentFingerprint.Length > 0 &&
                        storedAccountingContentFingerprint.Equals(accountingContentFingerprint, StringComparison.OrdinalIgnoreCase));
         if (!current)
@@ -3203,7 +3227,8 @@ public sealed class BackgroundAutomationService : IDisposable
             // Recheck a GSTIN-only Client Name after source-backed Sales data
             // becomes available. This is a client-profile repair only; it does
             // not alter Sales vouchers, GST journals, or Tally records.
-            if (GstClientNameRecognitionPolicy.IsUnresolvedName(client.ClientName, client.Gstin))
+            if (gstin.Equals(NormalizeGstin(client.Gstin), StringComparison.OrdinalIgnoreCase) &&
+                GstClientNameRecognitionPolicy.IsUnresolvedName(client.ClientName, client.Gstin))
             {
                 try
                 {
@@ -3260,10 +3285,10 @@ public sealed class BackgroundAutomationService : IDisposable
         }
 
         RecordSalesSourceSetHistory(folder, result, current ? "Duplicate" : "Imported");
-        ResolveCachedSalesPurchaseActions(folder, "Sales", client.Gstin, client.FinancialYear);
+        ResolveCachedSalesPurchaseActions(folder, "Sales", gstin, client.FinancialYear);
         ResolveAutomationAction(folder, "Sales", $"SOURCESET:SALES:{setFingerprint}");
         SalesPurchaseSourceCache.MarkSetHandled(
-            "Sales", client.Gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
+            "Sales", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
         if (!current)
             RaiseAccountingDataChanged(folder, "Sales", result.PersistedRows, "GSTIN/FY GSTR-1 source set");
         else
@@ -3274,13 +3299,14 @@ public sealed class BackgroundAutomationService : IDisposable
         ClientProfile client,
         AutomationFolderRegistration folder,
         string setFingerprint,
+        string gstin,
         CancellationToken cancellationToken)
     {
         var root = _settings.Get(EReturnsRootContext.PreferenceKey).Trim();
         var result = await _purchaseAutoImportService.ImportAsync(new PurchaseAutoImportRequest
         {
             ClientId = client.Id,
-            ClientGstin = client.Gstin,
+            ClientGstin = gstin,
             FinancialYear = client.FinancialYear,
             CompanyName = string.IsNullOrWhiteSpace(client.LegalName) ? client.ClientName : client.LegalName,
             EReturnsRootPath = root,
@@ -3303,8 +3329,8 @@ public sealed class BackgroundAutomationService : IDisposable
         }
 
         var accountingContentFingerprint = SalesPurchaseAccountingContentFingerprint.BuildPurchase(result);
-        var storedAccountingContentFingerprint = _purchaseRecordRepository.GetLatestAutomaticImportContentFingerprint(client.Id, client.FinancialYear);
-        var current = _purchaseRecordRepository.IsAutomaticImportCurrent(client.Id, client.FinancialYear, result.SourceFingerprint) ||
+        var storedAccountingContentFingerprint = _purchaseRecordRepository.GetLatestAutomaticImportContentFingerprint(client.Id, client.FinancialYear, gstin);
+        var current = _purchaseRecordRepository.IsAutomaticImportCurrent(client.Id, client.FinancialYear, result.SourceFingerprint, gstin) ||
                       (storedAccountingContentFingerprint.Length > 0 &&
                        storedAccountingContentFingerprint.Equals(accountingContentFingerprint, StringComparison.OrdinalIgnoreCase));
         var persisted = current
@@ -3331,10 +3357,10 @@ public sealed class BackgroundAutomationService : IDisposable
         }
 
         RecordPurchaseSourceSetHistory(folder, result, current ? "Duplicate" : "Imported");
-        ResolveCachedSalesPurchaseActions(folder, "Purchase", client.Gstin, client.FinancialYear);
+        ResolveCachedSalesPurchaseActions(folder, "Purchase", gstin, client.FinancialYear);
         ResolveAutomationAction(folder, "Purchase", $"SOURCESET:PURCHASE:{setFingerprint}");
         SalesPurchaseSourceCache.MarkSetHandled(
-            "Purchase", client.Gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
+            "Purchase", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
         if (!current)
             RaiseAccountingDataChanged(folder, "Purchase", persisted, "GSTIN/FY GSTR-2A/2B source set");
         else
