@@ -1436,6 +1436,26 @@ public sealed class MainWindowViewModel :
             value);
     }
 
+    /// <summary>
+    /// A Dashboard GSTIN always opens the current client's existing registration
+    /// editor. Do not CloseWorkspace or change the Client/FY to reach Clients.
+    /// </summary>
+    public bool OpenDashboardGstinManagement(string gstin)
+    {
+        var client = _clientContext.CurrentClient;
+        if (client is null || string.IsNullOrWhiteSpace(gstin) ||
+            !_clientsViewModel.OpenGstinManagement(client.Id, client.FinancialYear, gstin))
+            return false;
+
+        if (ReferenceEquals(CurrentPage, _clientsViewModel)) return true;
+        var previousPage = CurrentPage;
+        _selectedNavigationItem = null; // no permanent sidebar entry for the editor
+        OnPropertyChanged(nameof(SelectedNavigationItem));
+        CurrentPage = _clientsViewModel;
+        SchedulePageTransition(previousPage, _clientsViewModel);
+        return true;
+    }
+
     public bool NavigateTo(
         string title)
     {
