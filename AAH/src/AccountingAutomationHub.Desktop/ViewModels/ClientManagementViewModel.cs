@@ -3017,7 +3017,11 @@ public sealed partial class ClientManagementViewModel :
             // Save Client only commits ownership changes. Existing Sales/Purchase
             // sources are never auto-reimported because a secondary GSTIN was added;
             // the operator can use the registration-selective Reimport action.
+            var priorAdditional = EditingId > 0
+                ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
+                : Array.Empty<string>();
             var enteredAdditional = ParseAdditionalGstins(AdditionalGstinsText);
+            var hasAddedRegistration = enteredAdditional.Except(priorAdditional, StringComparer.OrdinalIgnoreCase).Any();
             var isNewClientFinancialYear = EditingId == 0;
             var saved = _repository.Save(
                 new ClientProfile
@@ -3083,7 +3087,9 @@ public sealed partial class ClientManagementViewModel :
             SelectedClient = Clients.FirstOrDefault(
                 client => client.Id == saved.Id);
             IsEditorOpen = false;
-            StatusText = $"Client {saved.ClientCode} saved successfully.";
+            StatusText = hasAddedRegistration
+                ? $"Client {saved.ClientCode} saved. New GSTIN registered without importing historical files. Use the GSTIN selector in Reimport Sales/Purchase when you want to import."
+                : $"Client {saved.ClientCode} saved successfully.";
             // Detached registration cleanup stays transactional in SqliteClientRepository.Save.
             // Adding a registration does not stage, scan, or enqueue historical imports.
         }
