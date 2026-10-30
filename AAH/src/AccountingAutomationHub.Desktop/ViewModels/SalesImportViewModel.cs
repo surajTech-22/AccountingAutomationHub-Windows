@@ -1905,6 +1905,9 @@ public sealed class SalesImportViewModel :
     {
         var client = _clientContext.CurrentClient;
         if (client is null || !CanClearSales) return;
+        var isMulti = client.AdditionalGstins is { Count: > 0 };
+        var targetGstin = isMulti ? GstinModuleClearDialog.Select(client, "Sales") : null;
+        if (isMulti && targetGstin is null) return;
 
         var answer = System.Windows.MessageBox.Show(
             $"Clear all Sales module transactions for {client.ClientName} / FY {client.FinancialYear}?\n\n" +
@@ -1918,9 +1921,9 @@ public sealed class SalesImportViewModel :
 
         _liveEditSaveTimer.Stop();
         _pendingLiveEditIds.Clear();
-        var removed = _salesRecordRepository.ClearModule(client.Id, client.FinancialYear);
-        ReplaceResultRows([], []);
-        Summary = new SalesImportSummary();
+        var removed = _salesRecordRepository.ClearModule(client.Id, client.FinancialYear, targetGstin);
+        if (isMulti) LoadSavedRows(client.Id, client.FinancialYear, []);
+        else { ReplaceResultRows([], []); Summary = new SalesImportSummary(); }
         EditStatusText = $"Cleared {removed:N0} Sales module row(s). Masters, mappings and Tally vouchers were preserved.";
         StatusText = "Sales module cleared for the selected Client + FY.";
         _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Sales, "Sales module cleared");
