@@ -41,6 +41,20 @@ internal static class LedgerMappingNoiseTests
                 "Payment", "KRISHNA LAM ENTERPRISES"),
             ("RTGS CR-UBIN0537535-BHIMAPPA MAVEER GONGADI-MITANSH TECHNOLOGY INDIA PVT LTD-UBINR22025071501243536",
                 "Receipt", "BHIMAPPA MAVEER GONGADI"),
+            ("UPI-SUPRGENIUS-SUPRGENIUS165750.RZP@AXISBANK-UTIB0000100-457352012765-1 YEAR PLAN",
+                "Payment", "SUPRGENIUS"),
+            ("UPI-M PAVAN KUMAR-8884164410@SUPERYES-SBIN0003661-603399399765-PAID VIA SUPERMONE",
+                "Receipt", "M PAVAN KUMAR"),
+            ("UPI-MAHIPALSINGH-7878313237@UPI-INDB0000868-165151940888-NO REMARKS",
+                "Payment", "MAHIPALSINGH"),
+            ("CHQ DEP - CTS CLG1 - GANGAVATHI: PENAJA :CANARA BANK",
+                "Receipt", "PENAJA"),
+            ("CHQ DEP - CTS CLG1 - GANGAVATHI: SHAILAJA :CANARA BANK",
+                "Receipt", "SHAILAJA"),
+            ("99920258882025-TPT-HDFC8F9DD35050C3-GROSS E BIZ PRIVATE LIMITED",
+                "Receipt", "GROSS E BIZ"),
+            ("HGAJP0F5360587114619-TORRENTPOWE-BILLPAY-50200026202917",
+                "Payment", "TORRENTPOWE"),
         };
 
         foreach (var (narration, type, expected) in cases)
