@@ -133,6 +133,27 @@ try
         new GstinProfileLookupResult { Gstin = unresolvedGstin, TradeName = "Different GST Source Name" });
     if (store.GetById(manualClient.Id)?.ClientName != "MY HAND-ENTERED COMPANY")
         throw new Exception("GST profile lookup replaced user's manual Client Name.");
+    // The new Auto Folder moves GSTIN evidence away from Downloads.
+    // Keep GSTIN-specific nested JSON discoverable for the existing profile
+    // lookup; do not cross-assign a different registration's trade name.
+    var gstFolder = Path.Combine(root, "AutoFolder", "GST", unresolvedGstin, "GSTR-3B");
+    Directory.CreateDirectory(gstFolder);
+    File.WriteAllText(Path.Combine(gstFolder, "profile.json"),
+        """{"gstin":"29ABCDE1234F1Z5","lgnm":"SOURCE VERIFIED TRADERS PRIVATE LIMITED","trdnm":"SOURCE VERIFIED TRADERS"}""");
+    var lookups = new GstinProfileLookupService(Path.Combine(root, "clients-test.sqlite"));
+    lookups.Initialize();
+    var folderEvidence = await lookups.LookupFolderAsync(
+        unresolvedGstin, Path.Combine(root, "AutoFolder", "GST", unresolvedGstin));
+    if (folderEvidence.TradeName != "SOURCE VERIFIED TRADERS" ||
+        folderEvidence.LegalName != "SOURCE VERIFIED TRADERS PRIVATE LIMITED" ||
+        folderEvidence.SourcePath.Length == 0)
+        throw new Exception("Nested GSTIN Auto Folder no longer supplies business-name evidence.");
+    var differentGstin = await lookups.LookupFolderAsync(
+        "27ABCDE1234F1Z5", Path.Combine(root, "AutoFolder", "GST", unresolvedGstin));
+    if (differentGstin.TradeName.Length > 0 || differentGstin.LegalName.Length > 0)
+        throw new Exception("A source from another GST registration was used as client-name evidence.");
+    Console.WriteLine("PASS: 2/2 nested GSTIN name lookup and cross-registration isolation checks.");
+
     Console.WriteLine("PASS: 4/4 source-backed Client Name recovery and manual-name preservation checks.");
 
     Console.WriteLine("PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.");
