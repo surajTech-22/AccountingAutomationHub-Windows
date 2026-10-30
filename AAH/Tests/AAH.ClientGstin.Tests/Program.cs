@@ -325,14 +325,9 @@ try
     if (branchPlan.ClientCount != 2 || branchPlan.GstinCount != 3 ||
         branchPlan.Pan != "ABCDE1234F" ||
         branchPlan.Branches.Select(x => x.Gstin).Distinct().Count() != 3 ||
-        branchPlan.Branches.Select(x => x.State).OrderBy(x => x).SequenceEqual(
-            new[] { "Karnataka", "Maharashtra", "Tamil Nadu" }))
-    {
-        // Exact states are asserted below; never silently sum registrations as Clients.
-        if (branchPlan.ClientCount != 2 || branchPlan.GstinCount != 3 ||
-            branchPlan.Branches.Select(x => x.State).Distinct().Count() != 3)
-            throw new Exception("Same-PAN Company Group branch scope lost or duplicated registrations.");
-    }
+        !branchPlan.Branches.Select(x => x.State).OrderBy(x => x, StringComparer.Ordinal)
+            .SequenceEqual(new[] { "Karnataka", "Maharashtra", "Tamil Nadu" }))
+        throw new Exception("Same-PAN Company Group branch scope lost or duplicated registrations.");
     if (!branchPlan.Branches.Any(x => x.Gstin == "29ABCDE1234F1Z5" && x.BranchName == "Karnataka Branch") ||
         !branchPlan.Branches.Any(x => x.Gstin == "27ABCDE1234F1Z5" && x.BranchName == "Maharashtra Branch") ||
         !branchPlan.Branches.Any(x => x.Gstin == "33ABCDE1234F2Z5" && x.BranchName == "Tamil Nadu Branch"))
