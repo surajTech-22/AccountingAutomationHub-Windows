@@ -2860,8 +2860,18 @@ public sealed partial class ClientManagementViewModel :
                 .Except(oldAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
             if (newlyAdded.Length > 0)
             {
-                var started = _automationService?.ScheduleNewClientGstinSourceDiscovery(
-                    saved.Id, saved.FinancialYear, newlyAdded) == true;
+                bool started;
+                try
+                {
+                    started = _automationService?.ScheduleNewClientGstinSourceDiscovery(
+                        saved.Id, saved.FinancialYear, newlyAdded) == true;
+                }
+                catch (Exception exception)
+                {
+                    started = false;
+                    AutomationDiagnosticLog.Write("GSTIN-DASHBOARD",
+                        $"New GSTIN saved but automatic import could not start: {exception}", $"{saved.Id}|{saved.FinancialYear}");
+                }
                 status = started
                     ? "GSTIN registrations saved. Sales/Purchase auto-import started for the added registration(s)."
                     : "GSTIN registrations saved. Auto-import is unavailable; check Auto Import and the linked folder.";
