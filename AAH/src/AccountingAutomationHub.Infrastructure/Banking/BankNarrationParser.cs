@@ -287,6 +287,15 @@ public static partial class BankNarrationParser
         var branchTransferParty = ExtractBranchTransferParty(text);
         if (branchTransferParty.Length > 0) return branchTransferParty;
 
+        // CL019 / Canara Bank regression: these structured exports provide the
+        // counterparty BEFORE bank codes, masked accounts, payment notes and
+        // own-company labels. Reading the entire tail generates false suggestions
+        // such as "VEENA SB PAYMENT FROM PHONE" and "KREATIVE NETBANK MUM".
+        // Only the fully recognized delimiter shapes are handled here; unknown
+        // layouts continue through the established parser without guessing.
+        var structuredParty = ExtractStructuredElectronicCounterparty(narration);
+        if (structuredParty.Length > 0) return structuredParty;
+
         if (InternalTransferOnlyRegex().IsMatch(text)) return "INTERNAL BANK TRANSFER";
 
         // Retain the approved Bank-of-Baroda/mobile CA-to-OD correction as a narrow
@@ -372,6 +381,72 @@ public static partial class BankNarrationParser
         if (summary.Length == 0)
             return GetLedgerMappingFallbackCategory(SanitizeMappingNarration(narration), txnMode);
         return IsExcelWorkbookValidPartyName(summary) ? NormalizeSummaryName(summary) : summary.Trim();
+    }
+
+    /// <summary>
+    /// Extract a counterparty only when a supported bank export has the
+    /// fully identified UPI/IMPS/NEFT/RTGS dash-separated layout.
+    /// Do not conflate the merchant with a remittance note, IFSC, bank
+    /// account, app name or the current client's own-company name.
+    /// </summary>
+    private static string ExtractStructuredElectronicCounterparty(string narration)
+    {
+        var text = NormalizeWhitespace(narration);
+        var match = Regex.Match(text,
+            @"^(?<method>UPI|IMPS|NEFT|RTGS)(?:\s+(?:DR|CR))?-(?<details>.+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return string.Empty;
+
+        var parts = match.Groups["details"].Value
+            .Split('-', StringSplitOptions.TrimEntries);
+        if (parts.Length < 3) return string.Empty;
+        var method = match.Groups["method"].Value;
+        var party = string.Empty;
+        if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase))
+        {
+            // Some banks put a payment app between the party and its VPA.
+            // The VPA is evidence that the first segment is the payer/payee.
+            if (!parts.Skip(1).Take(3).Any(value => value.Contains('@')))
+                return string.Empty;
+            party = parts[0];
+        }
+        else if (method.Equals("IMPS", StringComparison.OrdinalIgnoreCase))
+        {
+            // IMPS-<12-digit reference>-<party>-<bank>-<masked account>-<remark>
+            if (parts.Length < 4 ||
+                !Regex.IsMatch(parts[0], @"^\d{9,18}$", RegexOptions.CultureInvariant) ||
+                !Regex.IsMatch(parts[2], @"^[A-Z]{4}(?:[A-Z0-9]{0,7})$", RegexOptions.CultureInvariant))
+                return string.Empty;
+            party = parts[1];
+        }
+        else
+        {
+            // NEFT/RTGS CR/DR-<11-character IFSC>-<counterparty>-<bank/remark>...
+            if (!Regex.IsMatch(parts[0], @"^[A-Z]{4}[A-Z0-9]{7}$", RegexOptions.CultureInvariant))
+                return string.Empty;
+            party = parts[1];
+            // The intermediate account is not the sender. The immediately
+            // following party in this validated format is the merchant.
+            if (Regex.IsMatch(party,
+                    @"^INTERNAL\s+(?:A/?C|ACCOUNT|AC)\s+FOR\s+INTERMEDI(?:ARY|ERY)\b",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                if (parts.Length < 4) return string.Empty;
+                party = parts[2];
+            }
+        }
+
+        // A channel remark on its own is never a person or Ledger name.
+        if (Regex.IsMatch(party,
+                @"^(?:PAYMENT\s+FROM\s+PHONE|YOU\s+ARE\s+RECHARGING|BANK\s*ACCOUNT\s*VALIDATION|NETBANK(?:\s+MUM)?|UPI|PAYTM|IMPS|NEFT|RTGS)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return string.Empty;
+
+        var candidate = GeneralCleanCandidate(party);
+        return GeneralIsGoodCandidate(candidate) &&
+               !IsLedgerMappingNoiseSummary(candidate)
+            ? candidate
+            : string.Empty;
     }
 
     private static string StripEmbeddedBankReferenceTokens(string summary)
