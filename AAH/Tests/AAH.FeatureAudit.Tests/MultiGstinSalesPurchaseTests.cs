@@ -99,6 +99,20 @@ internal static class MultiGstinSalesPurchaseTests
                 purchase.GetAutomaticRecords(client.Id, Fy).Count(x => x.ClientGstin == A) == 1,
                 "Reimport of secondary GSTIN deleted primary GSTIN records.");
 
+            // Clearing the module for one registration must not touch the
+            // second registration; reimport must still use the same parser path.
+            Check(sales.ClearModule(client.Id, Fy, B) == 1 &&
+                purchase.ClearModule(client.Id, Fy, B) == 1,
+                "Registration-selective Clear did not remove its own rows.");
+            Check(sales.GetAutomaticRecords(client.Id, Fy).Count == 1 &&
+                purchase.GetAutomaticRecords(client.Id, Fy).Count == 1,
+                "Registration-selective Clear destroyed records of another GSTIN.");
+            sales.ReplaceAutomaticImport(client.Id, Fy, Sales(B, "SB-3", "INV-3"));
+            purchase.ReplaceAutomaticImport(client.Id, Fy, Purchase(B, "PB-3", "INV-3"));
+            Check(sales.GetAutomaticRecords(client.Id, Fy).Count == 2 &&
+                purchase.GetAutomaticRecords(client.Id, Fy).Count == 2,
+                "GSTIN-specific reimport after Clear did not restore combined module.");
+
             var oldEvidence = Path.Combine(root, "OldClient", "GST", B, "GSTR-3B");
             Directory.CreateDirectory(oldEvidence);
             var pdfPath = Path.Combine(oldEvidence, "Original-GSTR3B.pdf");
