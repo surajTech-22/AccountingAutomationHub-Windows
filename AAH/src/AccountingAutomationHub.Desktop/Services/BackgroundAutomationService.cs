@@ -530,11 +530,20 @@ public sealed class BackgroundAutomationService : IDisposable
                 // write-stability delay at every step of this recovery pass.
                 var pending = new List<Task>();
                 var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var root in GetCentralSalesPurchaseRoots())
+                // Process linked folder sources before the larger shared
+                // Downloads/E-returns trees; the HashSet avoids overlapping roots.
+                var recoveryRoots = folders.Select(folder => folder.FolderPath)
+                    .Concat(GetCentralSalesPurchaseRoots())
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+                foreach (var root in recoveryRoots)
                 {
                     lifetime.Token.ThrowIfCancellationRequested();
                     IEnumerable<string> candidates;
-                    try { candidates = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories); }
+                    try
+                    {
+                        candidates = Directory.EnumerateFiles(root, "*",
+                            new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true });
+                    }
                     catch { continue; }
 
                     foreach (var candidate in candidates)
