@@ -23,7 +23,7 @@ internal static class MultiGstinSalesPurchaseTests
             SourceFingerprint = fingerprint,
             Records = [new SalesImportRecord
             {
-                ClientGstin = gstin, FinancialYear = Fy, CompanyName = "EXAMPLE CLIENT",
+                ClientGstin = gstin, CompanyName = "EXAMPLE CLIENT",
                 Destination = "Sales", DocumentNumber = document,
                 DocumentDate = new DateTime(2025, 4, 12),
                 CustomerGstin = "36ABCDE1234F1Z5", CustomerName = "EXAMPLE CUSTOMER",
@@ -37,13 +37,17 @@ internal static class MultiGstinSalesPurchaseTests
             ClientGstin = gstin, FinancialYear = Fy, CompanyName = "EXAMPLE CLIENT",
             SourceFingerprint = fingerprint, Records = [new PurchaseImportRecord
             {
-                ClientGstin = gstin, FinancialYear = Fy, CompanyName = "EXAMPLE CLIENT",
+                ClientGstin = gstin, CompanyName = "EXAMPLE CLIENT",
                 Destination = "Purchase", DocumentNumber = document,
                 DocumentDate = new DateTime(2025, 4, 12),
                 SupplierGstin = "36ABCDE1234F1Z5", SupplierName = "EXAMPLE SUPPLIER",
                 TaxableValue = 100m, Igst = 18m
             }],
-            Issues = [], Warnings = [], Summary = new(), Verification = new(), SourceManifest = []
+            Issues = [], Warnings = [], Summary = new(), Verification = new PurchaseSourceVerification
+            {
+                TwoA = new PurchaseFormVerification { Form = "2A" },
+                TwoB = new PurchaseFormVerification { Form = "2B" }
+            }, SourceManifest = []
         };
 
     public static void Run()
