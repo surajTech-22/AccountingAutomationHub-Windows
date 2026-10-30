@@ -440,12 +440,12 @@ public sealed class BackgroundAutomationService : IDisposable
     }
 
     /// <summary>
-    /// A newly saved additional GSTIN can already have historical GSTR-1/2A/2B
-    /// files in E-returns, Downloads or a linked Automation Folder. Normal
-    /// file watchers only see new file events, so discover those old sources
-    /// once after Save Client, never on each textbox keystroke.
+    /// Start registration-scoped automatic Sales/Purchase import as soon as Save
+    /// Client commits the newly added GSTIN. Use already indexed sources first;
+    /// historical discovery continues in the background without delaying that
+    /// first import attempt. Ordinary Auto Import policy remains authoritative.
     /// </summary>
-    public void ScheduleNewClientGstinSourceDiscovery(
+    public bool ScheduleNewClientGstinSourceDiscovery(
         long clientId, string financialYear, IReadOnlyList<string> addedRegistrations)
     {
         var gstins = addedRegistrations
@@ -455,7 +455,22 @@ public sealed class BackgroundAutomationService : IDisposable
             .ToArray();
         var lifetime = _lifetime;
         if (clientId <= 0 || gstins.Length == 0 ||
-            lifetime is null || lifetime.IsCancellationRequested) return;
+            lifetime is null || lifetime.IsCancellationRequested)
+        {
+            AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                "Registration import not scheduled: automation worker is not running or GSTIN is invalid.",
+                $"{clientId}|{financialYear}");
+            return false;
+        }
+        if (_globalPause || !_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
+            !_settings.GetBool(ApplicationSettingKeys.AutomationAutoImportKnown) ||
+            !_clientAutoImportPolicies.Get(clientId).Enabled)
+        {
+            AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                "Registration saved, but automatic import is paused or disabled by existing automation policy.",
+                $"{clientId}|{financialYear}");
+            return false;
+        }
 
         _ = Task.Run(async () =>
         {
@@ -467,15 +482,42 @@ public sealed class BackgroundAutomationService : IDisposable
                     return;
                 var activeGstins = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
                     .Select(NormalizeGstin).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (!gstins.Any(activeGstins.Contains)) return;
+                var targets = gstins.Where(activeGstins.Contains).ToArray();
+                if (targets.Length == 0) return;
 
-                // Prepare new registration folders and GST evidence routing without
-                // touching any other Client/FY or altering existing source files.
+                // The shared source index otherwise keeps a snapshot for 30 seconds.
+                // Re-read ownership before routing sources that were indexed before
+                // this registration was attached to the client.
+                lock (_salesPurchaseClientSnapshotGate)
+                    _salesPurchaseActiveClientSnapshotUtc = DateTime.MinValue;
+
                 var folders = _automationRepository.GetFolders()
                     .Where(folder => folder.ClientId == clientId &&
                                      folder.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
                                      !folder.IsPaused && Directory.Exists(folder.FolderPath))
                     .ToArray();
+                if (folders.Length == 0)
+                {
+                    AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                        "Added GSTIN is saved, but Sales/Purchase automatic import needs an active linked Automation Folder.",
+                        $"{clientId}|{financialYear}");
+                    return;
+                }
+
+                // Import already indexed GSTR files now, rather than waiting for
+                // a recursive scan of unrelated Downloads/E-returns files.
+                foreach (var gstin in targets)
+                {
+                    lifetime.Token.ThrowIfCancellationRequested();
+                    AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                        $"Starting immediate Sales/Purchase source-set import for added GSTIN {gstin}.",
+                        $"{clientId}|{financialYear}");
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Sales", gstin, immediate: true);
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Purchase", gstin, immediate: true);
+                }
+
+                // Folder creation and GST profile bootstrap may take time, so
+                // never put them ahead of the initial Sales/Purchase queue.
                 foreach (var folder in folders)
                 {
                     lifetime.Token.ThrowIfCancellationRequested();
@@ -483,17 +525,11 @@ public sealed class BackgroundAutomationService : IDisposable
                     ScheduleRegisteredClientGstBootstrap(folder, client.Id);
                 }
 
-                if (_globalPause ||
-                    !_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
-                    !_settings.GetBool(ApplicationSettingKeys.AutomationAutoImportKnown))
-                    return;
-
-                // Reclassify historical sources after ownership changes. The normal
-                // startup metadata/observed-state shortcuts would otherwise ignore a
-                // file already scanned before the new GSTIN belonged to this client.
-                // The source verifier and per-GSTIN content fingerprints still prevent
-                // cross-registration import or replacing unchanged Sales/Purchase data.
+                // Find historical sources not yet in the durable source cache.
+                // A preexisting settled file does not need the live watcher
+                // write-stability delay at every step of this recovery pass.
                 var pending = new List<Task>();
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var root in GetCentralSalesPurchaseRoots())
                 {
                     lifetime.Token.ThrowIfCancellationRequested();
@@ -508,6 +544,7 @@ public sealed class BackgroundAutomationService : IDisposable
                         string path;
                         try { path = Path.GetFullPath(candidate); }
                         catch { continue; }
+                        if (!visited.Add(path)) continue;
 
                         _salesPurchaseObservedStates.TryRemove(path, out _);
                         if (!_salesPurchaseSourceInFlight.TryAdd(path, 0)) continue;
@@ -520,12 +557,12 @@ public sealed class BackgroundAutomationService : IDisposable
                 }
                 if (pending.Count > 0) await Task.WhenAll(pending).ConfigureAwait(false);
 
-                // Reuse the unchanged, registration-scoped grouped importer. No
-                // per-client full-year reimport is initiated for existing GSTINs.
-                foreach (var gstin in gstins.Where(activeGstins.Contains))
+                // Reevaluate only the newly added registrations after the scan;
+                // durable GSTIN/FY source fingerprints protect unchanged imports.
+                foreach (var gstin in targets)
                 {
-                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Sales", gstin);
-                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Purchase", gstin);
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Sales", gstin, immediate: true);
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Purchase", gstin, immediate: true);
                 }
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -534,10 +571,11 @@ public sealed class BackgroundAutomationService : IDisposable
             catch (Exception exception)
             {
                 AutomationDiagnosticLog.Write("GSTIN-ADDED",
-                    $"New-registration source discovery deferred: {exception.Message}",
+                    $"Added-registration import failed or was deferred: {exception}",
                     $"{clientId}|{financialYear}");
             }
         }, CancellationToken.None);
+        return true;
     }
 
     private async Task ReindexNewRegistrationSourceAsync(string path, CancellationToken cancellationToken)
@@ -545,7 +583,8 @@ public sealed class BackgroundAutomationService : IDisposable
         try
         {
             await ProcessCentralSalesPurchaseSourceAsync(
-                path, cancellationToken, allowHandledMetadataFastSkip: false).ConfigureAwait(false);
+                path, cancellationToken, allowHandledMetadataFastSkip: false,
+                historicalReindex: true).ConfigureAwait(false);
         }
         finally
         {
@@ -3011,7 +3050,9 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
-    private async Task ProcessCentralSalesPurchaseSourceAsync(string path, CancellationToken cancellationToken, bool allowHandledMetadataFastSkip = false)
+    private async Task ProcessCentralSalesPurchaseSourceAsync(
+        string path, CancellationToken cancellationToken,
+        bool allowHandledMetadataFastSkip = false, bool historicalReindex = false)
     {
         await _salesPurchaseIndexGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -3050,7 +3091,7 @@ public sealed class BackgroundAutomationService : IDisposable
             // need another 1-second polling loop before classification. Live watcher events
             // still use WaitForStableFileAsync exactly as before, so active copies/downloads
             // retain the same protection and intended behavior.
-            if (!(allowHandledMetadataFastSkip && IsHistoricalCentralSourceStable(path)) &&
+            if (!((allowHandledMetadataFastSkip || historicalReindex) && IsHistoricalCentralSourceStable(path)) &&
                 !await WaitForStableFileAsync(path, cancellationToken).ConfigureAwait(false)) return;
             var info = new FileInfo(path);
             if (!info.Exists) return;
@@ -3235,7 +3276,8 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
-    private void QueueSalesPurchaseSourceSet(long clientId, string financialYear, string module, string registrationGstin)
+    private void QueueSalesPurchaseSourceSet(
+        long clientId, string financialYear, string module, string registrationGstin, bool immediate = false)
     {
         var normalizedModule = module.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales"
             : module.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase"
@@ -3257,7 +3299,8 @@ public sealed class BackgroundAutomationService : IDisposable
                 while (!lifetime.IsCancellationRequested)
                 {
                     var version = _salesPurchaseSetVersions.TryGetValue(key, out var currentVersion) ? currentVersion : 0L;
-                    await Task.Delay(1500, lifetime.Token).ConfigureAwait(false);
+                    if (!immediate)
+                        await Task.Delay(1500, lifetime.Token).ConfigureAwait(false);
                     if (_salesPurchaseSetVersions.TryGetValue(key, out var afterDelay) && afterDelay != version) continue;
 
                     await ProcessSalesPurchaseSourceSetAsync(clientId, normalizedFy, normalizedModule, target, lifetime.Token).ConfigureAwait(false);
@@ -3653,7 +3696,7 @@ public sealed class BackgroundAutomationService : IDisposable
                 .Where(client =>
                 {
                     var opened = _clientRepository.GetWorkspaceLastOpenedUtc(client.Id, client.FinancialYear);
-                    var activity = opened != DateTime.MinValue ? opened : client.UpdatedUtc;
+                    var activity = opened > client.UpdatedUtc ? opened : client.UpdatedUtc;
                     return activity == DateTime.MinValue || now - activity <= TimeSpan.FromDays(183);
                 })
                 .ToArray();
