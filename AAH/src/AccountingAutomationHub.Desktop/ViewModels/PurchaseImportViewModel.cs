@@ -1552,6 +1552,9 @@ public sealed class PurchaseImportViewModel :
     {
         var client = _clientContext.CurrentClient;
         if (client is null || !CanDeletePurchase) return;
+        var isMulti = client.AdditionalGstins is { Count: > 0 };
+        var targetGstin = isMulti ? GstinModuleClearDialog.Select(client, "Purchase") : null;
+        if (isMulti && targetGstin is null) return;
 
         var answer = MessageBox.Show(
             $"Clear all Purchase module transactions for {client.ClientName} / FY {client.FinancialYear}?\n\n" +
@@ -1564,15 +1567,19 @@ public sealed class PurchaseImportViewModel :
         if (answer != MessageBoxResult.Yes) return;
 
         ResetAutomaticSaveQueue();
-        var removed = _purchaseRecordRepository.ClearModule(client.Id, client.FinancialYear);
-        PurchaseRows.Clear();
-        RcmRows.Clear();
-        DebitNoteRows.Clear();
-        DebitNoteReverseRows.Clear();
-        AllRows.Clear();
-        ReconciliationRows.Clear();
-        Issues.Clear();
-        Summary = new PurchaseImportSummary();
+        var removed = _purchaseRecordRepository.ClearModule(client.Id, client.FinancialYear, targetGstin);
+        if (isMulti) LoadSavedAutomaticRows(client.Id, client.FinancialYear, []);
+        else
+        {
+            PurchaseRows.Clear();
+            RcmRows.Clear();
+            DebitNoteRows.Clear();
+            DebitNoteReverseRows.Clear();
+            AllRows.Clear();
+            ReconciliationRows.Clear();
+            Issues.Clear();
+            Summary = new PurchaseImportSummary();
+        }
         _ledgerTotalService?.Invalidate(client.Id, client.FinancialYear);
         _liveChangeHub?.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Purchase, "Purchase module cleared");
         _activityContext.NotifyChanged();
