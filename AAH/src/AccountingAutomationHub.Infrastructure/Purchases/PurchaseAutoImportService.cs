@@ -469,60 +469,34 @@ public sealed class PurchaseAutoImportService :
                 financialYear,
                 cancellationToken);
 
-            if (!comparison.Matched)
-            {
-                return new FormResolution(
-                    [],
-                    BuildVerification(
-                        sourceType,
-                        chosenBranch,
-                        selectedClientRoot,
-                        annual,
-                        monthly,
-                        [],
-                        "Annual/Monthly Verification Failed",
-                        true,
-                        comparison));
-            }
-
+            // The Annual GST export is authoritative. Monthly sources are
+            // optional diagnostic cross-checks, not a prerequisite for import.
+            // Keep differences in verification evidence without blocking.
             var selected =
                 new List<SourceCandidate>
                 {
                     annual
                 };
 
-            if (sourceType == "2B")
+            if (sourceType == "2B" && comparison.Matched)
             {
+                // Only supplement 2B rejection details from monthly files if
+                // the accepted invoice set agrees with the annual export.
                 foreach (var monthlySource in monthly)
                 {
-                    var supplemental = RejectedOnlyTwoBSource(
-                        monthlySource);
-
-                    if (supplemental is not null)
-                    {
-                        selected.Add(supplemental);
-                    }
+                    var supplemental = RejectedOnlyTwoBSource(monthlySource);
+                    if (supplemental is not null) selected.Add(supplemental);
                 }
             }
 
-            foreach (var source in selected)
-            {
-                source.VerificationStatus =
-                    "Annual Verified with Monthly";
-            }
+            var status = comparison.Matched
+                ? "Annual Verified with Monthly"
+                : "Annual Primary - Monthly Difference (Review Only)";
+            foreach (var source in selected) source.VerificationStatus = status;
 
-            return new FormResolution(
-                selected,
-                BuildVerification(
-                    sourceType,
-                    chosenBranch,
-                    selectedClientRoot,
-                    annual,
-                    monthly,
-                    selected,
-                    "Annual Verified with Monthly",
-                    false,
-                    comparison));
+            return new FormResolution(selected,
+                BuildVerification(sourceType, chosenBranch, selectedClientRoot,
+                    annual, monthly, selected, status, false, comparison));
         }
 
         if (annual is not null)
@@ -591,13 +565,10 @@ public sealed class PurchaseAutoImportService :
         if (annual is not null && monthly.Count > 0)
         {
             var comparison = CompareSourceSets(sourceType, [annual], monthly, financialYear, cancellationToken);
-            if (!comparison.Matched)
-                return new FormResolution([], BuildVerification(
-                    sourceType, branch, clientRoot, annual, monthly, [],
-                    "Annual/Monthly Verification Failed", true, comparison));
-
+            // The Annual GST export is authoritative. Never reject valid
+            // annual data because optional monthly exports disagree.
             var selected = new List<SourceCandidate> { annual };
-            if (sourceType == "2B")
+            if (sourceType == "2B" && comparison.Matched)
             {
                 foreach (var monthlySource in monthly)
                 {
@@ -605,10 +576,13 @@ public sealed class PurchaseAutoImportService :
                     if (supplemental is not null) selected.Add(supplemental);
                 }
             }
-            foreach (var source in selected) source.VerificationStatus = "Annual Verified with Monthly";
+            var status = comparison.Matched
+                ? "Annual Verified with Monthly"
+                : "Annual Primary - Monthly Difference (Review Only)";
+            foreach (var source in selected) source.VerificationStatus = status;
             return new FormResolution(selected, BuildVerification(
                 sourceType, branch, clientRoot, annual, monthly, selected,
-                "Annual Verified with Monthly", false, comparison));
+                status, false, comparison));
         }
 
         if (annual is not null)
@@ -658,7 +632,7 @@ public sealed class PurchaseAutoImportService :
                 if (!PeriodInFinancialYear(classification.Period, financialYear)) continue;
 
                 var annualByPath = NormalizePathToken(path).Contains("ANNUAL", StringComparison.OrdinalIgnoreCase);
-                var annualAggregate = IsAnnualTwoBAggregatePayload(payload.Payload, sourceType);
+                var annualAggregate = IsAnnualAggregatePayload(payload.Payload, sourceType);
                 var scope = annualByPath || annualAggregate ? "Annual" : "Monthly";
                 var embedded = EmbeddedTimestamp(payload.Payload);
                 candidates.Add(new SourceCandidate
@@ -853,7 +827,7 @@ public sealed class PurchaseAutoImportService :
                         Branch = string.Empty,
                         Scope = "Legacy",
                         MonthKey = string.Empty,
-                        IsAnnualAggregate = IsAnnualTwoBAggregatePayload(
+                        IsAnnualAggregate = IsAnnualAggregatePayload(
                             payload.Payload,
                             classification.SourceType),
                         ReadOnly = true,
@@ -966,7 +940,7 @@ public sealed class PurchaseAutoImportService :
                         IsAnnualAggregate = scope.Scope.Equals(
                                                 "Annual",
                                                 StringComparison.OrdinalIgnoreCase) ||
-                                            IsAnnualTwoBAggregatePayload(
+                                            IsAnnualAggregatePayload(
                                                 payload.Payload,
                                                 sourceType),
                         ReadOnly = true
@@ -1190,23 +1164,24 @@ public sealed class PurchaseAutoImportService :
             string.Empty);
     }
 
-    private static bool IsAnnualTwoBAggregatePayload(
+    private static bool IsAnnualAggregatePayload(
         JsonObject payload,
         string sourceType)
     {
-        if (!sourceType.Equals("2B", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
+        // Winman marks both GSTR2A_ANNUAL and GSTR2B_ANNUAL in FormName.
+        // retnprd=032026 in these files is the financial-year end,
+        // not evidence that the export is a monthly March file.
         var winRequest = Object(payload["winreq"]);
-        var formName = winRequest is null
-            ? string.Empty
-            : Text(winRequest["FormName"]);
-
-        return formName.Contains(
-            "ANNUAL",
-            StringComparison.OrdinalIgnoreCase);
+        if (winRequest is null) return false;
+        var formName = Text(winRequest["FormName"]);
+        var expected = sourceType.Equals("2A", StringComparison.OrdinalIgnoreCase)
+            ? "GSTR2A"
+            : sourceType.Equals("2B", StringComparison.OrdinalIgnoreCase)
+                ? "GSTR2B"
+                : string.Empty;
+        return expected.Length > 0 &&
+            formName.Contains(expected, StringComparison.OrdinalIgnoreCase) &&
+            formName.Contains("ANNUAL", StringComparison.OrdinalIgnoreCase);
     }
 
     private static JsonObject NormalizePayload(
