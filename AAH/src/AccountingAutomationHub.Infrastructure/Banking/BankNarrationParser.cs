@@ -244,6 +244,12 @@ public static partial class BankNarrationParser
         if (ContainsAny(text, "CASH DEPOSIT", "BY CASH", "CASH DEP")) return "CASH DEPOSIT";
         if (ContainsAny(text, "CASH WD", "CASH WITHDRAWAL", "ATM WDL", "ATM WITHDRAWAL")) return "CASH WITHDRAWAL";
 
+        // Some Canara non-electronic rows carry a fixed routing wrapper around
+        // the actual counterparty. Recognize only these fully evidenced shapes.
+        // Ordinary cheque/transfer rows still take their established paths.
+        var structuredOtherParty = ExtractStructuredCanaraCounterparty(narration);
+        if (structuredOtherParty.Length > 0) return structuredOtherParty;
+
         // Clearing rows must be parsed before the broad electronic/general extractor.
         // Blank BY INST ... MICR CLG rows contain no party and therefore stay out of
         // Ledger Mapping; rows that do contain a party return only that party.
@@ -286,6 +292,15 @@ public static partial class BankNarrationParser
 
         var branchTransferParty = ExtractBranchTransferParty(text);
         if (branchTransferParty.Length > 0) return branchTransferParty;
+
+        // CL019 / Canara Bank regression: these structured exports provide the
+        // counterparty BEFORE bank codes, masked accounts, payment notes and
+        // own-company labels. Reading the entire tail generates false suggestions
+        // such as "VEENA SB PAYMENT FROM PHONE" and "KREATIVE NETBANK MUM".
+        // Only the fully recognized delimiter shapes are handled here; unknown
+        // layouts continue through the established parser without guessing.
+        var structuredParty = ExtractStructuredElectronicCounterparty(narration);
+        if (structuredParty.Length > 0) return structuredParty;
 
         if (InternalTransferOnlyRegex().IsMatch(text)) return "INTERNAL BANK TRANSFER";
 
@@ -372,6 +387,103 @@ public static partial class BankNarrationParser
         if (summary.Length == 0)
             return GetLedgerMappingFallbackCategory(SanitizeMappingNarration(narration), txnMode);
         return IsExcelWorkbookValidPartyName(summary) ? NormalizeSummaryName(summary) : summary.Trim();
+    }
+
+    private static string ExtractStructuredCanaraCounterparty(string narration)
+    {
+        var text = NormalizeWhitespace(narration);
+        // CHQ DEP - CTS CLG1 - GANGAVATHI: PENAJA :CANARA BANK
+        var cheque = Regex.Match(text,
+            @"^CHQ\s+DEP\s*-\s*CTS\s+CLG\d+\s*-\s*[^:]+:\s*(?<party>[^:]+?)\s*:\s*CANARA\s+BANK\s*$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (cheque.Success)
+            return ValidatedParty(cheque.Groups["party"].Value);
+
+        // 99920258882025-TPT-HDFC8F9DD35050C3-GROSS E BIZ PRIVATE LIMITED
+        var tpt = Regex.Match(text,
+            @"^\d{10,20}-TPT-[A-Z0-9]{10,28}-(?<party>[A-Z].+)$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (tpt.Success)
+            return ValidatedParty(tpt.Groups["party"].Value);
+
+        // HGAJP0F5360587114619-TORRENTPOWE-BILLPAY-50200026202917
+        var billpay = Regex.Match(text,
+            @"^[A-Z][A-Z0-9]{12,29}-(?<party>[A-Z][A-Z0-9 ]{3,40})-BILLPAY-\d{8,20}$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        return billpay.Success ? ValidatedParty(billpay.Groups["party"].Value) : string.Empty;
+    }
+
+    private static string ValidatedParty(string raw)
+    {
+        var party = GeneralCleanCandidate(raw);
+        return GeneralIsGoodCandidate(party) && !IsLedgerMappingNoiseSummary(party)
+            ? party : string.Empty;
+    }
+
+    /// <summary>
+    /// Extract a counterparty only when a supported bank export has the
+    /// fully identified UPI/IMPS/NEFT/RTGS dash-separated layout.
+    /// Do not conflate the merchant with a remittance note, IFSC, bank
+    /// account, app name or the current client's own-company name.
+    /// </summary>
+    private static string ExtractStructuredElectronicCounterparty(string narration)
+    {
+        var text = NormalizeWhitespace(narration);
+        var match = Regex.Match(text,
+            @"^(?<method>UPI|IMPS|NEFT|RTGS)(?:\s+(?:DR|CR))?-(?<details>.+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return string.Empty;
+
+        var parts = match.Groups["details"].Value
+            .Split('-', StringSplitOptions.TrimEntries);
+        if (parts.Length < 3) return string.Empty;
+        var method = match.Groups["method"].Value;
+        var party = string.Empty;
+        if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase))
+        {
+            // Some banks put a payment app between the party and its VPA.
+            // The VPA is evidence that the first segment is the payer/payee.
+            if (!parts.Skip(1).Take(3).Any(value => value.Contains('@')))
+                return string.Empty;
+            party = parts[0];
+        }
+        else if (method.Equals("IMPS", StringComparison.OrdinalIgnoreCase))
+        {
+            // IMPS-<12-digit reference>-<party>-<bank>-<masked account>-<remark>
+            if (parts.Length < 4 ||
+                !Regex.IsMatch(parts[0], @"^\d{9,18}$", RegexOptions.CultureInvariant) ||
+                !Regex.IsMatch(parts[2], @"^[A-Z]{4}(?:[A-Z0-9]{0,7})$", RegexOptions.CultureInvariant))
+                return string.Empty;
+            party = parts[1];
+        }
+        else
+        {
+            // NEFT/RTGS CR/DR-<11-character IFSC>-<counterparty>-<bank/remark>...
+            if (!Regex.IsMatch(parts[0], @"^[A-Z]{4}[A-Z0-9]{7}$", RegexOptions.CultureInvariant))
+                return string.Empty;
+            party = parts[1];
+            // The intermediate account is not the sender. The immediately
+            // following party in this validated format is the merchant.
+            if (Regex.IsMatch(party,
+                    @"^INTERNAL\s+(?:A/?C|ACCOUNT|AC)\s+FOR\s+INTERMEDI(?:ARY|ERY)\b",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                if (parts.Length < 4) return string.Empty;
+                party = parts[2];
+            }
+        }
+
+        // A channel remark on its own is never a person or Ledger name.
+        if (Regex.IsMatch(party,
+                @"^(?:PAYMENT\s+FROM\s+PHONE|YOU\s+ARE\s+RECHARGING|BANK\s*ACCOUNT\s*VALIDATION|NETBANK(?:\s+MUM)?|UPI|PAYTM|IMPS|NEFT|RTGS)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return string.Empty;
+
+        var candidate = GeneralCleanCandidate(party);
+        return GeneralIsGoodCandidate(candidate) &&
+               !IsLedgerMappingNoiseSummary(candidate)
+            ? candidate
+            : string.Empty;
     }
 
     private static string StripEmbeddedBankReferenceTokens(string summary)
