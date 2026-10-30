@@ -264,6 +264,36 @@ try
         throw new Exception("Added GSTIN no longer queues an immediate registration-scoped import before historical discovery.");
     Console.WriteLine("PASS: new GSTIN Save starts immediate source-set import and refreshes client ownership.");
 
+    // Dashboard must display all saved client GSTINs, not only the primary,
+    // and navigate directly to the existing editor without changing Client/FY.
+    var dashboardSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+    var dashboardXaml = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "Views", "DashboardView.xaml"));
+    var dashboardCode = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "Views", "DashboardView.xaml.cs"));
+    var mainSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
+    var managementXaml = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "Views", "ClientManagementView.xaml"));
+    var managementCode = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "Views", "ClientManagementView.xaml.cs"));
+    if (!dashboardSource.Contains("BuildClientGstinRegistrations(client)", StringComparison.Ordinal) ||
+        !dashboardSource.Contains("client.AdditionalGstins ?? []", StringComparison.Ordinal) ||
+        !dashboardSource.Contains("seen.Add(additional)", StringComparison.Ordinal) ||
+        !dashboardSource.Contains("ClientGstinRegistrations = [];", StringComparison.Ordinal) ||
+        !dashboardXaml.Contains("ItemsSource=\"{Binding ClientGstinRegistrations}\"", StringComparison.Ordinal) ||
+        !dashboardXaml.Contains("Click=\"DashboardGstin_Click\"", StringComparison.Ordinal) ||
+        !dashboardCode.Contains("main.OpenDashboardGstinManagement(gstin);", StringComparison.Ordinal) ||
+        !mainSource.Contains("public bool OpenDashboardGstinManagement(string gstin)", StringComparison.Ordinal) ||
+        !mainSource.Contains("_clientsViewModel.OpenGstinManagement(client.Id, client.FinancialYear, gstin)", StringComparison.Ordinal) ||
+        !editorSource.Contains("public bool OpenGstinManagement(long clientId, string financialYear, string gstin)", StringComparison.Ordinal) ||
+        !editorSource.Contains("LoadEditor(client); // authoritative saved registration list", StringComparison.Ordinal) ||
+        !managementXaml.Contains("x:Name=\"AdditionalGstinsBox\"", StringComparison.Ordinal) ||
+        !managementCode.Contains("box.BringIntoView();", StringComparison.Ordinal))
+        throw new Exception("Dashboard GSTIN management/display navigation is incomplete or no longer Client/FY-safe.");
+    Console.WriteLine("PASS: Dashboard displays every saved GSTIN and opens existing Client/FY editor at selected registration.");
+
     Console.WriteLine("PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.");
 }
 finally
