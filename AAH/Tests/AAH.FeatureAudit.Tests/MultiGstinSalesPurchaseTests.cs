@@ -73,6 +73,23 @@ internal static class MultiGstinSalesPurchaseTests
                 FinancialYear = Fy
             });
 
+            // Before detaching, the same GSTIN cannot become a second Client
+            // Profile in the same financial year (no double ownership/import).
+            var duplicateOwnerRejected = false;
+            try
+            {
+                clients.Save(new ClientProfile
+                {
+                    ClientCode = "DEMO-DUPLICATE", ClientName = "INVALID SECOND OWNER",
+                    Gstin = B, Pan = "ABCDE1234F", FinancialYear = Fy
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                duplicateOwnerRejected = true;
+            }
+            Check(duplicateOwnerRejected, "A second client claimed an already-linked GSTIN.");
+
             // Same invoice number, customer and amount in two state registrations
             // must not be considered a duplicate across those GSTINs.
             Check(sales.ReplaceAutomaticImport(client.Id, Fy, Sales(A, "SA-1", "INV-1")) == 1,
