@@ -1249,6 +1249,55 @@ public sealed class BackgroundAutomationService : IDisposable
             cancellationToken);
 
         var savedClient = _clientRepository.ApplyImportedGstProfile(client.Id, profile);
+        // GSTR-3B files are now moved from Downloads into GST/<GSTIN>/...
+        // Scan the existing linked Auto Folder for client-name evidence as
+        // well. Import and name discovery have separate responsibilities:
+        // use only explicitly GSTIN-matched profile content, never the folder
+        // name, state/PAN derivation, or another client as the business name.
+        if (GstClientNameRecognitionPolicy.IsUnresolvedName(savedClient.ClientName, savedClient.Gstin))
+        {
+            // Only the primary GSTIN defines the existing client name.
+            // Secondary registrations may have different branch trade names,
+            // and must not silently rename the shared accounting client.
+            foreach (var linkedGstin in new[] { savedClient.Gstin }
+                .Where(value => value.Length == 15))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var gstinRoot = Path.Combine(registration.FolderPath, "GST", linkedGstin);
+                if (!Directory.Exists(gstinRoot)) continue;
+                try
+                {
+                    var linkedProfile = await _gstinProfileLookupService.LookupFolderAsync(
+                        linkedGstin, gstinRoot, cancellationToken);
+                    var linkedName = linkedProfile.TradeName.Length > 0
+                        ? linkedProfile.TradeName : linkedProfile.LegalName;
+                    if (linkedProfile.SourcePath.Length == 0 ||
+                        !GstClientNameRecognitionPolicy.HasSourceBusinessName(linkedName, linkedGstin))
+                        continue;
+                    savedClient = _clientRepository.ApplyImportedGstProfile(
+                        savedClient.Id,
+                        new GstinProfileLookupResult
+                        {
+                            Gstin = savedClient.Gstin,
+                            TradeName = linkedProfile.TradeName,
+                            LegalName = linkedProfile.LegalName
+                        });
+                    AutomationDiagnosticLog.Write("GST-CLIENT-NAME",
+                        $"Recovered Client Name from matching linked GST registration {linkedGstin}.",
+                        linkedProfile.SourcePath);
+                    break;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    AutomationDiagnosticLog.Write("GST-CLIENT-NAME",
+                        $"Linked GST registration name scan skipped: {exception.Message}.", gstinRoot);
+                }
+            }
+        }
         ClientRegistryChanged?.Invoke(this, EventArgs.Empty);
 
         if (!_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
