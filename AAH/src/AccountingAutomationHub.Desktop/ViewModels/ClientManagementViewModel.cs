@@ -3090,13 +3090,33 @@ public sealed partial class ClientManagementViewModel :
             SelectedClient = Clients.FirstOrDefault(
                 client => client.Id == saved.Id);
             IsEditorOpen = false;
-            StatusText = $"Client {saved.ClientCode} saved successfully.";
-            // Never start a source scan for an unchanged or removed GSTIN.
-            // Removal already clears only the detached registration's imported rows
-            // atomically in SqliteClientRepository.Save.
+            // The saved registration is now authoritative. Kick off automatic
+            // Sales/Purchase source imports immediately, not after a full
+            // historical Downloads scan. Show when existing Auto Import policy
+            // blocks scheduling instead of silently reporting success.
             if (newlyAdded.Length > 0)
-                _automationService?.ScheduleNewClientGstinSourceDiscovery(
-                    saved.Id, saved.FinancialYear, newlyAdded);
+            {
+                bool started;
+                try
+                {
+                    started = _automationService?.ScheduleNewClientGstinSourceDiscovery(
+                        saved.Id, saved.FinancialYear, newlyAdded) == true;
+                }
+                catch (Exception exception)
+                {
+                    started = false;
+                    AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                        $"Automatic source import could not be started: {exception.Message}",
+                        $"{saved.Id}|{saved.FinancialYear}");
+                }
+                StatusText = started
+                    ? $"Client {saved.ClientCode} saved. Automatic Sales/Purchase discovery started for {string.Join(", ", newlyAdded)}."
+                    : $"Client {saved.ClientCode} saved. Added GSTIN auto-import did not start; check Auto Import settings and the linked Automation Folder.";
+            }
+            else
+            {
+                StatusText = $"Client {saved.ClientCode} saved successfully.";
+            }
         }
         catch (Exception exception)
         {
