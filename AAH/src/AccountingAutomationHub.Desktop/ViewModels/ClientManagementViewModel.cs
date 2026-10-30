@@ -2772,6 +2772,123 @@ public sealed partial class ClientManagementViewModel :
             _ => "client code"
         };
 
+    /// <summary>
+    /// Dashboard's compact GSTIN-only editor commits to the SAME Client Profile
+    /// repository, uniqueness rules, current-client context and GSTIN-specific
+    /// immediate import scheduler used by the normal Client Editor. Never write
+    /// unrelated fields from a stale editing view-model snapshot.
+    /// </summary>
+    public bool SaveDashboardGstinRegistrations(
+        long clientId, string financialYear, string primaryText, string additionalText,
+        string expectedPrimary, string expectedAdditional, out string status)
+    {
+        status = string.Empty;
+        if (NetworkClientRuntime.IsNetworkClient)
+        {
+            status = "GSTIN management is available only on the authorized Main Server.";
+            return false;
+        }
+        var current = _clientContext.CurrentClient;
+        if (current is null || current.Id != clientId ||
+            !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+        {
+            status = "Client/FY changed. Reopen GSTIN management for the active client.";
+            return false;
+        }
+        if (!_governanceRepository.HasClientAccess(Environment.UserName, clientId, financialYear))
+        {
+            status = "Current user cannot manage this Client/FY.";
+            return false;
+        }
+
+        try
+        {
+            var fresh = _repository.GetById(clientId);
+            if (fresh is null || fresh.IsArchived ||
+                !fresh.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The active client record is unavailable.");
+
+            var oldPrimary = NormalizeTaxNumber(fresh.Gstin);
+            var oldAdditional = fresh.AdditionalGstins ?? Array.Empty<string>();
+            var baselineAdditional = ParseAdditionalGstins(expectedAdditional);
+            if (!oldPrimary.Equals(NormalizeTaxNumber(expectedPrimary), StringComparison.OrdinalIgnoreCase) ||
+                !oldAdditional.SequenceEqual(baselineAdditional, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException("GSTINs changed since this panel opened. Close it and reopen to avoid overwriting newer registrations.");
+
+            var primary = NormalizeTaxNumber(primaryText);
+            var additional = ParseAdditionalGstins(additionalText);
+            if (!GstinRegex().IsMatch(primary))
+                throw new InvalidOperationException("Primary GSTIN must be 15 characters with a two-digit State code.");
+            if (additional.Count > 100)
+                throw new InvalidOperationException("A client can have at most 100 additional GSTIN registrations.");
+            var expectedPan = DerivePan(primary);
+            var storedPan = NormalizeTaxNumber(fresh.Pan);
+            if (storedPan.Length > 0 &&
+                !expectedPan.Equals(storedPan, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The primary GSTIN must retain the client's existing PAN.");
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { primary };
+            foreach (var extra in additional)
+            {
+                if (!GstinRegex().IsMatch(extra))
+                    throw new InvalidOperationException($"Invalid additional GSTIN: {extra}.");
+                if (!seen.Add(extra))
+                    throw new InvalidOperationException($"Duplicate GSTIN registration: {extra}.");
+                if (!DerivePan(extra).Equals(expectedPan, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"GSTIN {extra} has a different PAN; use the correct client.");
+            }
+
+            if (oldPrimary.Equals(primary, StringComparison.OrdinalIgnoreCase) &&
+                oldAdditional.SequenceEqual(additional, StringComparer.OrdinalIgnoreCase))
+            {
+                status = "GSTIN registrations are unchanged.";
+                return true;
+            }
+
+            var savedProfile = fresh.Clone();
+            savedProfile.Gstin = primary;
+            savedProfile.AdditionalGstins = additional;
+            if (storedPan.Length == 0) savedProfile.Pan = expectedPan;
+            // Preserve all names, groups, FY, addresses, Tally metadata and
+            // original accounting records; only GSTIN ownership can change.
+            var saved = _repository.Save(savedProfile);
+            if (_clientContext.CurrentClient?.Id == saved.Id)
+                _clientContext.SetCurrent(saved);
+            LoadClients();
+
+            var newlyAdded = additional
+                .Except(oldAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (newlyAdded.Length > 0)
+            {
+                bool started;
+                try
+                {
+                    started = _automationService?.ScheduleNewClientGstinSourceDiscovery(
+                        saved.Id, saved.FinancialYear, newlyAdded) == true;
+                }
+                catch (Exception exception)
+                {
+                    started = false;
+                    AutomationDiagnosticLog.Write("GSTIN-DASHBOARD",
+                        $"New GSTIN saved but automatic import could not start: {exception}", $"{saved.Id}|{saved.FinancialYear}");
+                }
+                status = started
+                    ? "GSTIN registrations saved. Sales/Purchase auto-import started for the added registration(s)."
+                    : "GSTIN registrations saved. Auto-import is unavailable; check Auto Import and the linked folder.";
+            }
+            else
+            {
+                status = "GSTIN registrations saved successfully.";
+            }
+            return true;
+        }
+        catch (Exception exception)
+        {
+            status = exception.Message;
+            return false;
+        }
+    }
+
     private void EditSelected()
     {
         if (SelectedClient is null)

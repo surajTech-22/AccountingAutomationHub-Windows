@@ -1436,6 +1436,25 @@ public sealed class MainWindowViewModel :
             value);
     }
 
+    /// <summary>Dashboard-only GSTIN panel uses the existing Client Management
+    /// repository/registration save rules without opening the full client editor.</summary>
+    public (string Primary, string Additional)? GetDashboardGstinSnapshot()
+    {
+        var current = _clientContext.CurrentClient;
+        if (current is null) return null;
+        var fresh = _clientRepository.GetById(current.Id);
+        if (fresh is null || !fresh.FinancialYear.Equals(current.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return (fresh.Gstin, string.Join(Environment.NewLine, fresh.AdditionalGstins ?? []));
+    }
+
+    public bool SaveDashboardGstinRegistrations(
+        long clientId, string financialYear, string primary, string additional,
+        string originalPrimary, string originalAdditional, out string status) =>
+        _clientsViewModel.SaveDashboardGstinRegistrations(
+            clientId, financialYear, primary, additional,
+            originalPrimary, originalAdditional, out status);
+
     public bool NavigateTo(
         string title)
     {
