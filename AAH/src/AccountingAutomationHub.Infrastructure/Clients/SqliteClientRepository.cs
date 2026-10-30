@@ -3,6 +3,7 @@ using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Infrastructure.Persistence;
+using AccountingAutomationHub.Infrastructure.Imports;
 using Microsoft.Data.Sqlite;
 
 namespace AccountingAutomationHub.Infrastructure.Clients;
@@ -480,6 +481,9 @@ public sealed class SqliteClientRepository :
 
         var now =
             DateTime.UtcNow;
+        var registrationsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (normalized.Id == 0 && normalized.Gstin.Length == 15)
+            registrationsToInvalidate.Add(normalized.Gstin);
 
         if (normalized.Id == 0)
         {
@@ -643,6 +647,10 @@ public sealed class SqliteClientRepository :
                 DeleteDetachedRegistrationData(connection, transaction,
                     normalized.Id, normalized.FinancialYear, removedGstin);
 
+            foreach (var gstin in detached.Concat(
+                additional.Except(previousRegistrations, StringComparer.OrdinalIgnoreCase)))
+                registrationsToInvalidate.Add(gstin);
+
             using var remove = connection.CreateCommand();
             remove.Transaction = transaction;
             remove.CommandText =
@@ -664,6 +672,15 @@ public sealed class SqliteClientRepository :
         }
 
         transaction.Commit();
+
+        // Invalidation happens only after successful database commit. The
+        // cache is shared across clients, so a new owner must not inherit the
+        // previous owner's "already imported" flag.
+        foreach (var gstin in registrationsToInvalidate)
+        {
+            SalesPurchaseSourceCache.InvalidateHandledSet("Sales", gstin, normalized.FinancialYear);
+            SalesPurchaseSourceCache.InvalidateHandledSet("Purchase", gstin, normalized.FinancialYear);
+        }
 
         normalized.AdditionalGstins = additional ?? ReadAdditionalGstins(connection, normalized.Id);
         return normalized;
