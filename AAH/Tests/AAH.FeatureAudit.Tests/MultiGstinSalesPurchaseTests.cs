@@ -124,6 +124,12 @@ internal static class MultiGstinSalesPurchaseTests
             Check(sales.GetAutomaticRecords(client.Id, Fy).Count == 1 &&
                 purchase.GetAutomaticRecords(client.Id, Fy).Count == 1,
                 "Registration-selective Clear destroyed records of another GSTIN.");
+            Check(sales.IsAutomaticImportCurrent(client.Id, Fy, "SA-1", A) &&
+                purchase.IsAutomaticImportCurrent(client.Id, Fy, "PA-1", A),
+                "Clear of secondary GSTIN erased the retained GSTIN import batch or fingerprint.");
+            Check(!sales.IsAutomaticImportCurrent(client.Id, Fy, "SB-2", B) &&
+                  !purchase.IsAutomaticImportCurrent(client.Id, Fy, "PB-2", B),
+                "Cleared GSTIN is incorrectly reported as still imported.");
             sales.ReplaceAutomaticImport(client.Id, Fy, Sales(B, "SB-3", "INV-3"));
             purchase.ReplaceAutomaticImport(client.Id, Fy, Purchase(B, "PB-3", "INV-3"));
             Check(sales.GetAutomaticRecords(client.Id, Fy).Count == 2 &&

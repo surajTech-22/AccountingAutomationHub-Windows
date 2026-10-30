@@ -340,7 +340,7 @@
                             <Button Content="Reimport Sales"
                                     Command="{Binding ReimportCommand}"
                                     Style="{StaticResource SecondaryButtonStyle}"
-                                    ToolTip="Reimport the complete selected Financial Year from verified GSTR-1 sources. Manual Sales Register rows are retained."/>
+                                    ToolTip="For multiple-GSTIN clients, choose which registrations to reimport. Uses the same GSTR-1 Sales importer and retains other GSTIN records."/>
                             <Button x:Name="ReimportSalesMonthButton"
                                     Content="▼"
                                     Click="ReimportSalesMonthButton_Click"
@@ -349,7 +349,7 @@
                                     Margin="2,0,6,0"
                                     MinWidth="30"
                                     Padding="7,4"
-                                    ToolTip="Reimport only one Sales month; all other Sales months remain unchanged.">
+                                    ToolTip="Reimport one Sales month and choose the GSTINs; other GSTINs and Sales months remain unchanged.">
                                 <Button.ContextMenu>
                                     <ContextMenu Placement="Bottom">
                                         <MenuItem Header="April" Tag="4" Click="ReimportSalesMonthMenuItem_Click" />

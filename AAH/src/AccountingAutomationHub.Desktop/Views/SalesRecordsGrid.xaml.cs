@@ -168,6 +168,7 @@ public partial class SalesRecordsGrid : UserControl
     private static readonly IReadOnlyList<ColumnDescriptor> ColumnDescriptors =
     [
         new("Destination", nameof(SalesImportRecord.Destination), 105, true, true),
+        new("Client GSTIN", nameof(SalesImportRecord.ClientGstin), 145, true, true),
         new("GSTIN", nameof(SalesImportRecord.CustomerGstin), 145, true),
         new("Customer", nameof(SalesImportRecord.CustomerName), 220, true),
         new("Document Type", nameof(SalesImportRecord.DocumentType), 120, true),

@@ -269,6 +269,7 @@ public sealed class ClientDiagnosticExportService
                 ["Trade Name", client.TradeName],
                 ["Legal Name", client.LegalName],
                 ["GSTIN", client.Gstin],
+                ["Additional GSTINs", string.Join(", ", client.AdditionalGstins ?? [])],
                 ["Financial Year", client.FinancialYear],
                 ["Review workbook", "Edit application data in the module sheets and save the workbook. The Hub applies only changed rows automatically. Do not change __ID columns."]
             ])
@@ -726,11 +727,11 @@ public sealed class ClientDiagnosticExportService
 
         var purchaseRows = new List<IReadOnlyList<string>>
         {
-            new[] { "__PurchaseId", "GST Date", "Document Date", "Supplier GSTIN", "Supplier", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value", "IGST", "CGST", "SGST", "Cess", "Round Off", "Purchase Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "GST Applicability", "Reconciliation Status", "Place of Supply", "Reverse Charge", "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount", "Item Purchase Ledger", "Godown", "Batch", "Part No/SKU", "Inventory Review Status" }
+            new[] { "__PurchaseId", "Client GSTIN", "GST Date", "Document Date", "Supplier GSTIN", "Supplier", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value", "IGST", "CGST", "SGST", "Cess", "Round Off", "Purchase Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "GST Applicability", "Reconciliation Status", "Place of Supply", "Reverse Charge", "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount", "Item Purchase Ledger", "Godown", "Batch", "Part No/SKU", "Inventory Review Status" }
         };
         foreach (var row in purchaseRecords)
             purchaseRows.Add([
-                row.PersistentId.ToString(CultureInfo.InvariantCulture), Date(row.GstDate), Date(row.DocumentDate), row.SupplierGstin, row.SupplierName,
+                row.PersistentId.ToString(CultureInfo.InvariantCulture), row.ClientGstin, Date(row.GstDate), Date(row.DocumentDate), row.SupplierGstin, row.SupplierName,
                 row.DocumentType, row.DocumentNumber, Num(row.DocumentValue), Num(row.Rate), Num(row.TaxableValue), Num(row.Igst), Num(row.Cgst), Num(row.Sgst), Num(row.Cess), Num(row.RoundOff),
                 row.PurchaseLedger, row.IgstLedger, row.CgstLedger, row.SgstLedger, row.GstApplicability, row.ReconciliationStatus, row.PlaceOfSupply, row.ReverseCharge,
                 row.StockItemPersistentId > 0 ? row.StockItemPersistentId.ToString(CultureInfo.InvariantCulture) : string.Empty, row.TallyStockMasterId, row.ItemName, row.HsnCode,
@@ -742,7 +743,7 @@ public sealed class ClientDiagnosticExportService
         {
             new[]
             {
-                "__SalesId", "GST Date", "Document Date", "Customer GSTIN", "Customer", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value",
+                "__SalesId", "Client GSTIN", "GST Date", "Document Date", "Customer GSTIN", "Customer", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value",
                 "IGST", "CGST", "SGST", "Cess", "Cess Rate", "Round Off", "Sales Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "Place of Supply", "Return Period",
                 "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount",
                 "Item Sales Ledger", "Accounting Amount", "Godown", "Batch", "Batch Actual Qty", "Batch Billed Qty", "Batch Amount", "Discount %", "Discount Amount", "Order No",
@@ -752,7 +753,7 @@ public sealed class ClientDiagnosticExportService
         };
         foreach (var row in salesRecords)
             salesRows.Add([
-                row.PersistentId.ToString(CultureInfo.InvariantCulture), Date(row.GstDate), Date(row.DocumentDate), row.CustomerGstin, row.CustomerName,
+                row.PersistentId.ToString(CultureInfo.InvariantCulture), row.ClientGstin, Date(row.GstDate), Date(row.DocumentDate), row.CustomerGstin, row.CustomerName,
                 row.DocumentType, row.DocumentNumber, Num(row.DocumentValue), Num(row.Rate), Num(row.TaxableValue), Num(row.Igst), Num(row.Cgst), Num(row.Sgst), Num(row.Cess), Num(row.CessRate), Num(row.RoundOff),
                 row.SalesLedger, row.IgstLedger, row.CgstLedger, row.SgstLedger, row.PlaceOfSupply, row.ReturnPeriod,
                 row.StockItemPersistentId > 0 ? row.StockItemPersistentId.ToString(CultureInfo.InvariantCulture) : string.Empty, row.TallyStockMasterId, row.ItemName, row.HsnCode,
@@ -1117,6 +1118,12 @@ public sealed class ClientDiagnosticExportService
             if (!TryLong(Cell(sheet, r, headers, "__PurchaseId"), out var id) || !existing.TryGetValue(id, out var row)) { skipped++; continue; }
             try
             {
+                // Originating registration is source-owned. Review workbook edits may
+                // change transaction fields, never transfer a row to another GSTIN.
+                if (headers.ContainsKey("Client GSTIN") &&
+                    !NormalizeGstin(Cell(sheet, r, headers, "Client GSTIN"))
+                        .Equals(NormalizeGstin(row.ClientGstin), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Client GSTIN is read-only; reimport the correct registration instead.");
                 var before = PurchaseComparable(row);
                 row.GstDate = DateOrNull(Cell(sheet, r, headers, "GST Date"), row.GstDate);
                 row.DocumentDate = DateOrNull(Cell(sheet, r, headers, "Document Date"), row.DocumentDate);
@@ -1177,6 +1184,12 @@ public sealed class ClientDiagnosticExportService
             if (!TryLong(Cell(sheet, r, headers, "__SalesId"), out var id) || !existing.TryGetValue(id, out var row)) { skipped++; continue; }
             try
             {
+                // Originating registration is source-owned. Review workbook edits may
+                // change transaction fields, never transfer a row to another GSTIN.
+                if (headers.ContainsKey("Client GSTIN") &&
+                    !NormalizeGstin(Cell(sheet, r, headers, "Client GSTIN"))
+                        .Equals(NormalizeGstin(row.ClientGstin), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Client GSTIN is read-only; reimport the correct registration instead.");
                 var before = SalesComparable(row);
                 row.GstDate = DateOrNull(Cell(sheet, r, headers, "GST Date"), row.GstDate);
                 row.DocumentDate = DateOrNull(Cell(sheet, r, headers, "Document Date"), row.DocumentDate);
