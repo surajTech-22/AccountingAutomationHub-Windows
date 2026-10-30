@@ -49,14 +49,84 @@ public partial class DashboardView : UserControl
 
     private DashboardViewModel? ViewModel => DataContext as DashboardViewModel;
 
+    private long _gstinPanelClientId;
+    private string _gstinPanelFinancialYear = string.Empty;
+    private string _gstinPanelOriginalPrimary = string.Empty;
+    private string _gstinPanelOriginalAdditional = string.Empty;
+
     private void DashboardGstin_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string gstin } ||
-            string.IsNullOrWhiteSpace(gstin)) return;
-        // Navigate through the existing shell and client-management editor.
-        // Never change the selected Client/FY just to edit a registration.
-        if (Window.GetWindow(this)?.DataContext is MainWindowViewModel main)
-            main.OpenDashboardGstinManagement(gstin);
+            string.IsNullOrWhiteSpace(gstin) ||
+            Window.GetWindow(this)?.DataContext is not MainWindowViewModel main ||
+            ViewModel is not { } dashboard || dashboard.ActiveClientId <= 0) return;
+
+        // Only a compact side panel: do NOT navigate away or open the
+        // Client Management full editor. Both save routes share the same DB.
+        var snapshot = main.GetDashboardGstinSnapshot();
+        if (snapshot is null) return;
+        _gstinPanelClientId = dashboard.ActiveClientId;
+        _gstinPanelFinancialYear = dashboard.ActiveClientFinancialYear;
+        _gstinPanelOriginalPrimary = snapshot.Value.Primary;
+        _gstinPanelOriginalAdditional = snapshot.Value.Additional;
+        GstinPanelPrimaryBox.Text = snapshot.Value.Primary;
+        GstinPanelAdditionalBox.Text = snapshot.Value.Additional;
+        GstinPanelClientText.Text = dashboard.ClientName + "  •  FY " + dashboard.ActiveClientFinancialYear;
+        GstinPanelTargetText.Text = "Selected GSTIN: " + gstin;
+        GstinPanelStatusText.Text = string.Empty;
+        GstinManagementPanel.Visibility = Visibility.Visible;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (GstinManagementPanel.Visibility != Visibility.Visible) return;
+            var primary = gstin.Equals(snapshot.Value.Primary, StringComparison.OrdinalIgnoreCase);
+            var textbox = primary ? GstinPanelPrimaryBox : GstinPanelAdditionalBox;
+            textbox.Focus();
+            if (primary) textbox.SelectAll();
+            else
+            {
+                var offset = textbox.Text.IndexOf(gstin, StringComparison.OrdinalIgnoreCase);
+                if (offset >= 0) textbox.Select(offset, gstin.Length);
+            }
+        }), DispatcherPriority.Loaded);
+    }
+
+    private void GstinManagementClose_Click(object sender, RoutedEventArgs e) =>
+        CloseGstinManagementPanel();
+
+    private void CloseGstinManagementPanel()
+    {
+        GstinManagementPanel.Visibility = Visibility.Collapsed;
+        _gstinPanelClientId = 0;
+        _gstinPanelFinancialYear = string.Empty;
+        _gstinPanelOriginalPrimary = string.Empty;
+        _gstinPanelOriginalAdditional = string.Empty;
+    }
+
+    private void GstinManagementSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this)?.DataContext is not MainWindowViewModel main ||
+            ViewModel is not { } dashboard ||
+            _gstinPanelClientId <= 0 ||
+            dashboard.ActiveClientId != _gstinPanelClientId ||
+            !dashboard.ActiveClientFinancialYear.Equals(_gstinPanelFinancialYear, StringComparison.OrdinalIgnoreCase))
+        {
+            GstinPanelStatusText.Text = "Client/FY changed. Close and reopen GSTIN Management.";
+            return;
+        }
+
+        if (!main.SaveDashboardGstinRegistrations(
+                _gstinPanelClientId, _gstinPanelFinancialYear,
+                GstinPanelPrimaryBox.Text, GstinPanelAdditionalBox.Text,
+                _gstinPanelOriginalPrimary, _gstinPanelOriginalAdditional,
+                out var status))
+        {
+            GstinPanelStatusText.Text = status;
+            return;
+        }
+
+        CloseGstinManagementPanel();
+        if (dashboard.RefreshCommand.CanExecute(null))
+            dashboard.RefreshCommand.Execute(null);
     }
 
 
@@ -191,6 +261,7 @@ public partial class DashboardView : UserControl
 
     private void DashboardView_Unloaded(object sender, RoutedEventArgs e)
     {
+        CloseGstinManagementPanel();
         ++_tallyLogoRequestVersion; // invalidate any outstanding background icon lookup
         DetachTallyLogoEvents();
         if (_hostWindow is not null)
