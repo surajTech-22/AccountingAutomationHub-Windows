@@ -1174,6 +1174,75 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
+    private async Task<int> TransferDetachedGstr3bToNewOwnerAsync(
+        AutomationFolderRegistration targetFolder,
+        ClientProfile newOwner,
+        CancellationToken cancellationToken)
+    {
+        var gstin = NormalizeGstin(newOwner.Gstin);
+        if (gstin.Length != 15 || !Directory.Exists(targetFolder.FolderPath)) return 0;
+        var count = 0;
+        var targetDir = Path.Combine(targetFolder.FolderPath, "GST", "GSTR-3B");
+
+        foreach (var oldFolder in _automationRepository.GetFolders()
+                     .Where(folder => folder.ClientId != newOwner.Id &&
+                                      Directory.Exists(folder.FolderPath)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var oldOwner = _clientRepository.GetById(oldFolder.ClientId);
+            if (oldOwner is null) continue;
+            // An active registration cannot be transferred away from its owner.
+            if (new[] { oldOwner.Gstin }.Concat(oldOwner.AdditionalGstins ?? [])
+                .Any(value => NormalizeGstin(value).Equals(gstin, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var sourceDir = Path.Combine(oldFolder.FolderPath, "GST", gstin, "GSTR-3B");
+            if (!Directory.Exists(sourceDir) ||
+                Path.GetFullPath(sourceDir).Equals(Path.GetFullPath(targetDir), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string[] sources;
+            try { sources = Directory.EnumerateFiles(sourceDir, "*.pdf", SearchOption.TopDirectoryOnly).ToArray(); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AutomationDiagnosticLog.Write("GST-DETACHED-TRANSFER", exception.Message, sourceDir);
+                continue;
+            }
+            foreach (var source in sources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (_fileClassifier.Classify(source).Kind != AutomationFileKind.Gstr3bPdf)
+                        continue;
+                    // Never use filename or old registration metadata as proof.
+                    var parsed = _gstr3bPdfImportService.Parse(
+                        source, newOwner.Id, newOwner.FinancialYear, string.Empty);
+                    if (!NormalizeGstin(parsed.Gstin).Equals(gstin, StringComparison.OrdinalIgnoreCase) ||
+                        !IsPeriodInFinancialYear(parsed.PeriodKey, newOwner.FinancialYear) ||
+                        !await WaitForStableFileAsync(source, cancellationToken).ConfigureAwait(false))
+                        continue;
+                    Directory.CreateDirectory(targetDir);
+                    var target = BuildCollisionSafeTarget(targetDir, Path.GetFileName(source));
+                    File.Move(source, target);
+                    count++;
+                    AutomationDiagnosticLog.Write("GST-DETACHED-TRANSFER",
+                        $"Moved source-verified detached GSTR-3B to new owning client. GSTIN={gstin}.", target);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    AutomationDiagnosticLog.Write("GST-DETACHED-TRANSFER",
+                        $"Evidence retained at original location: {exception.Message}", source);
+                }
+            }
+        }
+        return count;
+    }
+
     private void ScheduleRegisteredClientGstBootstrap(
         AutomationFolderRegistration registration,
         long clientId,
@@ -1194,8 +1263,14 @@ public sealed class BackgroundAutomationService : IDisposable
                 if (client is null || NormalizeGstin(client.Gstin).Length != 15) return;
                 EnsureClientGstinFolders(registration, client);
 
+                // A removed secondary registration's PDFs stay in its old
+                // GST/<GSTIN>/GSTR-3B folder. Once that GSTIN is registered
+                // as a separate primary client and the new client's folder is
+                // linked, move only source-verified exact-GSTIN PDFs.
+                var relocated = await TransferDetachedGstr3bToNewOwnerAsync(
+                    registration, client, cancellationToken).ConfigureAwait(false);
                 var eReturnsRoot = _settings.Get(EReturnsRootContext.PreferenceKey).Trim();
-                if (!force && !_gstPortalAutoImportService.HasPotentialChanges(
+                if (!force && relocated == 0 && !_gstPortalAutoImportService.HasPotentialChanges(
                         client,
                         eReturnsRoot,
                         additionalRoots: [registration.FolderPath]))
