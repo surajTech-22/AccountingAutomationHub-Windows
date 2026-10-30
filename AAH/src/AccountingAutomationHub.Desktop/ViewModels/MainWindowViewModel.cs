@@ -623,7 +623,8 @@ public sealed class MainWindowViewModel :
                 applicationPreferenceRepository,
                 governanceRepository,
                 _masterRepository,
-                _secureLanServerService);
+                _secureLanServerService,
+                _automationService);
         RefreshWorkspaceMobileQrCommand = new AsyncRelayCommand(() => _clientsViewModel.RefreshWorkspaceMobileQrAsync());
         _clientsViewModel.WorkspaceOpenRequested +=
             OnClientWorkspaceOpenRequested;
