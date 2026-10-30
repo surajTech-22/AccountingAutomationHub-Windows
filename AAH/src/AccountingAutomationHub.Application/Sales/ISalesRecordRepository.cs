@@ -10,17 +10,19 @@ public interface ISalesRecordRepository
     bool IsAutomaticImportCurrent(
         long clientId,
         string financialYear,
-        string sourceFingerprint);
+        string sourceFingerprint,
+        string? registrationGstin = null);
 
     string GetLatestAutomaticImportContentFingerprint(
         long clientId,
-        string financialYear);
+        string financialYear,
+        string? registrationGstin = null);
 
     bool HasRecords(
         long clientId,
         string financialYear);
 
-    int ClearModule(long clientId, string financialYear);
+    int ClearModule(long clientId, string financialYear, string? registrationGstin = null);
 
     IReadOnlyList<SalesImportRecord> GetAutomaticRecords(
         long clientId,

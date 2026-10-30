@@ -9,6 +9,7 @@ internal static class Program
     private static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException(message); }
     private static void Main()
     {
+        MultiGstinSalesPurchaseTests.Run();
         AnnualPrimaryPurchaseTests.Run();
         LedgerMappingNoiseTests.Run();
         SingleInstanceTests.Run();

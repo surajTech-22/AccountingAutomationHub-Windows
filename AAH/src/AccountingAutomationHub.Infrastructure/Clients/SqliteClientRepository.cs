@@ -3,6 +3,7 @@ using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Infrastructure.Persistence;
+using AccountingAutomationHub.Infrastructure.Imports;
 using Microsoft.Data.Sqlite;
 
 namespace AccountingAutomationHub.Infrastructure.Clients;
@@ -480,6 +481,14 @@ public sealed class SqliteClientRepository :
 
         var now =
             DateTime.UtcNow;
+        // Within a financial year one GSTIN must have exactly one Client Profile
+        // owner. Otherwise the shared source watcher would double-import it.
+        if (additional is not null || normalized.Id == 0)
+            EnsureUniqueRegistrationOwnership(connection, transaction, normalized, additional);
+
+        var registrationsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (normalized.Id == 0 && normalized.Gstin.Length == 15)
+            registrationsToInvalidate.Add(normalized.Gstin);
 
         if (normalized.Id == 0)
         {
@@ -631,6 +640,22 @@ public sealed class SqliteClientRepository :
 
         if (additional is not null)
         {
+            // A Client Profile removal is authoritative for the registration.
+            // Delete only records belonging to detached secondary GSTINs, in
+            // the same SQLite transaction as the registration list update.
+            // Physical GST evidence folders/PDFs are deliberately untouched.
+            var previousRegistrations = ReadAdditionalGstins(connection, normalized.Id);
+            var detached = previousRegistrations
+                .Except(additional, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var removedGstin in detached)
+                DeleteDetachedRegistrationData(connection, transaction,
+                    normalized.Id, normalized.FinancialYear, removedGstin);
+
+            foreach (var gstin in detached.Concat(
+                additional.Except(previousRegistrations, StringComparer.OrdinalIgnoreCase)))
+                registrationsToInvalidate.Add(gstin);
+
             using var remove = connection.CreateCommand();
             remove.Transaction = transaction;
             remove.CommandText =
@@ -653,10 +678,100 @@ public sealed class SqliteClientRepository :
 
         transaction.Commit();
 
+        // Invalidation happens only after successful database commit. The
+        // cache is shared across clients, so a new owner must not inherit the
+        // previous owner's "already imported" flag.
+        foreach (var gstin in registrationsToInvalidate)
+        {
+            SalesPurchaseSourceCache.InvalidateHandledSet("Sales", gstin, normalized.FinancialYear);
+            SalesPurchaseSourceCache.InvalidateHandledSet("Purchase", gstin, normalized.FinancialYear);
+        }
+
         normalized.AdditionalGstins = additional ?? ReadAdditionalGstins(connection, normalized.Id);
         return normalized;
     }
 
+
+    private static void EnsureUniqueRegistrationOwnership(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ClientProfile proposed,
+        IReadOnlyList<string>? additional)
+    {
+        foreach (var gstin in new[] { proposed.Gstin }.Concat(additional ?? [])
+                     .Where(value => value.Length == 15)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            using var check = connection.CreateCommand();
+            check.Transaction = transaction;
+            check.CommandText =
+                """
+                SELECT 1 FROM Clients AS c
+                WHERE c.Id <> $Client AND c.FinancialYear = $FY COLLATE NOCASE
+                  AND (c.Gstin = $Gstin COLLATE NOCASE OR EXISTS (
+                    SELECT 1 FROM ClientAdditionalGstins AS a
+                    WHERE a.ClientId = c.Id AND a.Gstin = $Gstin COLLATE NOCASE))
+                LIMIT 1;
+                """;
+            check.Parameters.AddWithValue("$Client", proposed.Id);
+            check.Parameters.AddWithValue("$FY", proposed.FinancialYear);
+            check.Parameters.AddWithValue("$Gstin", gstin);
+            if (check.ExecuteScalar() is not null)
+                throw new InvalidOperationException(
+                    $"GSTIN {gstin} is already registered to a different client for FY {proposed.FinancialYear}. Remove it from the original Client Profile before creating the separate client.");
+        }
+    }
+
+    // Delete only registration-owned rows. No calls to File.Delete/Directory.Delete:
+    // GSTR-3B PDFs remain in the original GST/<GSTIN>/GSTR-3B directory
+    // until a new client with the exact GSTIN gets a linked Automation Folder.
+    private static void DeleteDetachedRegistrationData(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long clientId,
+        string financialYear,
+        string removedGstin)
+    {
+        var tables = new[]
+        {
+            ("SalesRecords", "ClientGstin"),
+            ("PurchaseRecords", "ClientGstin"),
+            ("SalesImportBatches", "ClientGstin"),
+            ("PurchaseImportBatches", "ClientGstin"),
+            ("Gstr3bReturns", "Gstin"),
+            ("GstLedgerPeriods", "Gstin"),
+            ("GstPortalSourceState", "Gstin"),
+            ("GstBootstrapState", "Gstin")
+        };
+        foreach (var (table, gstinColumn) in tables)
+        {
+            using var inspect = connection.CreateCommand();
+            inspect.Transaction = transaction;
+            inspect.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name=$Table;";
+            inspect.Parameters.AddWithValue("$Table", table);
+            if (inspect.ExecuteScalar() is null) continue;
+
+            var hasGstinColumn = false;
+            using (var columns = connection.CreateCommand())
+            {
+                columns.Transaction = transaction;
+                columns.CommandText = $"PRAGMA table_info({table});";
+                using var reader = columns.ExecuteReader();
+                while (reader.Read())
+                    if (reader.GetString(1).Equals(gstinColumn, StringComparison.OrdinalIgnoreCase))
+                        hasGstinColumn = true;
+            }
+            if (!hasGstinColumn) continue;
+            using var remove = connection.CreateCommand();
+            remove.Transaction = transaction;
+            remove.CommandText =
+                $"DELETE FROM {table} WHERE ClientId=$Client AND FinancialYear=$FY AND {gstinColumn}=$Gstin COLLATE NOCASE;";
+            remove.Parameters.AddWithValue("$Client", clientId);
+            remove.Parameters.AddWithValue("$FY", financialYear);
+            remove.Parameters.AddWithValue("$Gstin", removedGstin);
+            remove.ExecuteNonQuery();
+        }
+    }
 
     public ClientProfile ApplyImportedGstProfile(
         long clientId,

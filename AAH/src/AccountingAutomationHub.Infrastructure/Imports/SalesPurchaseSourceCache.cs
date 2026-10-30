@@ -218,6 +218,19 @@ public static class SalesPurchaseSourceCache
         }
     }
 
+    // A GSTIN can be detached from one client and registered as a separate
+    // client. Its old "Imported" flag must not suppress the new owner's work.
+    public static void InvalidateHandledSet(string module, string gstin, string financialYear)
+    {
+        var key = BuildHandledSetKey(module, gstin, financialYear);
+        if (key.Length == 0) return;
+        lock (Gate)
+        {
+            EnsureHandledSetsLoadedUnsafe();
+            if (HandledSets.Remove(key)) PersistHandledSetsUnsafe();
+        }
+    }
+
     public static void MarkSetHandled(
         string module,
         string gstin,
