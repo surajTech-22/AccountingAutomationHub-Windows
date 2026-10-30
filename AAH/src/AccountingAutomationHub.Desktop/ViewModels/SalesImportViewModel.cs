@@ -1394,6 +1394,13 @@ public sealed class SalesImportViewModel :
             return;
         }
 
+        if (client.AdditionalGstins is { Count: > 0 })
+        {
+            await ImportAllRegisteredSalesAsync(client, generation, forceReimport,
+                reimportMonth, automationFolderPaths);
+            return;
+        }
+
         IsBusy = true;
         ErrorText = string.Empty;
         WarningText = string.Empty;
@@ -1579,6 +1586,92 @@ public sealed class SalesImportViewModel :
             ErrorText = exception.Message;
             StatusText =
                 "Automatic Sales import failed.";
+        }
+        finally
+        {
+            IsBusy = false;
+            _cancellationSource = null;
+            NotifyStatusVisibility();
+        }
+    }
+
+    // The existing Sales module and source parser run once per client registration.
+    // Persist each result under its GSTIN, then reload the shared client/FY view.
+    private async Task ImportAllRegisteredSalesAsync(
+        AccountingAutomationHub.Domain.Clients.ClientProfile client,
+        long generation,
+        bool forceReimport,
+        DateTime? reimportMonth,
+        IReadOnlyList<string> automationFolderPaths)
+    {
+        IsBusy = true;
+        ErrorText = string.Empty;
+        WarningText = string.Empty;
+        SourceVerificationText = string.Empty;
+        using var cancellation = new CancellationTokenSource();
+        _cancellationSource = cancellation;
+        var imported = 0;
+        var skipped = new List<string>();
+        try
+        {
+            var registrations = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                .Select(value => value.Trim().ToUpperInvariant())
+                .Where(value => value.Length == 15)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var gstin in registrations)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (generation != Interlocked.Read(ref _automaticImportGeneration)) return;
+                StatusText = $"Sales: checking {gstin} ({imported + skipped.Count + 1}/{registrations.Length})...";
+                var result = await _autoImportService.ImportAsync(new SalesAutoImportRequest
+                {
+                    ClientId = client.Id,
+                    ClientGstin = gstin,
+                    FinancialYear = client.FinancialYear,
+                    CompanyName = CompanyName,
+                    EReturnsRootPath = EReturnsRootPath,
+                    AutomationFolderPaths = automationFolderPaths,
+                    SearchWindowsDownloads = true,
+                    SaveSourceFiles = false
+                }, cancellationToken: cancellation.Token);
+                if (generation != Interlocked.Read(ref _automaticImportGeneration)) return;
+                if (!result.SourceManifest.Any(source => source.FileType.Equals("GSTR1", StringComparison.OrdinalIgnoreCase)) ||
+                    (reimportMonth.HasValue && !HasSalesSourceCoverageForMonth(result.Verification, reimportMonth.Value)))
+                {
+                    skipped.Add(gstin + " (no matching source)");
+                    continue;
+                }
+                result.SourceFingerprint = BuildSourceFingerprint(result);
+                if (!forceReimport && _salesRecordRepository.IsAutomaticImportCurrent(
+                    client.Id, client.FinancialYear, result.SourceFingerprint, gstin))
+                    continue;
+                _stockNormalizationService.Normalize(client.Id, client.FinancialYear,
+                    CompanyName, result.Records);
+                result.PersistedRows = reimportMonth.HasValue
+                    ? _salesRecordRepository.ReplaceAutomaticImportMonth(
+                        client.Id, client.FinancialYear, result, reimportMonth.Value)
+                    : _salesRecordRepository.ReplaceAutomaticImport(
+                        client.Id, client.FinancialYear, result);
+                imported += result.PersistedRows;
+            }
+            await _refreshCoordinator.RefreshAsync(client, cancellation.Token);
+            LoadSavedRows(client.Id, client.FinancialYear, []);
+            PublishCommittedImport(client.Id, client.FinancialYear, "Sales",
+                imported, EReturnsRootPath, "Registered GSTIN Auto Import");
+            ProgressPercent = 100;
+            WarningText = string.Join("; ", skipped);
+            StatusText = $"Sales registration import complete: {AllRows.Count:N0} combined saved row(s) across " +
+                $"{registrations.Length} GSTIN(s). " +
+                (skipped.Count > 0 ? $"Source unavailable for: {string.Join(", ", skipped)}." : "");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Sales registration import cancelled.";
+        }
+        catch (Exception exception)
+        {
+            ErrorText = exception.Message;
+            StatusText = "Sales registration import failed; earlier registration rows retained.";
         }
         finally
         {
