@@ -815,6 +815,7 @@ public sealed class SqliteSalesRecordRepository :
 
     private static string ManualDuplicateKey(SalesImportRecord row) =>
         string.Join("|",
+            row.ClientGstin.Trim().ToUpperInvariant(),
             row.Destination.Trim().ToUpperInvariant(),
             row.DocumentDate?.ToString("yyyyMMdd",CultureInfo.InvariantCulture) ?? string.Empty,
             row.DocumentNumber.Trim().ToUpperInvariant(),
@@ -1314,12 +1315,14 @@ public sealed class SqliteSalesRecordRepository :
     {
         ArgumentNullException.ThrowIfNull(result);
 
+        var targetGstin = (result.ClientGstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (targetGstin.Length != 15) throw new InvalidOperationException("Monthly reimport requires a registered GSTIN.");
         var selectedMonth = new DateTime(month.Year, month.Month, 1);
         var existingMonthRecords = GetAutomaticRecords(clientId, financialYear)
-            .Where(record => IsRecordInReimportMonth(record, selectedMonth))
+            .Where(record => record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase) && IsRecordInReimportMonth(record, selectedMonth))
             .ToArray();
         var incomingRecords = RemoveAutomaticRateTemplatePlaceholders(result.Records)
-            .Where(record => IsRecordInReimportMonth(record, selectedMonth))
+            .Where(record => record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase) && IsRecordInReimportMonth(record, selectedMonth))
             .ToList();
 
         // Fix13 Sales selected-month contract: only automatic rows belonging to the
