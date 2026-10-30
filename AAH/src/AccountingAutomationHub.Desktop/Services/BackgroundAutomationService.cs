@@ -170,6 +170,10 @@ public sealed class BackgroundAutomationService : IDisposable
     private Thread? _explorerThread;
     private bool _started;
     private bool _globalPause;
+    // Set only by the verified process-targeted updater shutdown request.
+    // No window-close, tray-hide or ordinary pause path enables this mode.
+    private int _verifiedUpdateQuiescing;
+    private bool IsQuiescingForVerifiedUpdate => Volatile.Read(ref _verifiedUpdateQuiescing) != 0;
     private string _lastActiveExplorerPath = string.Empty;
     private DateTime _lastStorageMaintenanceUtc = DateTime.MinValue;
     private DateTime _lastFolderRelocationDiscoveryUtc = DateTime.MinValue;
@@ -260,6 +264,52 @@ public sealed class BackgroundAutomationService : IDisposable
     public event EventHandler? ProgressChanged;
 
     public bool IsPaused => _globalPause;
+
+    /// <summary>
+    /// Quiesce only for the verified updater's PID-targeted shutdown event.
+    /// Stop NEW automatic intake; do not interrupt an already-writing accounting
+    /// operation. Unstarted automatic observations remain in their original
+    /// folders and are recovered by the ordinary source scan on next launch.
+    /// </summary>
+    public void BeginVerifiedUpdateQuiescence()
+    {
+        if (Interlocked.Exchange(ref _verifiedUpdateQuiescing, 1) != 0) return;
+        DisposeWatchers();
+        DisposeCentralSalesPurchaseWatcher();
+        AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+            "Updater requested graceful shutdown: stopped new watchers; active accounting operations will finish. Original source files are retained.");
+    }
+
+    /// <summary>Resume the untouched runtime if the updater safely deferred.</summary>
+    public void EndVerifiedUpdateQuiescence()
+    {
+        if (Interlocked.Exchange(ref _verifiedUpdateQuiescing, 0) == 0) return;
+        if (!_started || _lifetime?.IsCancellationRequested != false) return;
+        // Reconciliation of missed files is potentially large and must never
+        // block the WPF dispatcher during an aborted update attempt.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (!_started || IsQuiescingForVerifiedUpdate ||
+                    _lifetime?.IsCancellationRequested != false) return;
+                ReloadSettings(scanExisting: true, scheduleGstBootstrap: true);
+                ConfigureCentralSalesPurchaseWatcher();
+                AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                    "Updater deferred; ordinary watchers and missed-file recovery resumed.");
+            }
+            catch (Exception exception)
+            {
+                AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                    $"Could not resume watchers after deferred update: {exception}");
+            }
+        });
+    }
+
+    public string VerifiedUpdateBusySummary =>
+        $"activeFiles={_activeFiles.Count} stages={_activeStages.Count} " +
+        $"bank={_bankCachedProcessors.Count} salesPurchase={_salesPurchaseSetProcessors.Count} " +
+        $"gst={_gstBootstrapInFlight.Count} manualQueued={_queue.Count(item => item.ManualReimport)}";
 
     // Fix38 local phase completion authority used by the separate Tally scheduler.
     // Connection health may still pulse, but heavy Tally work waits until startup
@@ -448,6 +498,7 @@ public sealed class BackgroundAutomationService : IDisposable
     public bool ScheduleNewClientGstinSourceDiscovery(
         long clientId, string financialYear, IReadOnlyList<string> addedRegistrations)
     {
+        if (IsQuiescingForVerifiedUpdate) return false;
         var gstins = addedRegistrations
             .Select(NormalizeGstin)
             .Where(gstin => gstin.Length == 15)
@@ -875,7 +926,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
     public void ReloadSettings(bool scanExisting = true, bool scheduleGstBootstrap = true)
     {
-        if (!_started) return;
+        if (!_started || IsQuiescingForVerifiedUpdate) return;
         if (!_settings.GetBool(ApplicationSettingKeys.AutomationEnabled))
         {
             DisposeWatchers();
@@ -1424,6 +1475,7 @@ public sealed class BackgroundAutomationService : IDisposable
         long clientId,
         bool force = false)
     {
+        if (IsQuiescingForVerifiedUpdate) return;
         // Completion 62: all folders for the same Client/FY share one GST discovery
         // operation. The 20-second maintenance cadence remains unchanged, but each
         // pass is only a metadata/cache probe unless a source version changed.
@@ -2400,7 +2452,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
     private void QueueLinkedFolderObservation(string folderId, string path)
     {
-        if (_folderMoveQuiesce.ContainsKey(folderId)) return;
+        if (IsQuiescingForVerifiedUpdate || _folderMoveQuiesce.ContainsKey(folderId)) return;
         // FIXED28: Created/Changed/Renamed bursts from one Office/ZIP save must pass
         // through the normal size+mtime observation barrier. Force is reserved for
         // explicit/manual/recovery paths; using force here could enqueue every event.
@@ -2747,7 +2799,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
     private void EnsureWatcher(AutomationFolderRegistration folder)
     {
-        if (!Directory.Exists(folder.FolderPath)) return;
+        if (IsQuiescingForVerifiedUpdate || !Directory.Exists(folder.FolderPath)) return;
         PortalCredentialFileService.EnsureFile(folder);
         // Legacy migration only: EnsureFile already migrates/deletes an old plaintext file.
         // Keep this guarded read for read-only folders where deletion may not be possible.
@@ -2810,7 +2862,8 @@ public sealed class BackgroundAutomationService : IDisposable
         // FIXED28: watcher error-rebuild callbacks are delayed. Never recreate shared
         // watchers after shutdown has begun. Start() sets _started/lifetime before this
         // method is first called, and settings refreshes reuse that same lifetime.
-        if (!_started || _lifetime?.IsCancellationRequested != false) return;
+        if (!_started || IsQuiescingForVerifiedUpdate ||
+            _lifetime?.IsCancellationRequested != false) return;
 
         lock (_salesPurchaseClientSnapshotGate)
         {
@@ -2969,7 +3022,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
     private void QueueCentralSalesPurchaseSource(string path, bool force = true)
     {
-        if (_lifetime?.IsCancellationRequested != false) return;
+        if (IsQuiescingForVerifiedUpdate || _lifetime?.IsCancellationRequested != false) return;
         if (!IsCentralSalesPurchaseCandidate(path)) return;
         try { path = Path.GetFullPath(path); }
         catch { return; }
@@ -3302,6 +3355,7 @@ public sealed class BackgroundAutomationService : IDisposable
     private void QueueSalesPurchaseSourceSet(
         long clientId, string financialYear, string module, string registrationGstin, bool immediate = false)
     {
+        if (IsQuiescingForVerifiedUpdate) return;
         var normalizedModule = module.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales"
             : module.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase"
             : string.Empty;
@@ -3913,7 +3967,7 @@ public sealed class BackgroundAutomationService : IDisposable
 
     private void QueueExistingFiles(AutomationFolderRegistration folder, bool force = false, bool forceScanCommand = false)
     {
-        if (!Directory.Exists(folder.FolderPath)) return;
+        if (IsQuiescingForVerifiedUpdate || !Directory.Exists(folder.FolderPath)) return;
         IReadOnlyDictionary<string, AutomationFileHistoryRecord>? fileRegistry = null;
         if (!force)
         {
@@ -4065,6 +4119,7 @@ public sealed class BackgroundAutomationService : IDisposable
         AutomationFileKind? forcedKind = null,
         string precomputedHash = "")
     {
+        if (IsQuiescingForVerifiedUpdate && !manualReimport) return false;
         if (Path.GetFileName(path).StartsWith("~$", StringComparison.OrdinalIgnoreCase)) return false;
         try { path = Path.GetFullPath(path); }
         catch { return false; }
@@ -4307,6 +4362,7 @@ public sealed class BackgroundAutomationService : IDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+                if (IsQuiescingForVerifiedUpdate) continue;
 
                 // FileSystemWatcher handles normal changes immediately. This recovery
                 // pass exists only for missed events/unavailable folders and must not compete
@@ -4718,7 +4774,8 @@ public sealed class BackgroundAutomationService : IDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
-                if (!_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
+                if (IsQuiescingForVerifiedUpdate ||
+                    !_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
                     !_settings.GetBool(ApplicationSettingKeys.AutomationAutoImportKnown)) continue;
 
                 foreach (var folder in _automationRepository.GetFolders())
@@ -5475,6 +5532,16 @@ public sealed class BackgroundAutomationService : IDisposable
             }
 
             if (!_queue.TryDequeue(out var item)) continue;
+            if (IsQuiescingForVerifiedUpdate && !item.ManualReimport)
+            {
+                // A queued automatic observation is NOT an in-flight write.
+                // Preserve the original file and rediscover it after restart.
+                _queuedKeys.TryRemove(item.QueueKey, out _);
+                RegisterCompletedProgress(item);
+                AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                    "Deferred unstarted automatic observation; source is retained for post-update discovery.", item.Path);
+                continue;
+            }
             if (_folderMoveQuiesce.ContainsKey(item.FolderId))
             {
                 // The physical directory is being renamed/rebased. Drop this old-path
@@ -5489,10 +5556,17 @@ public sealed class BackgroundAutomationService : IDisposable
             SetAutomationStage(item, "Starting");
             try
             {
-                while (_globalPause && !item.ManualReimport && !cancellationToken.IsCancellationRequested)
+                while (_globalPause && !item.ManualReimport &&
+                       !IsQuiescingForVerifiedUpdate && !cancellationToken.IsCancellationRequested)
                 {
                     SetAutomationStage(item, "Paused - waiting to resume");
                     await Task.Delay(500, cancellationToken);
+                }
+                if (IsQuiescingForVerifiedUpdate && !item.ManualReimport)
+                {
+                    AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                        "Deferred paused automatic observation without writing; original source retained.", item.Path);
+                    continue;
                 }
                 PipelineRuntimeDiagnostics.ImportWaiting(item.ClientId, item.FinancialYear, item.Path);
                 if (await TryProcessBankSpreadsheetCacheFirstAsync(item, cancellationToken))
@@ -8934,20 +9008,22 @@ public sealed class BackgroundAutomationService : IDisposable
         return string.Concat(trimmed.Where(character => !Path.GetInvalidFileNameChars().Contains(character))).Trim();
     }
 
-    // Release updater may request a graceful application exit only when no
-    // queued/in-flight automation source, import or batch worker remains.
-    // This is a read-only snapshot, not a signal to cancel active accounting.
+    // With a verified update request, only actual in-progress accounting
+    // operations and explicit manual jobs block exit. Passive watcher/scan
+    // observations can safely be rediscovered from their original paths on
+    // restart; they must not keep a tray app "busy" forever.
     public bool HasPendingWorkForUpdate =>
-        !_queue.IsEmpty ||
-        !_queuedKeys.IsEmpty ||
         !_activeFiles.IsEmpty ||
         !_activeStages.IsEmpty ||
         !_gstBootstrapInFlight.IsEmpty ||
         !_bankCachedProcessors.IsEmpty ||
-        !_salesPurchaseLiveQueue.IsEmpty ||
-        !_salesPurchaseLiveQueuedKeys.IsEmpty ||
-        !_salesPurchaseSourceInFlight.IsEmpty ||
-        !_salesPurchaseSetProcessors.IsEmpty;
+        !_salesPurchaseSetProcessors.IsEmpty ||
+        (IsQuiescingForVerifiedUpdate
+            ? _queue.Any(item => item.ManualReimport)
+            : !_queue.IsEmpty || !_queuedKeys.IsEmpty ||
+              !_salesPurchaseLiveQueue.IsEmpty ||
+              !_salesPurchaseLiveQueuedKeys.IsEmpty ||
+              !_salesPurchaseSourceInFlight.IsEmpty);
 
     public void Dispose()
     {
