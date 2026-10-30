@@ -285,10 +285,25 @@ public sealed class BackgroundAutomationService : IDisposable
     {
         if (Interlocked.Exchange(ref _verifiedUpdateQuiescing, 0) == 0) return;
         if (!_started || _lifetime?.IsCancellationRequested != false) return;
-        ReloadSettings(scanExisting: true, scheduleGstBootstrap: true);
-        ConfigureCentralSalesPurchaseWatcher();
-        AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
-            "Updater deferred; ordinary watchers and missed-file recovery resumed.");
+        // Reconciliation of missed files is potentially large and must never
+        // block the WPF dispatcher during an aborted update attempt.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (!_started || IsQuiescingForVerifiedUpdate ||
+                    _lifetime?.IsCancellationRequested != false) return;
+                ReloadSettings(scanExisting: true, scheduleGstBootstrap: true);
+                ConfigureCentralSalesPurchaseWatcher();
+                AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                    "Updater deferred; ordinary watchers and missed-file recovery resumed.");
+            }
+            catch (Exception exception)
+            {
+                AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
+                    $"Could not resume watchers after deferred update: {exception}");
+            }
+        });
     }
 
     public string VerifiedUpdateBusySummary =>
