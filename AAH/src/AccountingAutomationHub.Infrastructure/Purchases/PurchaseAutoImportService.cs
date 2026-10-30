@@ -896,26 +896,23 @@ public sealed class PurchaseAutoImportService :
                 file,
                 financialYear);
 
-            if (scope.Scope == "Other")
-            {
-                continue;
-            }
-
             foreach (var payload in ReadJsonPayloads(
                          file,
                          issues))
             {
-                var classification = ClassifyPayload(
-                    payload.Payload);
-
+                var classification = ClassifyPayload(payload.Payload);
                 if (classification.SourceType != sourceType ||
                     classification.Gstin != gstin)
-                {
                     continue;
-                }
 
-                var embedded = EmbeddedTimestamp(
-                    payload.Payload);
+                // Winman can write GSTR2A_ANNUAL/GSTR2B_ANNUAL into a
+                // month-named or unclassified E-returns folder after upgrades.
+                // Verified FormName takes precedence over folder heuristics.
+                var isAnnual = IsAnnualAggregatePayload(payload.Payload, sourceType);
+                if (scope.Scope == "Other" && !isAnnual)
+                    continue;
+                var finalScope = isAnnual ? "Annual" : scope.Scope;
+                var embedded = EmbeddedTimestamp(payload.Payload);
 
                 candidates.Add(
                     new SourceCandidate
@@ -935,14 +932,9 @@ public sealed class PurchaseAutoImportService :
                             payload.Payload),
                         SourceOrigin = "E-returns",
                         Branch = branchName,
-                        Scope = scope.Scope,
-                        MonthKey = scope.MonthKey,
-                        IsAnnualAggregate = scope.Scope.Equals(
-                                                "Annual",
-                                                StringComparison.OrdinalIgnoreCase) ||
-                                            IsAnnualAggregatePayload(
-                                                payload.Payload,
-                                                sourceType),
+                        Scope = finalScope,
+                        MonthKey = finalScope == "Annual" ? string.Empty : scope.MonthKey,
+                        IsAnnualAggregate = finalScope == "Annual",
                         ReadOnly = true
                     });
             }
@@ -3112,6 +3104,15 @@ public sealed class PurchaseAutoImportService :
         {
             warnings.Add(
                 "One or more forms were loaded from the Windows Downloads fallback because the preferred E-returns branch did not contain that form.");
+        }
+
+        foreach (var form in new[] { verification.TwoA, verification.TwoB })
+        {
+            if (form.Status.Contains("Monthly Difference", StringComparison.OrdinalIgnoreCase))
+                warnings.Add(
+                    $"GSTR-{form.Form} optional monthly snapshots differ from the annual primary: " +
+                    $"{form.MissingInMonthlyCount} missing, {form.ExtraInMonthlyCount} extra, " +
+                    $"{form.DifferentDocumentCount} changed document(s). Annual data was used; review source differences if needed.");
         }
 
         if (request.SaveSourceFiles)
