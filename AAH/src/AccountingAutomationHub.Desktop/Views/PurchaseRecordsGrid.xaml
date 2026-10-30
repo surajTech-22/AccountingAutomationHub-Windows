@@ -79,6 +79,10 @@
         </DataGrid.Resources>
 
         <DataGrid.Columns>
+            <DataGridTextColumn Header="Client GSTIN"
+                                Binding="{Binding ClientGstin, Mode=OneWay}"
+                                IsReadOnly="True"
+                                Width="150" />
             <DataGridTextColumn Header="Status"
                                 Binding="{Binding ReconciliationStatus, Mode=OneWay}"
                                 IsReadOnly="True"
