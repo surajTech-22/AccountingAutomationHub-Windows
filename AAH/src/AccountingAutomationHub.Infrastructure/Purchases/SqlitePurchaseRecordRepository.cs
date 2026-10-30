@@ -43,6 +43,7 @@ public sealed class SqlitePurchaseRecordRepository :
             (
                 Id                  INTEGER PRIMARY KEY AUTOINCREMENT,
                 ClientId            INTEGER NOT NULL,
+                ClientGstin         TEXT NOT NULL DEFAULT '',
                 FinancialYear       TEXT NOT NULL,
                 ImportMode          TEXT NOT NULL,
                 Status              TEXT NOT NULL,
@@ -148,6 +149,7 @@ public sealed class SqlitePurchaseRecordRepository :
             """;
 
         command.ExecuteNonQuery();
+        EnsureColumn(connection, "PurchaseImportBatches", "ClientGstin", "TEXT NOT NULL DEFAULT ''");
 
         EnsureColumn(
             connection,
@@ -183,7 +185,8 @@ public sealed class SqlitePurchaseRecordRepository :
     public bool IsAutomaticImportCurrent(
         long clientId,
         string financialYear,
-        string sourceFingerprint)
+        string sourceFingerprint,
+        string? registrationGstin = null)
     {
         if (string.IsNullOrWhiteSpace(sourceFingerprint))
         {
@@ -200,6 +203,7 @@ public sealed class SqlitePurchaseRecordRepository :
             WHERE
                 ClientId = $ClientId
                 AND FinancialYear = $FinancialYear
+                AND ($RegistrationGstin='' OR ClientGstin=$RegistrationGstin COLLATE NOCASE)
                 AND ImportMode = 'Auto Import'
                 AND Status = 'Imported'
             ORDER BY Id DESC
@@ -208,6 +212,7 @@ public sealed class SqlitePurchaseRecordRepository :
 
         command.Parameters.AddWithValue("$ClientId", clientId);
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$RegistrationGstin", (registrationGstin ?? string.Empty).Trim().ToUpperInvariant());
 
         var stored = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
 
@@ -240,7 +245,8 @@ public sealed class SqlitePurchaseRecordRepository :
 
     public string GetLatestAutomaticImportContentFingerprint(
         long clientId,
-        string financialYear)
+        string financialYear,
+        string? registrationGstin = null)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
@@ -250,13 +256,15 @@ public sealed class SqlitePurchaseRecordRepository :
             FROM PurchaseImportBatches
             WHERE ClientId = $ClientId
               AND FinancialYear = $FinancialYear
-              AND ImportMode = 'Auto Import'
+              AND ($RegistrationGstin='' OR ClientGstin=$RegistrationGstin COLLATE NOCASE)
+                AND ImportMode = 'Auto Import'
               AND Status = 'Imported'
             ORDER BY Id DESC
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$ClientId", clientId);
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$RegistrationGstin", (registrationGstin ?? string.Empty).Trim().ToUpperInvariant());
 
         var json = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
         if (json.Length == 0) return string.Empty;
@@ -660,6 +668,10 @@ public sealed class SqlitePurchaseRecordRepository :
     {
         ArgumentNullException.ThrowIfNull(result);
 
+        var targetGstin = (result.ClientGstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (targetGstin.Length != 15)
+            throw new InvalidOperationException("Automatic Purchase replacement requires an exact registered GSTIN.");
+
         if (result.WasBlocked)
         {
             return 0;
@@ -704,7 +716,8 @@ public sealed class SqlitePurchaseRecordRepository :
                 WHERE
                     ClientId = $ClientId
                     AND FinancialYear = $FinancialYear
-                    AND ImportMode = 'Auto Import';
+                    AND ImportMode = 'Auto Import'
+                    AND ClientGstin = $TargetGstin COLLATE NOCASE;
                 """;
 
             delete.Parameters.AddWithValue(
@@ -714,6 +727,7 @@ public sealed class SqlitePurchaseRecordRepository :
             delete.Parameters.AddWithValue(
                 "$FinancialYear",
                 financialYear.Trim());
+            delete.Parameters.AddWithValue("$TargetGstin", targetGstin);
 
             delete.ExecuteNonQuery();
         }
@@ -736,6 +750,7 @@ public sealed class SqlitePurchaseRecordRepository :
                 INSERT INTO PurchaseImportBatches
                 (
                     ClientId,
+                    ClientGstin,
                     FinancialYear,
                     ImportMode,
                     Status,
@@ -752,6 +767,7 @@ public sealed class SqlitePurchaseRecordRepository :
                 VALUES
                 (
                     $ClientId,
+                    $ClientGstin,
                     $FinancialYear,
                     'Auto Import',
                     'Imported',
@@ -772,6 +788,7 @@ public sealed class SqlitePurchaseRecordRepository :
             insertBatch.Parameters.AddWithValue(
                 "$ClientId",
                 clientId);
+            insertBatch.Parameters.AddWithValue("$ClientGstin", targetGstin);
             insertBatch.Parameters.AddWithValue(
                 "$FinancialYear",
                 financialYear.Trim());
