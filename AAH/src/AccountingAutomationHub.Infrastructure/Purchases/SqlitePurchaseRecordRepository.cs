@@ -641,6 +641,7 @@ public sealed class SqlitePurchaseRecordRepository :
 
     private static string ManualDuplicateKey(PurchaseImportRecord row) =>
         string.Join("|",
+            row.ClientGstin.Trim().ToUpperInvariant(),
             row.Destination.Trim().ToUpperInvariant(),
             row.DocumentDate?.ToString("yyyyMMdd", CultureInfo.InvariantCulture) ?? string.Empty,
             PurchaseImportUtilities.NormalizeDocumentNumber(row.DocumentNumber),
@@ -686,7 +687,8 @@ public sealed class SqlitePurchaseRecordRepository :
         var preservedUserEdits = GetAutomaticRecords(
                 clientId,
                 financialYear)
-            .Where(record => record.IsUserEdited)
+            .Where(record => record.IsUserEdited &&
+                record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
         var incomingRecords = result.Records.ToList();
@@ -1016,12 +1018,16 @@ public sealed class SqlitePurchaseRecordRepository :
             return 0;
         }
 
+        var targetGstin = (result.ClientGstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (targetGstin.Length != 15) throw new InvalidOperationException("Monthly reimport requires a registered GSTIN.");
         var selectedMonth = new DateTime(month.Year, month.Month, 1);
         var useAnnualTwoAMonthExtraction =
             ShouldUseAnnualTwoAMonthExtraction(result.Verification.TwoA, selectedMonth);
         var useAnnualTwoBMonthExtraction =
             ShouldUseAnnualTwoAMonthExtraction(result.Verification.TwoB, selectedMonth);
-        var existingRecords = GetAutomaticRecords(clientId, financialYear);
+        var existingRecords = GetAutomaticRecords(clientId, financialYear)
+            .Where(record => record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var existingMonthRecords = existingRecords
             .Where(record => IsRecordInReimportMonth(
                 record,
@@ -1036,6 +1042,7 @@ public sealed class SqlitePurchaseRecordRepository :
             .ToArray();
 
         var incomingRecords = result.Records
+            .Where(record => record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase))
             .Where(record => IsRecordInReimportMonth(
                 record,
                 selectedMonth,
