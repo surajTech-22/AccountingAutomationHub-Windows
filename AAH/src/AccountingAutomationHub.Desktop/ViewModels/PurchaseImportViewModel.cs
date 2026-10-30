@@ -541,7 +541,8 @@ public sealed class PurchaseImportViewModel :
         bool promptForRoot,
         long generation,
         bool forceReimport = false,
-        DateTime? reimportMonth = null)
+        DateTime? reimportMonth = null,
+        IReadOnlyList<string>? selectedRegistrations = null)
     {
         while (IsBusy &&
                generation == Interlocked.Read(
@@ -616,7 +617,8 @@ public sealed class PurchaseImportViewModel :
 
         if (client.AdditionalGstins is { Count: > 0 })
         {
-            await ImportAllRegisteredPurchasesAsync(client, generation, forceReimport, reimportMonth);
+            await ImportAllRegisteredPurchasesAsync(client, generation, forceReimport,
+                reimportMonth, selectedRegistrations);
             return;
         }
 
@@ -859,7 +861,8 @@ public sealed class PurchaseImportViewModel :
         AccountingAutomationHub.Domain.Clients.ClientProfile client,
         long generation,
         bool forceReimport,
-        DateTime? reimportMonth)
+        DateTime? reimportMonth,
+        IReadOnlyList<string>? selectedRegistrations)
     {
         IsBusy = true;
         EditStatusText = string.Empty;
@@ -875,12 +878,17 @@ public sealed class PurchaseImportViewModel :
             var registrations = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
                 .Select(value => value.Trim().ToUpperInvariant())
                 .Where(value => value.Length == 15)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(gstin => selectedRegistrations is null ||
+                    selectedRegistrations.Contains(gstin, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (registrations.Length == 0) return;
+            var registrationNumber = 0;
             foreach (var gstin in registrations)
             {
                 cancellation.Token.ThrowIfCancellationRequested();
                 if (generation != Interlocked.Read(ref _automaticImportGeneration)) return;
-                StatusText = $"Purchase: checking {gstin} ({imported + skipped.Count + 1}/{registrations.Length})...";
+                StatusText = $"Purchase: checking {gstin} ({++registrationNumber}/{registrations.Length})...";
                 var result = await _autoImportService.ImportAsync(new PurchaseAutoImportRequest
                 {
                     ClientId = client.Id,
@@ -952,17 +960,24 @@ public sealed class PurchaseImportViewModel :
             return;
         }
 
+        var current = _clientContext.CurrentClient;
+        if (current is null) return;
+        var selectedRegistrations = GstinModuleClearDialog.SelectForReimport(current, "Purchase");
+        if (selectedRegistrations is null || selectedRegistrations.Count == 0) return;
+
         _cancellationSource?.Cancel();
 
         var generation = Interlocked.Increment(
             ref _automaticImportGeneration);
 
-        StatusText = "Reimporting Purchase from verified GSTR-2A / GSTR-2B sources...";
+        StatusText = "Reimporting Purchase for " +
+            string.Join(", ", selectedRegistrations) + "...";
 
         await RunAutoImportAsync(
             promptForRoot: true,
             generation,
-            forceReimport: true);
+            forceReimport: true,
+            selectedRegistrations: selectedRegistrations);
     }
 
     public async Task ReimportAutomaticSourcesForMonthAsync(int month)
@@ -987,18 +1002,25 @@ public sealed class PurchaseImportViewModel :
             : fyStart.Year + 1;
         var selectedMonth = new DateTime(year, month, 1);
 
+        var current = _clientContext.CurrentClient;
+        if (current is null) return;
+        var selectedRegistrations = GstinModuleClearDialog.SelectForReimport(current, "Purchase");
+        if (selectedRegistrations is null || selectedRegistrations.Count == 0) return;
+
         _cancellationSource?.Cancel();
 
         var generation = Interlocked.Increment(
             ref _automaticImportGeneration);
 
-        StatusText = $"Reimporting Purchase for {selectedMonth:MMMM yyyy} from verified GSTR-2A / GSTR-2B sources...";
+        StatusText = $"Reimporting Purchase for {selectedMonth:MMMM yyyy} (GSTINs: " +
+            string.Join(", ", selectedRegistrations) + ")...";
 
         await RunAutoImportAsync(
             promptForRoot: true,
             generation,
             forceReimport: true,
-            reimportMonth: selectedMonth);
+            reimportMonth: selectedMonth,
+            selectedRegistrations: selectedRegistrations);
     }
 
     private static bool HasSourceCoverageForMonth(
@@ -1553,11 +1575,16 @@ public sealed class PurchaseImportViewModel :
         var client = _clientContext.CurrentClient;
         if (client is null || !CanDeletePurchase) return;
         var isMulti = client.AdditionalGstins is { Count: > 0 };
-        var targetGstin = isMulti ? GstinModuleClearDialog.Select(client, "Purchase") : null;
-        if (isMulti && targetGstin is null) return;
+        var targetsToClear = isMulti
+            ? GstinModuleClearDialog.SelectToClear(client, "Purchase")
+            : null;
+        if (isMulti && (targetsToClear is null || targetsToClear.Count == 0)) return;
 
         var answer = MessageBox.Show(
-            $"Clear all Purchase module transactions for {client.ClientName} / FY {client.FinancialYear}?\n\n" +
+            (isMulti
+                ? $"Clear Purchase records ONLY for GSTIN(s): {string.Join(", ", targetsToClear!)}?\n\n" +
+                  $"All other GSTIN records will be RETAINED.\n\n"
+                : $"Clear all Purchase module transactions for {client.ClientName} / FY {client.FinancialYear}?\n\n") +
             "This removes Purchase/RCM/Debit Note records and their import batches from AAH only. " +
             "Stock Masters, Unit/Item mappings, global/built-in mappings, Automation Folder links and Tally vouchers are preserved.",
             "Clear Purchase Module",
@@ -1567,7 +1594,10 @@ public sealed class PurchaseImportViewModel :
         if (answer != MessageBoxResult.Yes) return;
 
         ResetAutomaticSaveQueue();
-        var removed = _purchaseRecordRepository.ClearModule(client.Id, client.FinancialYear, targetGstin);
+        var removed = isMulti
+            ? targetsToClear!.Sum(gstin =>
+                _purchaseRecordRepository.ClearModule(client.Id, client.FinancialYear, gstin))
+            : _purchaseRecordRepository.ClearModule(client.Id, client.FinancialYear);
         if (isMulti) LoadSavedAutomaticRows(client.Id, client.FinancialYear, []);
         else
         {
@@ -1584,7 +1614,9 @@ public sealed class PurchaseImportViewModel :
         _liveChangeHub?.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Purchase, "Purchase module cleared");
         _activityContext.NotifyChanged();
         EditStatusText = $"Cleared {removed:N0} Purchase module row(s). Masters, mappings and Tally vouchers were preserved.";
-        StatusText = "Purchase module cleared for the selected Client + FY.";
+        StatusText = isMulti
+            ? $"Purchase cleared only for {string.Join(", ", targetsToClear!)}; other GSTINs retained."
+            : "Purchase module cleared for the selected Client + FY.";
         _ = RefreshAccountingAfterManualEditAsync(client);
         RefreshCommands();
     }
