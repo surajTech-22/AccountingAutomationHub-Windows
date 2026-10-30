@@ -614,6 +614,12 @@ public sealed class PurchaseImportViewModel :
             return;
         }
 
+        if (client.AdditionalGstins is { Count: > 0 })
+        {
+            await ImportAllRegisteredPurchasesAsync(client, generation, forceReimport, reimportMonth);
+            return;
+        }
+
         IsBusy = true;
         EditStatusText = string.Empty;
         ErrorText = string.Empty;
@@ -838,6 +844,97 @@ public sealed class PurchaseImportViewModel :
         {
             ErrorText = exception.Message;
             StatusText = "Automatic Purchase import failed.";
+        }
+        finally
+        {
+            IsBusy = false;
+            _cancellationSource = null;
+            NotifyStatusVisibility();
+        }
+    }
+
+    // Same Purchase parser/module; registration is the unit of source authority,
+    // reimport, duplicate protection and persistence for multi-GSTIN clients.
+    private async Task ImportAllRegisteredPurchasesAsync(
+        AccountingAutomationHub.Domain.Clients.ClientProfile client,
+        long generation,
+        bool forceReimport,
+        DateTime? reimportMonth)
+    {
+        IsBusy = true;
+        EditStatusText = string.Empty;
+        ErrorText = string.Empty;
+        WarningText = string.Empty;
+        SourceVerificationText = string.Empty;
+        using var cancellation = new CancellationTokenSource();
+        _cancellationSource = cancellation;
+        var imported = 0;
+        var skipped = new List<string>();
+        try
+        {
+            var registrations = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                .Select(value => value.Trim().ToUpperInvariant())
+                .Where(value => value.Length == 15)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var gstin in registrations)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (generation != Interlocked.Read(ref _automaticImportGeneration)) return;
+                StatusText = $"Purchase: checking {gstin} ({imported + skipped.Count + 1}/{registrations.Length})...";
+                var result = await _autoImportService.ImportAsync(new PurchaseAutoImportRequest
+                {
+                    ClientId = client.Id,
+                    ClientGstin = gstin,
+                    FinancialYear = client.FinancialYear,
+                    CompanyName = CompanyName,
+                    EReturnsRootPath = EReturnsRootPath,
+                    SearchWindowsDownloads = true,
+                    SaveSourceFiles = false
+                }, cancellationToken: cancellation.Token);
+                if (generation != Interlocked.Read(ref _automaticImportGeneration)) return;
+                if (result.WasBlocked ||
+                    !result.SourceManifest.Any(source => source.FileType.Equals("2A", StringComparison.OrdinalIgnoreCase)) ||
+                    (reimportMonth.HasValue &&
+                     !HasSourceCoverageForMonth(result.Verification.TwoA, reimportMonth.Value)))
+                {
+                    skipped.Add(gstin + " (missing/unverified source)");
+                    continue;
+                }
+                result.SourceFingerprint = BuildSourceFingerprint(result);
+                if (!forceReimport && _purchaseRecordRepository.IsAutomaticImportCurrent(
+                    client.Id, client.FinancialYear, result.SourceFingerprint, gstin))
+                    continue;
+                if (_stockNormalizationService is not null &&
+                    result.Records.Any(row => !string.IsNullOrWhiteSpace(row.ItemName)))
+                    _stockNormalizationService.Normalize(client.Id, client.FinancialYear,
+                        CompanyName, result.Records);
+                result.PersistedRows = reimportMonth.HasValue
+                    ? _purchaseRecordRepository.ReplaceAutomaticImportMonth(
+                        client.Id, client.FinancialYear, result, reimportMonth.Value)
+                    : _purchaseRecordRepository.ReplaceAutomaticImport(
+                        client.Id, client.FinancialYear, result);
+                imported += result.PersistedRows;
+            }
+            if (_refreshCoordinator is not null)
+                await _refreshCoordinator.RefreshAsync(client, cancellation.Token);
+            _ledgerTotalService?.Invalidate(client.Id, client.FinancialYear);
+            LoadSavedAutomaticRows(client.Id, client.FinancialYear, []);
+            PublishCommittedImport(client.Id, client.FinancialYear, "Purchase",
+                imported, EReturnsRootPath, "Registered GSTIN Auto Import");
+            ProgressPercent = 100;
+            WarningText = string.Join("; ", skipped);
+            StatusText = $"Purchase registration import complete: {AllRows.Count:N0} combined saved row(s) across " +
+                $"{registrations.Length} GSTIN(s). " +
+                (skipped.Count > 0 ? $"Source unavailable for: {string.Join(", ", skipped)}." : "");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Purchase registration import cancelled.";
+        }
+        catch (Exception exception)
+        {
+            ErrorText = exception.Message;
+            StatusText = "Purchase registration import failed; earlier registration rows retained.";
         }
         finally
         {
