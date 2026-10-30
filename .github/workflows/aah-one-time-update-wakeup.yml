@@ -1,5 +1,6 @@
 name: One-time AAH installed updater wakeup (owner requested)
 # Owner-requested recovery: re-signal latest verified stable release to installed AAH clients.
+# Retry requested 2026-10-30: broadcast the latest verified release again after a missed v4.0.0.530 update notification.
 # This triggers only an update-check hint; GitHub SHA256 verification remains mandatory.
 on:
   push:
