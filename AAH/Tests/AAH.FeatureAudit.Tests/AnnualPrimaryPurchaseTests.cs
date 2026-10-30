@@ -171,7 +171,35 @@ internal static class AnnualPrimaryPurchaseTests
                 $"paths={cachedPaths.Count}, blocked={cacheResult.WasBlocked}, " +
                 $"2A={cacheResult.Verification.TwoA.Status}; A={cacheResult.Verification.TwoA.AnnualSource}; M={cacheResult.Verification.TwoA.MonthlySources.Count}; " +
                 $"2B={cacheResult.Verification.TwoB.Status}; A={cacheResult.Verification.TwoB.AnnualSource}; M={cacheResult.Verification.TwoB.MonthlySources.Count}");
-            Console.WriteLine("PASS: Annual primary 2A/2B, monthly-optional mismatch, Winman relocated Annual, multi-GSTIN isolation, shared source cache.");
+            // Monthly-only files remain a supported fallback when annual is not
+            // available. The shared-cache month key MUST be YYYYMM, not MMYYYY.
+            var monthlyCacheRoot = Path.Combine(root, "monthly-cache-only");
+            Directory.CreateDirectory(monthlyCacheRoot);
+            var monthly2A = Path.Combine(monthlyCacheRoot, "april-two-a.json");
+            var monthly2B = Path.Combine(monthlyCacheRoot, "april-two-b.json");
+            File.WriteAllText(monthly2A, TwoA(Secondary, "APRIL-001", "GSTR2A_MONTHLY")
+                .Replace("\"retnprd\":\"032026\"", "\"retnprd\":\"042025\""));
+            File.WriteAllText(monthly2B, TwoB(Secondary, "APRIL-001", "GSTR2B_MONTHLY"));
+            foreach (var path in new[] { monthly2A, monthly2B })
+                SalesPurchaseSourceCache.Record(path, "Purchase", Secondary, Fy, "", new FileInfo(path).Length,
+                    File.GetLastWriteTimeUtc(path));
+            var monthlyOnly = new PurchaseAutoImportService().ImportAsync(new PurchaseAutoImportRequest
+            {
+                ClientId = 2,
+                ClientGstin = Secondary,
+                FinancialYear = Fy,
+                CompanyName = "SECONDARY GSTIN TEST",
+                EReturnsRootPath = "",
+                SearchWindowsDownloads = false
+            }).GetAwaiter().GetResult();
+            Require(!monthlyOnly.WasBlocked &&
+                    monthlyOnly.Verification.TwoA.MonthlyMonthKeys.SequenceEqual(new[] { "202504" }) &&
+                    monthlyOnly.Verification.TwoB.MonthlyMonthKeys.SequenceEqual(new[] { "202504" }) &&
+                    monthlyOnly.Records.Count > 0,
+                $"Monthly-only GSTIN-scoped fallback failed: 2A {monthlyOnly.Verification.TwoA.Status}/" +
+                $"{string.Join(",", monthlyOnly.Verification.TwoA.MonthlyMonthKeys)}, 2B {monthlyOnly.Verification.TwoB.Status}/" +
+                $"{string.Join(",", monthlyOnly.Verification.TwoB.MonthlyMonthKeys)}");
+            Console.WriteLine("PASS: Annual primary 2A/2B, optional monthly mismatches, Winman relocated Annual, multi-GSTIN isolation, shared cache and YYYYMM monthly-only fallback.");
         }
         finally
         {
