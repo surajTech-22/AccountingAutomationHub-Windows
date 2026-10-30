@@ -1436,25 +1436,24 @@ public sealed class MainWindowViewModel :
             value);
     }
 
-    /// <summary>
-    /// A Dashboard GSTIN always opens the current client's existing registration
-    /// editor. Do not CloseWorkspace or change the Client/FY to reach Clients.
-    /// </summary>
-    public bool OpenDashboardGstinManagement(string gstin)
+    /// <summary>Dashboard-only GSTIN panel uses the existing Client Management
+    /// repository/registration save rules without opening the full client editor.</summary>
+    public (string Primary, string Additional)? GetDashboardGstinSnapshot()
     {
-        var client = _clientContext.CurrentClient;
-        if (client is null || string.IsNullOrWhiteSpace(gstin) ||
-            !_clientsViewModel.OpenGstinManagement(client.Id, client.FinancialYear, gstin))
-            return false;
-
-        if (ReferenceEquals(CurrentPage, _clientsViewModel)) return true;
-        var previousPage = CurrentPage;
-        _selectedNavigationItem = null; // no permanent sidebar entry for the editor
-        OnPropertyChanged(nameof(SelectedNavigationItem));
-        CurrentPage = _clientsViewModel;
-        SchedulePageTransition(previousPage, _clientsViewModel);
-        return true;
+        var current = _clientContext.CurrentClient;
+        if (current is null) return null;
+        var fresh = _clientRepository.GetById(current.Id);
+        if (fresh is null || !fresh.FinancialYear.Equals(current.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return (fresh.Gstin, string.Join(Environment.NewLine, fresh.AdditionalGstins ?? []));
     }
+
+    public bool SaveDashboardGstinRegistrations(
+        long clientId, string financialYear, string primary, string additional,
+        string originalPrimary, string originalAdditional, out string status) =>
+        _clientsViewModel.SaveDashboardGstinRegistrations(
+            clientId, financialYear, primary, additional,
+            originalPrimary, originalAdditional, out status);
 
     public bool NavigateTo(
         string title)
