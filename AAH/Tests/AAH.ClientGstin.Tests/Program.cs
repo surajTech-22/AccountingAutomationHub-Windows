@@ -255,7 +255,7 @@ try
         "QueueSalesPurchaseSourceSet(clientId, financialYear, \"Sales\", gstin, immediate: true);",
         scheduleAt < 0 ? 0 : scheduleAt, StringComparison.Ordinal);
     var historyScanAt = automationSource.IndexOf(
-        "foreach (var root in GetCentralSalesPurchaseRoots())",
+        "foreach (var root in recoveryRoots)",
         scheduleAt < 0 ? 0 : scheduleAt, StringComparison.Ordinal);
     if (scheduleAt < 0 || firstImportAt < scheduleAt || historyScanAt < firstImportAt ||
         !automationSource.Contains("_salesPurchaseActiveClientSnapshotUtc = DateTime.MinValue;", StringComparison.Ordinal) ||
