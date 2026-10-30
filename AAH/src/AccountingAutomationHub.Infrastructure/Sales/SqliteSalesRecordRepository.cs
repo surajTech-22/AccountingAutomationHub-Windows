@@ -49,6 +49,7 @@ public sealed class SqliteSalesRecordRepository :
             (
                 Id                  INTEGER PRIMARY KEY AUTOINCREMENT,
                 ClientId            INTEGER NOT NULL,
+                ClientGstin         TEXT NOT NULL DEFAULT '',
                 FinancialYear       TEXT NOT NULL,
                 ImportMode          TEXT NOT NULL,
                 Status              TEXT NOT NULL,
@@ -189,6 +190,7 @@ public sealed class SqliteSalesRecordRepository :
             """;
 
         command.ExecuteNonQuery();
+        EnsureColumn(connection, "SalesImportBatches", "ClientGstin", "TEXT NOT NULL DEFAULT ''");
 
         // Fix53: older GSTR-1 imports could persist the portal's complete GST-rate
         // template as zero-value Sales rows beside the one real populated rate bucket.
@@ -270,7 +272,8 @@ public sealed class SqliteSalesRecordRepository :
     public bool IsAutomaticImportCurrent(
         long clientId,
         string financialYear,
-        string sourceFingerprint)
+        string sourceFingerprint,
+        string? registrationGstin = null)
     {
         if (string.IsNullOrWhiteSpace(
                 sourceFingerprint))
@@ -288,6 +291,7 @@ public sealed class SqliteSalesRecordRepository :
             WHERE
                 ClientId = $ClientId
                 AND FinancialYear = $FinancialYear
+                AND ($RegistrationGstin='' OR ClientGstin=$RegistrationGstin COLLATE NOCASE)
                 AND ImportMode = 'Auto Import'
                 AND Status = 'Imported'
             ORDER BY Id DESC
@@ -301,6 +305,7 @@ public sealed class SqliteSalesRecordRepository :
         command.Parameters.AddWithValue(
             "$FinancialYear",
             financialYear.Trim());
+        command.Parameters.AddWithValue("$RegistrationGstin", (registrationGstin ?? string.Empty).Trim().ToUpperInvariant());
 
         var current = Convert.ToString(
             command.ExecuteScalar(),
@@ -336,7 +341,8 @@ public sealed class SqliteSalesRecordRepository :
 
     public string GetLatestAutomaticImportContentFingerprint(
         long clientId,
-        string financialYear)
+        string financialYear,
+        string? registrationGstin = null)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
@@ -346,13 +352,15 @@ public sealed class SqliteSalesRecordRepository :
             FROM SalesImportBatches
             WHERE ClientId = $ClientId
               AND FinancialYear = $FinancialYear
-              AND ImportMode = 'Auto Import'
+              AND ($RegistrationGstin='' OR ClientGstin=$RegistrationGstin COLLATE NOCASE)
+                AND ImportMode = 'Auto Import'
               AND Status = 'Imported'
             ORDER BY Id DESC
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$ClientId", clientId);
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$RegistrationGstin", (registrationGstin ?? string.Empty).Trim().ToUpperInvariant());
 
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return string.Empty;
@@ -1022,6 +1030,10 @@ public sealed class SqliteSalesRecordRepository :
 
         // Manual names entered in the interactive B2B panel are not Masters.
         // They are durable Client/FY/GSTIN overrides and must survive every GSTR-1 reimport.
+        var targetGstin = (result.ClientGstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (targetGstin.Length != 15)
+            throw new InvalidOperationException("Automatic Sales replacement requires an exact registered GSTIN.");
+
         var b2bNameOverrides = GetB2BCustomerNameOverrides(clientId, financialYear);
         var b2cNameOverrides = GetB2CCustomerNameOverrides(clientId, financialYear);
         var recordsToPersist = RemoveAutomaticRateTemplatePlaceholders(result.Records).ToList();
@@ -1038,7 +1050,8 @@ public sealed class SqliteSalesRecordRepository :
                 WHERE
                     ClientId = $ClientId
                     AND FinancialYear = $FinancialYear
-                    AND ImportMode = 'Auto Import';
+                    AND ImportMode = 'Auto Import'
+                    AND ClientGstin = $TargetGstin COLLATE NOCASE;
                 """;
 
             delete.Parameters.AddWithValue(
@@ -1048,6 +1061,7 @@ public sealed class SqliteSalesRecordRepository :
             delete.Parameters.AddWithValue(
                 "$FinancialYear",
                 financialYear.Trim());
+            delete.Parameters.AddWithValue("$TargetGstin", targetGstin);
 
             delete.ExecuteNonQuery();
         }
@@ -1070,6 +1084,7 @@ public sealed class SqliteSalesRecordRepository :
                 INSERT INTO SalesImportBatches
                 (
                     ClientId,
+                    ClientGstin,
                     FinancialYear,
                     ImportMode,
                     Status,
@@ -1084,6 +1099,7 @@ public sealed class SqliteSalesRecordRepository :
                 VALUES
                 (
                     $ClientId,
+                    $ClientGstin,
                     $FinancialYear,
                     'Auto Import',
                     'Imported',
@@ -1102,6 +1118,7 @@ public sealed class SqliteSalesRecordRepository :
             insertBatch.Parameters.AddWithValue(
                 "$ClientId",
                 clientId);
+            insertBatch.Parameters.AddWithValue("$ClientGstin", targetGstin);
             insertBatch.Parameters.AddWithValue(
                 "$FinancialYear",
                 financialYear.Trim());
