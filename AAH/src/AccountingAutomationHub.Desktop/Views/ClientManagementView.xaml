@@ -804,6 +804,19 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Company Group Dashboard" Click="OpenCompanyGroupDashboard_Click" Padding="13,7" Margin="0,0,8,0"
+                                    ToolTip="Read-only same-PAN branch dashboard and offline XML preview">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSelectedCompanyGroup}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
                             <Button Content="+ Make Group" Command="{Binding BeginAddGroupFolderCommand}" Padding="13,7" Margin="0,0,8,0"
                                     ToolTip="Creates a new top-level Firm, Company, CA, Auditor or Company Group. Drag it into another Group only when nesting is required."/>
                             <Button Content="Close" Command="{Binding CloseGroupManagerCommand}" Padding="14,7"/>
