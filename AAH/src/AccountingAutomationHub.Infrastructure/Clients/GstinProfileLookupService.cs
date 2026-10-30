@@ -95,14 +95,20 @@ public sealed partial class GstinProfileLookupService :
     private readonly Dictionary<string, GstinProfileLookupResult>
         _sessionCache = new(StringComparer.OrdinalIgnoreCase);
 
-    public GstinProfileLookupService()
+    public GstinProfileLookupService() : this(ApplicationDataPaths.DatabasePath) { }
+
+    // Isolated test/diagnostic database support; normal application behavior
+    // continues to use the existing ApplicationDataPaths.DatabasePath.
+    public GstinProfileLookupService(string databasePath)
     {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("Database path required.", nameof(databasePath));
         ApplicationDataPaths.EnsureFolders();
 
         _connectionString =
             new SqliteConnectionStringBuilder
             {
-                DataSource = ApplicationDataPaths.DatabasePath,
+                DataSource = databasePath,
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Cache = SqliteCacheMode.Private
             }.ToString();
