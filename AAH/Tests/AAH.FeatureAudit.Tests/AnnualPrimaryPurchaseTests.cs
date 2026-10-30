@@ -160,13 +160,17 @@ internal static class AnnualPrimaryPurchaseTests
             foreach (var path in new[] { cache2A, cache2B })
                 SalesPurchaseSourceCache.Record(path, "Purchase", Primary, Fy, "", new FileInfo(path).Length,
                     File.GetLastWriteTimeUtc(path));
+            var cachedPaths = SalesPurchaseSourceCache.GetPaths("Purchase", Primary, Fy);
             var cacheResult = svc.ImportAsync(Request("")).GetAwaiter().GetResult();
             Require(!cacheResult.WasBlocked &&
                     cacheResult.Verification.TwoA.AnnualSource.Length > 0 &&
                     cacheResult.Verification.TwoB.AnnualSource.Length > 0 &&
                     cacheResult.Verification.TwoA.MonthlySources.Count == 0 &&
                     cacheResult.Verification.TwoB.MonthlySources.Count == 0,
-                "GSTR2A_ANNUAL / GSTR2B_ANNUAL metadata ignored in shared source cache.");
+                $"GSTR2A_ANNUAL / GSTR2B_ANNUAL cache classification failed. " +
+                $"paths={cachedPaths.Count}, blocked={cacheResult.WasBlocked}, " +
+                $"2A={cacheResult.Verification.TwoA.Status}; A={cacheResult.Verification.TwoA.AnnualSource}; M={cacheResult.Verification.TwoA.MonthlySources.Count}; " +
+                $"2B={cacheResult.Verification.TwoB.Status}; A={cacheResult.Verification.TwoB.AnnualSource}; M={cacheResult.Verification.TwoB.MonthlySources.Count}");
             Console.WriteLine("PASS: Annual primary 2A/2B, monthly-optional mismatch, Winman relocated Annual, multi-GSTIN isolation, shared source cache.");
         }
         finally
