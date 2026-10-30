@@ -2863,8 +2863,13 @@ public sealed partial class ClientManagementViewModel :
         {
             ClientCode = client.ClientCode;
             ClientName = client.ClientName;
-            LegalName = client.LegalName;
-            TradeName = client.TradeName;
+            // A GSTIN persisted in a business-name field is a legacy fallback,
+            // not a registered Legal/Trade Name. Leave it unresolved until
+            // matching source evidence or the operator supplies a real name.
+            LegalName = GstClientNameRecognitionPolicy.IsUnresolvedName(client.LegalName, client.Gstin)
+                ? string.Empty : client.LegalName;
+            TradeName = GstClientNameRecognitionPolicy.IsUnresolvedName(client.TradeName, client.Gstin)
+                ? string.Empty : client.TradeName;
             Gstin = client.Gstin;
             AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
             Pan = client.Pan;
