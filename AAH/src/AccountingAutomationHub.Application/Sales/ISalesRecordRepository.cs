@@ -22,7 +22,7 @@ public interface ISalesRecordRepository
         long clientId,
         string financialYear);
 
-    int ClearModule(long clientId, string financialYear);
+    int ClearModule(long clientId, string financialYear, string? registrationGstin = null);
 
     IReadOnlyList<SalesImportRecord> GetAutomaticRecords(
         long clientId,
