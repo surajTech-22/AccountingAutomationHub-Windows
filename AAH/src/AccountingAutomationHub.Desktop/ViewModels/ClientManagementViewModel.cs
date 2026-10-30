@@ -318,6 +318,7 @@ public sealed partial class ClientManagementViewModel :
             RefreshGroupCommands();
             MoveSelectedGroupSourceCommand?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(IsSelectedGroupCaFolder));
+            OnPropertyChanged(nameof(IsSelectedCompanyGroup));
             OnPropertyChanged(nameof(SelectedGroupPath));
         }
     }
@@ -367,6 +368,51 @@ public sealed partial class ClientManagementViewModel :
         }
     }
     public string GroupManagerStatus { get => _groupManagerStatus; private set => SetProperty(ref _groupManagerStatus, value); }
+    /// <summary>
+    /// Company Group branch view does not switch ActiveClient or modify source records.
+    /// All nested Company Group members are read by their stable Client IDs and FY.
+    /// Different-PAN owner-company merging remains gated off until separately verified.
+    /// </summary>
+    public bool IsSelectedCompanyGroup =>
+        SelectedGroupFolder is { IsClient: false } selected &&
+        selected.Type.Equals(ClientGroupFolderTypes.CompanyGroup, StringComparison.OrdinalIgnoreCase);
+
+    private IReadOnlyList<ClientProfile> SelectedCompanyGroupMembers()
+    {
+        if (!IsSelectedCompanyGroup)
+            throw new InvalidOperationException("Select a Company Group first.");
+
+        var folderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<string>();
+        stack.Push(SelectedGroupFolder!.Id);
+        while (stack.Count != 0)
+        {
+            var folderId = stack.Pop();
+            if (!folderIds.Add(folderId)) continue;
+            foreach (var child in _clientGroupData.Folders.Where(f =>
+                         f.ParentId.Equals(folderId, StringComparison.OrdinalIgnoreCase)))
+                stack.Push(child.Id);
+        }
+        var ids = _clientGroupData.Assignments
+            .Where(a => folderIds.Contains(a.FolderId))
+            .Select(a => a.ClientId).Distinct().ToHashSet();
+        return _allClients.Where(c => ids.Contains(c.Id) && !c.IsArchived).ToArray();
+    }
+
+    public IReadOnlyList<string> GetSelectedCompanyGroupFinancialYears() =>
+        SelectedCompanyGroupMembers().Select(c => c.FinancialYear)
+            .Where(fy => !string.IsNullOrWhiteSpace(fy))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(fy => fy, StringComparer.OrdinalIgnoreCase).ToArray();
+
+    public CompanyGroupBranchPlan GetSelectedCompanyGroupBranchPlan(string financialYear)
+    {
+        var selected = SelectedGroupFolder ??
+            throw new InvalidOperationException("No Company Group selected.");
+        return CompanyGroupBranchPlanner.Build(selected.Id, selected.Type,
+            financialYear, SelectedCompanyGroupMembers());
+    }
+
     public bool IsSelectedGroupCaFolder => SelectedGroupFolder?.Type.Equals(ClientGroupFolderTypes.Ca, StringComparison.OrdinalIgnoreCase) == true;
     public bool IsGroupFolderCaType => GroupFolderType.Equals(ClientGroupFolderTypes.Ca, StringComparison.OrdinalIgnoreCase);
     public bool ShowGroupFolderCaLinkEditor => IsGroupFolderCreateMode && IsGroupFolderCaType;

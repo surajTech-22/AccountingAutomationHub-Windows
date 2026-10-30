@@ -302,6 +302,112 @@ try
         throw new Exception("Dashboard GSTIN-only panel not linked to existing Client/FY persistence and import rules.");
     Console.WriteLine("PASS: Dashboard displays every saved GSTIN and saves via the compact GSTIN-only panel without navigating.");
 
+
+    // Disposable Company Group fixture: same legal PAN, three independent GST
+    // registrations from both a multi-GSTIN profile and a second branch Client.
+    // No real Client data or Tally company is touched.
+    var branchKarnataka = store.GetById(created.Id)!;
+    branchKarnataka.AdditionalGstins = ["33ABCDE1234F2Z5"];
+    store.Save(branchKarnataka);
+    var branchMaharashtra = store.Save(new ClientProfile
+    {
+        ClientCode = "BRANCH-MH-002", ClientName = "Same Proprietor Maharashtra",
+        Gstin = "27ABCDE1234F1Z5", Pan = "ABCDE1234F",
+        FinancialYear = "2026-27", State = "Maharashtra"
+    });
+    var companyGroupMembers = new[]
+    {
+        store.GetById(created.Id)!,
+        store.GetById(branchMaharashtra.Id)!
+    };
+    var branchPlan = CompanyGroupBranchPlanner.Build(
+        "synthetic-group-same-pan", "Company Group", "2026-27", companyGroupMembers);
+    if (branchPlan.ClientCount != 2 || branchPlan.GstinCount != 3 ||
+        branchPlan.Pan != "ABCDE1234F" ||
+        branchPlan.Branches.Select(x => x.Gstin).Distinct().Count() != 3 ||
+        !branchPlan.Branches.Select(x => x.State).OrderBy(x => x, StringComparer.Ordinal)
+            .SequenceEqual(new[] { "Karnataka", "Maharashtra", "Tamil Nadu" }))
+        throw new Exception("Same-PAN Company Group branch scope lost or duplicated registrations.");
+    if (!branchPlan.Branches.Any(x => x.Gstin == "29ABCDE1234F1Z5" && x.BranchName == "Karnataka Branch") ||
+        !branchPlan.Branches.Any(x => x.Gstin == "27ABCDE1234F1Z5" && x.BranchName == "Maharashtra Branch") ||
+        !branchPlan.Branches.Any(x => x.Gstin == "33ABCDE1234F2Z5" && x.BranchName == "Tamil Nadu Branch"))
+        throw new Exception("GSTIN State codes did not produce the expected branch identities.");
+
+    var karnatakaBranch = branchPlan.Branches.Single(x => x.State == "Karnataka").BranchName;
+    var tnBranch = branchPlan.Branches.Single(x => x.State == "Tamil Nadu").BranchName;
+    if (branchPlan.VoucherTypeFor(karnatakaBranch, "Cash Contra", true) != "Contra - Karnataka Branch" ||
+        branchPlan.VoucherTypeFor(tnBranch, "Cash Contra", true) != "Contra - Tamil Nadu Branch" ||
+        branchPlan.VoucherTypeFor(karnatakaBranch, "Bank-to-Bank", true) != "Contra" ||
+        branchPlan.VoucherTypeFor(tnBranch, "Interbank Transfer", true) != "Contra" ||
+        branchPlan.VoucherTypeFor(karnatakaBranch, "Sales", true) != "Sales - Karnataka Branch" ||
+        branchPlan.VoucherTypeFor(tnBranch, "Sales", false) != "Sales")
+        throw new Exception("Cash-vs-bank Contra or optional branch voucher type classification changed.");
+
+    var masterXml = System.Xml.Linq.XDocument.Parse(branchPlan.BuildOfflineMastersPreviewXml(true));
+    var masters = masterXml.Descendants("TALLYMESSAGE").SelectMany(m => m.Elements()).ToArray();
+    if (masterXml.Descendants("REPORTNAME").Single().Value != "All Masters" ||
+        masters.Count(m => m.Name.LocalName == "GROUP") != 27 ||
+        masters.Count(m => m.Name.LocalName == "LEDGER") != 3 ||
+        masters.Any(m => m.Element("NAME") is null || m.Element("PARENT") is null) ||
+        !masters.Any(m => m.Name.LocalName == "GROUP" &&
+                          m.Element("NAME")?.Value == "Karnataka Branch - Creditors" &&
+                          m.Element("PARENT")?.Value == "Sundry Creditors") ||
+        !masters.Any(m => m.Name.LocalName == "LEDGER" &&
+                          m.Element("NAME")?.Value == "Cash - Karnataka Branch" &&
+                          m.Element("PARENT")?.Value == "Cash-in-Hand") ||
+        masters.Any(m => m.Name.LocalName == "GROUP" &&
+                         m.Element("PARENT")?.Value == "Branch/Divisions"))
+        throw new Exception("Offline branch master XML is malformed or has incorrect Tally parents.");
+    var sharedCashXml = System.Xml.Linq.XDocument.Parse(branchPlan.BuildOfflineMastersPreviewXml(false));
+    if (sharedCashXml.Descendants("LEDGER").Any())
+        throw new Exception("Cash ledger option disabled but cash masters were generated.");
+
+    var sameState = CompanyGroupBranchPlanner.Build(
+        "synthetic-same-state", "Company Group", "2026-27",
+        [companyGroupMembers[0], new ClientProfile
+        {
+            Id = 947, ClientCode = "SAME-STATE", ClientName = "Same State Second Branch",
+            Gstin = "29ABCDE1234F2Z5", Pan = "ABCDE1234F", FinancialYear = "2026-27"
+        }]);
+    if (sameState.Branches.GroupBy(x => x.BranchName, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() != 1))
+        throw new Exception("Two branches in one state were given colliding Tally master names.");
+
+    static void ExpectGroupRejection(Action action, string reason)
+    {
+        try { action(); }
+        catch (InvalidOperationException) { return; }
+        throw new Exception("Group branch isolation failed: " + reason);
+    }
+    var differentPanOwnerBusiness = new ClientProfile
+    {
+        Id = 9999, ClientCode = "OWNER-OTHER-PAN", ClientName = "Different PAN Enterprise",
+        Gstin = "27PQRST5678X1Z5", Pan = "PQRST5678X", FinancialYear = "2026-27"
+    };
+    ExpectGroupRejection(
+        () => CompanyGroupBranchPlanner.Build("owner-group", "Company Group", "2026-27",
+            [companyGroupMembers[0], differentPanOwnerBusiness]),
+        "different-PAN owner company mistaken as same-PAN branch");
+    ExpectGroupRejection(
+        () => CompanyGroupBranchPlanner.Build("ordinary-group", "Auditor", "2026-27", companyGroupMembers),
+        "non-Company Group activated special import");
+    ExpectGroupRejection(
+        () => CompanyGroupBranchPlanner.Build("duplicate-group", "Company Group", "2026-27",
+            [companyGroupMembers[0], new ClientProfile
+            {
+                Id = 349, ClientCode = "REPEATED-GSTIN", ClientName = "Collision",
+                Gstin = "29ABCDE1234F1Z5", Pan = "ABCDE1234F", FinancialYear = "2026-27"
+            }]),
+        "duplicate GSTIN posted twice");
+    ExpectGroupRejection(
+        () => CompanyGroupBranchPlanner.Build("wrong-pan", "Company Group", "2026-27",
+            [new ClientProfile
+            {
+                Id = 373, ClientCode = "MISMATCH", ClientName = "Mismatch",
+                Gstin = "29ABCDE1234F1Z5", Pan = "PQRST5678X", FinancialYear = "2026-27"
+            }]),
+        "PAN mismatch was accepted");
+    Console.WriteLine("PASS: synthetic Company Group with same-PAN multi-state branches; cash, bank, optional master XML and group isolation; different PAN deferred.");
+
     Console.WriteLine("PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.");
 }
 finally

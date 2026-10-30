@@ -45,6 +45,29 @@ public partial class ClientManagementView :
         ClientCodeBox.SelectAll();
     }
 
+    private void OpenCompanyGroupDashboard_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ClientManagementViewModel model || !model.IsSelectedCompanyGroup)
+            return;
+        try
+        {
+            var group = model.SelectedGroupFolder!;
+            var window = new CompanyGroupDashboardWindow(
+                group.Name,
+                model.GetSelectedCompanyGroupFinancialYears(),
+                model.GetSelectedCompanyGroupBranchPlan)
+            {
+                Owner = Window.GetWindow(this)
+            };
+            window.ShowDialog();
+        }
+        catch (InvalidOperationException error)
+        {
+            MessageBox.Show(Window.GetWindow(this), error.Message,
+                "Company Group needs review", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void GroupFolderTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (DataContext is not ClientManagementViewModel viewModel || e.NewValue is not ClientGroupFolderNode node) return;
