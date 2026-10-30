@@ -33,31 +33,6 @@ public partial class ClientManagementView :
         }
     }
 
-    private void ClientManagementView_Loaded(object sender, RoutedEventArgs e)
-    {
-        // GSTIN selection on Dashboard opens this existing editor. After WPF
-        // has laid out the editor pane, scroll to the exact registration and
-        // select it without modifying any persisted GSTIN until Save Client.
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            if (DataContext is not ClientManagementViewModel vm || !vm.IsEditorOpen ||
-                string.IsNullOrWhiteSpace(vm.GstinManagementFocus)) return;
-            var target = vm.GstinManagementFocus;
-            var primary = vm.Gstin.Equals(target, StringComparison.OrdinalIgnoreCase);
-            var box = primary ? PrimaryGstinBox : AdditionalGstinsBox;
-            box.BringIntoView();
-            box.Focus();
-            if (primary)
-            {
-                box.SelectAll();
-                return;
-            }
-            var start = box.Text.IndexOf(target, StringComparison.OrdinalIgnoreCase);
-            if (start >= 0)
-                box.Select(start, target.Length);
-        }), DispatcherPriority.Loaded);
-    }
-
     public void FocusSearchBox()
     {
         ClientSearchBox.Focus();
