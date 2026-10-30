@@ -211,7 +211,28 @@
                         <TextBlock Grid.Row="0" Text="Client Name" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,9"/>
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ClientName, Mode=OneWay}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,9" IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0"/>
                         <TextBlock Grid.Row="0" Grid.Column="3" Text="GSTIN" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,9"/>
-                        <TextBox Grid.Row="0" Grid.Column="4" Text="{Binding Gstin, Mode=OneWay}" Margin="0,0,0,9" IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0"/>
+                        <!-- Dashboard GSTINs are links to the existing Client Management
+                             editor. Multiple registrations remain visible together. -->
+                        <ItemsControl Grid.Row="0" Grid.Column="4" Margin="0,0,0,9"
+                                      ItemsSource="{Binding ClientGstinRegistrations}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Click="DashboardGstin_Click" Tag="{Binding Gstin}"
+                                            HorizontalAlignment="Left" Padding="0,1,4,2"
+                                            BorderThickness="0" Background="Transparent"
+                                            Foreground="#1D4ED8" Cursor="Hand"
+                                            ToolTip="Open this client's existing GSTIN management editor">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Gstin}" FontWeight="SemiBold"
+                                                       TextDecorations="Underline"/>
+                                            <TextBlock Text="{Binding Role}" FontSize="10"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       Margin="9,2,0,0"/>
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
                         <TextBlock Grid.Row="1" Text="Trade Name" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,9"/>
                         <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding TradeName, Mode=OneWay}" TextWrapping="Wrap" Margin="0,0,0,9" IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0"/>
