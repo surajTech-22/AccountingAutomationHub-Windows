@@ -481,6 +481,11 @@ public sealed class SqliteClientRepository :
 
         var now =
             DateTime.UtcNow;
+        // Within a financial year one GSTIN must have exactly one Client Profile
+        // owner. Otherwise the shared source watcher would double-import it.
+        if (additional is not null || normalized.Id == 0)
+            EnsureUniqueRegistrationOwnership(connection, transaction, normalized, additional);
+
         var registrationsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (normalized.Id == 0 && normalized.Gstin.Length == 15)
             registrationsToInvalidate.Add(normalized.Gstin);
@@ -686,6 +691,36 @@ public sealed class SqliteClientRepository :
         return normalized;
     }
 
+
+    private static void EnsureUniqueRegistrationOwnership(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ClientProfile proposed,
+        IReadOnlyList<string>? additional)
+    {
+        foreach (var gstin in new[] { proposed.Gstin }.Concat(additional ?? [])
+                     .Where(value => value.Length == 15)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            using var check = connection.CreateCommand();
+            check.Transaction = transaction;
+            check.CommandText =
+                """
+                SELECT 1 FROM Clients AS c
+                WHERE c.Id <> $Client AND c.FinancialYear = $FY COLLATE NOCASE
+                  AND (c.Gstin = $Gstin COLLATE NOCASE OR EXISTS (
+                    SELECT 1 FROM ClientAdditionalGstins AS a
+                    WHERE a.ClientId = c.Id AND a.Gstin = $Gstin COLLATE NOCASE))
+                LIMIT 1;
+                """;
+            check.Parameters.AddWithValue("$Client", proposed.Id);
+            check.Parameters.AddWithValue("$FY", proposed.FinancialYear);
+            check.Parameters.AddWithValue("$Gstin", gstin);
+            if (check.ExecuteScalar() is not null)
+                throw new InvalidOperationException(
+                    $"GSTIN {gstin} is already registered to a different client for FY {proposed.FinancialYear}. Remove it from the original Client Profile before creating the separate client.");
+        }
+    }
 
     // Delete only registration-owned rows. No calls to File.Delete/Directory.Delete:
     // GSTR-3B PDFs remain in the original GST/<GSTIN>/GSTR-3B directory
