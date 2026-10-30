@@ -472,6 +472,20 @@ public sealed class BackgroundAutomationService : IDisposable
             return false;
         }
 
+        // A registration cannot post through the current automatic Sales/Purchase
+        // route without a linked folder. Report this synchronously on Save,
+        // rather than silently starting a worker that will do no importing.
+        if (!_automationRepository.GetFolders().Any(folder =>
+                folder.ClientId == clientId &&
+                folder.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                !folder.IsPaused && Directory.Exists(folder.FolderPath)))
+        {
+            AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                "New GSTIN saved but automatic Sales/Purchase import requires an active linked Automation Folder.",
+                $"{clientId}|{financialYear}");
+            return false;
+        }
+
         _ = Task.Run(async () =>
         {
             try
