@@ -36,7 +36,6 @@ public sealed partial class ClientManagementViewModel :
     private readonly SqliteGovernanceRepository _governanceRepository;
     private readonly SqliteMasterRepository _masterRepository;
     private readonly SecureLanServerService? _secureLanServerService;
-    private readonly BackgroundAutomationService? _automationService;
     private readonly DispatcherTimer? _mobileQrRefreshTimer;
     private readonly List<ClientProfile> _allClients = [];
 
@@ -141,8 +140,7 @@ public sealed partial class ClientManagementViewModel :
         IApplicationPreferenceRepository preferenceRepository,
         SqliteGovernanceRepository governanceRepository,
         SqliteMasterRepository masterRepository,
-        SecureLanServerService? secureLanServerService = null,
-        BackgroundAutomationService? automationService = null)
+        SecureLanServerService? secureLanServerService = null)
         : base(
             "Clients",
             NetworkClientRuntime.IsNetworkClient
@@ -159,7 +157,6 @@ public sealed partial class ClientManagementViewModel :
         _governanceRepository = governanceRepository;
         _masterRepository = masterRepository;
         _secureLanServerService = secureLanServerService;
-        _automationService = automationService;
         if (_secureLanServerService is not null)
         {
             _secureLanServerService.AndroidUserQrRotated += OnAndroidUserQrRotated;
@@ -3017,14 +3014,10 @@ public sealed partial class ClientManagementViewModel :
 
         try
         {
-            // Editing the textbox is passive. Commit the registration list once on Save,
-            // then discover historical sources only for genuinely new registrations.
-            var priorAdditional = EditingId > 0
-                ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
-                : Array.Empty<string>();
+            // Save Client only commits ownership changes. Existing Sales/Purchase
+            // sources are never auto-reimported because a secondary GSTIN was added;
+            // the operator can use the registration-selective Reimport action.
             var enteredAdditional = ParseAdditionalGstins(AdditionalGstinsText);
-            var newlyAdded = enteredAdditional
-                .Except(priorAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
             var isNewClientFinancialYear = EditingId == 0;
             var saved = _repository.Save(
                 new ClientProfile
@@ -3091,12 +3084,8 @@ public sealed partial class ClientManagementViewModel :
                 client => client.Id == saved.Id);
             IsEditorOpen = false;
             StatusText = $"Client {saved.ClientCode} saved successfully.";
-            // Never start a source scan for an unchanged or removed GSTIN.
-            // Removal already clears only the detached registration's imported rows
-            // atomically in SqliteClientRepository.Save.
-            if (newlyAdded.Length > 0)
-                _automationService?.ScheduleNewClientGstinSourceDiscovery(
-                    saved.Id, saved.FinancialYear, newlyAdded);
+            // Detached registration cleanup stays transactional in SqliteClientRepository.Save.
+            // Adding a registration does not stage, scan, or enqueue historical imports.
         }
         catch (Exception exception)
         {
