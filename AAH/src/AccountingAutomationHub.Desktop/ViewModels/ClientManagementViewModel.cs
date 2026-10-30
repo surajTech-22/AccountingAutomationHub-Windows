@@ -2772,6 +2772,33 @@ public sealed partial class ClientManagementViewModel :
             _ => "client code"
         };
 
+    public string GstinManagementFocus { get; private set; } = string.Empty;
+
+    /// <summary>Open the existing client editor directly for a GSTIN clicked on
+    /// the active workspace Dashboard; never switch client or FY here.</summary>
+    public bool OpenGstinManagement(long clientId, string financialYear, string gstin)
+    {
+        if (NetworkClientRuntime.IsNetworkClient) return false;
+        var client = _repository.GetById(clientId);
+        if (client is null || client.IsArchived ||
+            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            !_governanceRepository.HasClientAccess(Environment.UserName, client.Id, client.FinancialYear))
+            return false;
+
+        var selected = (gstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (!new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                .Any(value => value.Equals(selected, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        CloseGroupManager();
+        SelectedClient = Clients.FirstOrDefault(value => value.Id == client.Id) ??
+                         _allClients.FirstOrDefault(value => value.Id == client.Id) ?? client;
+        LoadEditor(client); // authoritative saved registration list, not stale UI cache
+        GstinManagementFocus = selected;
+        IsEditorOpen = true;
+        return true;
+    }
+
     private void EditSelected()
     {
         if (SelectedClient is null)
@@ -2779,6 +2806,7 @@ public sealed partial class ClientManagementViewModel :
             return;
         }
 
+        GstinManagementFocus = string.Empty;
         LoadEditor(SelectedClient);
         IsEditorOpen = true;
     }
@@ -2786,6 +2814,7 @@ public sealed partial class ClientManagementViewModel :
     private void CloseEditor()
     {
         CancelLookup();
+        GstinManagementFocus = string.Empty;
         IsEditorOpen = false;
         ValidationText = string.Empty;
         LookupStatusText = string.Empty;
@@ -2793,6 +2822,7 @@ public sealed partial class ClientManagementViewModel :
 
     private void BeginNew()
     {
+        GstinManagementFocus = string.Empty;
         CancelLookup();
         IsEditorOpen = true;
         SelectedClient = null;
