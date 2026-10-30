@@ -88,7 +88,7 @@ internal static class AnnualPrimaryPurchaseTests
 
     public static void Run()
     {
-        var root = Path.Combine(Path.GetTempPath(), "AAH-AnnualPrimary-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "AAH-GstPurchase-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
