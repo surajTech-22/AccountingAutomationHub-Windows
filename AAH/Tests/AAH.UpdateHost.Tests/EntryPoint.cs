@@ -25,6 +25,35 @@ internal static class EntryPoint
         Assert(unrelatedShutdownRejected,
             "Graceful-update protocol permitted shutdown signaling to an unrelated process.");
 
+        // The updater owns the only verified shutdown request. The running
+        // desktop merely quiesces auto-discovery, drains real accounting/Tally
+        // operations and exits. A failed attempt must resume watchers.
+        var sourceRoot = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (sourceRoot is not null &&
+               !File.Exists(Path.Combine(sourceRoot.FullName, "AAH", "src",
+                   "AccountingAutomationHub.Desktop", "App.xaml.cs")))
+            sourceRoot = sourceRoot.Parent;
+        if (sourceRoot is null)
+            throw new InvalidOperationException("AAH solution root missing for updater-only shutdown regression.");
+        var desktopSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "App.xaml.cs"));
+        var automationSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "Services", "BackgroundAutomationService.cs"));
+        Assert(desktopSource.Contains("StartUpdateShutdownListener();", StringComparison.Ordinal) &&
+               desktopSource.Contains(@"Local\AccountingAutomationHub.UpdateShutdown.v1.", StringComparison.Ordinal) &&
+               desktopSource.Contains("AutomationService?.BeginVerifiedUpdateQuiescence();", StringComparison.Ordinal) &&
+               desktopSource.Contains("AutomationService?.EndVerifiedUpdateQuiescence();", StringComparison.Ordinal) &&
+               desktopSource.Contains("ExitForVerifiedUpdateWhenIdleAsync()", StringComparison.Ordinal) &&
+               desktopSource.Contains("if (tallyBusy || automationBusy || distributedBusy)", StringComparison.Ordinal),
+            "Verified updater shutdown is no longer PID-scoped, drains incorrectly or does not restore monitoring.");
+        Assert(automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !manualReimport) return false;", StringComparison.Ordinal) &&
+               automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !item.ManualReimport)", StringComparison.Ordinal) &&
+               automationSource.Contains("_queue.Any(item => item.ManualReimport)", StringComparison.Ordinal) &&
+               automationSource.Contains("DisposeCentralSalesPurchaseWatcher();", StringComparison.Ordinal) &&
+               automationSource.Contains("ReloadSettings(scanExisting: true, scheduleGstBootstrap: true);", StringComparison.Ordinal),
+            "Verified update may wait on repeatable scans, interrupt manual jobs or fail to restore watchers.");
+        Console.WriteLine("PASS: updater-exclusive graceful shutdown quiesces repeatable work, protects active accounting and restores deferred watchers.");
+
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
         Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),
