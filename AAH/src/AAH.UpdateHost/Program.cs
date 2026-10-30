@@ -105,9 +105,9 @@ internal static class Program
                 // Its application handler drains Tally/automation work first.
                 // Never kill the process or overwrite files while AAH is alive.
                 Log("Release " + tag + " verified. Requesting process-targeted graceful AAH shutdown.");
-                if (!await RequestGracefulUpdateExitAsync(parent, TimeSpan.FromMinutes(11)))
+                if (!await RequestVerifiedUpdateExitWithRetryAsync(parent))
                 {
-                    Log("AAH remained busy or did not acknowledge graceful shutdown. No program files changed.");
+                    Log("AAH remained busy after bounded updater-only graceful shutdown attempts. No program files changed or processes killed.");
                     return 2;
                 }
 
@@ -428,6 +428,23 @@ internal static class Program
             }
             RollbackTransaction(tx,install);
         }
+    }
+
+    // Older AAH versions do not quiesce repeatable background discovery when
+    // a verified update is requested. A single 11-minute wait can therefore
+    // miss the moment an import finishes. The updater owns one bounded retry;
+    // it never sends a force-kill, closes unrelated processes or overwrites a
+    // running application's files.
+    internal static async Task<bool> RequestVerifiedUpdateExitWithRetryAsync(Process parent)
+    {
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            if (await RequestGracefulUpdateExitAsync(parent, TimeSpan.FromMinutes(11)))
+                return true;
+            if (attempt < 2)
+                Log("Original AAH has not exited after verified update request; resending the same PID-targeted graceful signal once.");
+        }
+        return false;
     }
 
     internal static async Task<bool> RequestGracefulUpdateExitAsync(Process parent, TimeSpan timeout)
