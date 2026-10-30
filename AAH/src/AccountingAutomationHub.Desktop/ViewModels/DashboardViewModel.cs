@@ -41,6 +41,10 @@ using Microsoft.Win32;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
+public sealed record DashboardGstinRegistration(string Gstin, string Role);
+
+
+
 public sealed class DashboardViewModel :
     PageViewModel,
     IDisposable
@@ -449,6 +453,16 @@ public sealed class DashboardViewModel :
     {
         get => _gstin;
         private set => SetProperty(ref _gstin, value);
+    }
+
+    // Client Identity shows every registration, never just the primary GSTIN.
+    // This reflects the active Client/FY's saved ownership list and deliberately
+    // does not create a second GSTIN management or accounting import route.
+    private IReadOnlyList<DashboardGstinRegistration> _clientGstinRegistrations = [];
+    public IReadOnlyList<DashboardGstinRegistration> ClientGstinRegistrations
+    {
+        get => _clientGstinRegistrations;
+        private set => SetProperty(ref _clientGstinRegistrations, value);
     }
 
     public string Pan
@@ -4444,12 +4458,29 @@ public sealed class DashboardViewModel :
         TradeName = EmptyToDash(client.TradeName);
         LegalName = EmptyToDash(client.LegalName);
         Gstin = EmptyToDash(client.Gstin);
+        ClientGstinRegistrations = BuildClientGstinRegistrations(client);
         OnPropertyChanged(nameof(HasValidGstin));
         Pan = EmptyToDash(client.Pan);
         State = EmptyToDash(client.State);
         FinancialYear = EmptyToDash(client.FinancialYear);
         ContactText = BuildContactText(client);
         AddressText = EmptyToDefault(client.Address, "No address recorded");
+    }
+
+    private static IReadOnlyList<DashboardGstinRegistration> BuildClientGstinRegistrations(ClientProfile client)
+    {
+        var registrations = new List<DashboardGstinRegistration>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var primary = (client.Gstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (primary.Length == 15 && seen.Add(primary))
+            registrations.Add(new DashboardGstinRegistration(primary, "Primary"));
+        foreach (var value in client.AdditionalGstins ?? [])
+        {
+            var additional = (value ?? string.Empty).Trim().ToUpperInvariant();
+            if (additional.Length == 15 && seen.Add(additional))
+                registrations.Add(new DashboardGstinRegistration(additional, "Additional"));
+        }
+        return registrations;
     }
 
     private void ApplyImmediateDashboardState(ClientProfile client, bool force = false)
@@ -5210,6 +5241,7 @@ public sealed class DashboardViewModel :
         TradeName = "—";
         LegalName = "—";
         Gstin = "—";
+        ClientGstinRegistrations = [];
         OnPropertyChanged(nameof(HasValidGstin));
         Pan = "—";
         State = "—";
