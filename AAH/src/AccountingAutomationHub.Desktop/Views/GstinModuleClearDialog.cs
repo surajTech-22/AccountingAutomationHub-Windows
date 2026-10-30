@@ -30,7 +30,7 @@ internal static class GstinModuleClearDialog
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ShowInTaskbar = false
         };
-        if (Application.Current?.MainWindow is { } owner && !ReferenceEquals(owner, window))
+        if (System.Windows.Application.Current?.MainWindow is { } owner && !ReferenceEquals(owner, window))
             window.Owner = owner;
         else
             window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
