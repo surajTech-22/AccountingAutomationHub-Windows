@@ -191,7 +191,7 @@ public sealed class SqliteSalesRecordRepository :
             """;
 
         command.ExecuteNonQuery();
-        EnsureColumn(connection, "SalesImportBatches", "ClientGstin", "TEXT NOT NULL DEFAULT ''");
+        SqliteSchemaColumnCache.EnsureColumn(connection, "SalesImportBatches", "ClientGstin", "TEXT NOT NULL DEFAULT ''");
 
         // Fix53: older GSTR-1 imports could persist the portal's complete GST-rate
         // template as zero-value Sales rows beside the one real populated rate bucket.
