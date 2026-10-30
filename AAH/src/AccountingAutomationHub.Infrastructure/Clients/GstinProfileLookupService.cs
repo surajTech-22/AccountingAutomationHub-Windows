@@ -180,7 +180,10 @@ public sealed partial class GstinProfileLookupService :
             return derived;
         }
 
-        if (_sessionCache.TryGetValue(normalized, out var sessionResult))
+        // Do not keep a negative in-memory lookup after Auto Folder moves new
+        // source-backed documents into a linked GSTIN registration directory.
+        if (_sessionCache.TryGetValue(normalized, out var sessionResult) &&
+            sessionResult.WasFound)
         {
             return sessionResult;
         }
@@ -189,10 +192,9 @@ public sealed partial class GstinProfileLookupService :
         var accountingProfile = ReadAccountingProfile(normalized);
 
         var discovered = await Task.Run(
-            () => SearchSources(
-                normalized,
-                eReturnsRoot,
-                cancellationToken),
+            () => MergeCandidates(
+                SearchSources(normalized, eReturnsRoot, cancellationToken),
+                SearchLinkedPrimaryRegistrationFolders(normalized, cancellationToken)),
             cancellationToken);
 
         var result = MergeCandidates(
@@ -511,6 +513,69 @@ public sealed partial class GstinProfileLookupService :
                 if (candidate.SourcePath.Length == 0) continue;
                 best = ChooseBetter(best, candidate, ref bestModifiedUtc);
                 if (best.TradeName.Length > 0 && best.LegalName.Length > 0) return best;
+            }
+        }
+
+        return best;
+    }
+
+    // The new automation routing moves downloaded GST files away from Downloads
+    // into each linked client's GST/<primary-GSTIN>/ tree. The editor's regular
+    // LookupAsync must search that tree too, otherwise Trade/Legal Name recovery
+    // silently stops working once files have been moved.
+    private GstinProfileLookupResult SearchLinkedPrimaryRegistrationFolders(
+        string gstin,
+        CancellationToken cancellationToken)
+    {
+        var fallback = BuildDerived(gstin);
+        var paths = new List<string>();
+        try
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT DISTINCT f.FolderPath
+                FROM AutomationFolders AS f
+                INNER JOIN Clients AS c ON c.Id = f.ClientId
+                WHERE c.Gstin = $Gstin COLLATE NOCASE
+                  AND TRIM(f.FolderPath) <> '';
+                """;
+            command.Parameters.AddWithValue("$Gstin", gstin);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                paths.Add(reader.GetString(0));
+        }
+        catch (SqliteException)
+        {
+            // Older/newly created databases might not yet have linked folders.
+            return fallback;
+        }
+
+        var best = fallback;
+        foreach (var linkedPath in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Directory.Exists(linkedPath)) continue;
+
+            // An exact GSTIN folder has priority. The legacy GST/GSTR-3B and
+            // pre-routing client folder are fallbacks only; their file content
+            // must still explicitly match the primary GSTIN.
+            var exact = Path.Combine(linkedPath, "GST", gstin);
+            var legacy = Path.Combine(linkedPath, "GST", "GSTR-3B");
+            var roots = Directory.Exists(exact)
+                ? new[] { exact, legacy }
+                : new[] { legacy, linkedPath };
+            foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!Directory.Exists(root)) continue;
+                var candidate = SearchExplicitFolder(gstin, root, cancellationToken);
+                if (!candidate.WasFound || candidate.SourcePath.Length == 0) continue;
+
+                best = MergeCandidates(best, candidate);
+                if (best.TradeName.Length > 0 && best.LegalName.Length > 0)
+                    return best;
             }
         }
 

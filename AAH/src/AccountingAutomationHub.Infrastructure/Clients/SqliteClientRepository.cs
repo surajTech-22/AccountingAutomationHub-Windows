@@ -679,19 +679,28 @@ public sealed class SqliteClientRepository :
             changed = true;
         }
 
-        if (!client.LegalNameIsManual &&
+        // Legacy saves could mark a raw GSTIN fallback as a manual name.
+        // That is not a meaningful manual business name; verified evidence
+        // may repair it while genuine user-entered names stay protected.
+        if ((!client.LegalNameIsManual ||
+             GstClientNameRecognitionPolicy.IsUnresolvedName(client.LegalName, client.Gstin)) &&
             GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.LegalName, client.Gstin) &&
-            !client.LegalName.Equals(profile.LegalName, StringComparison.Ordinal))
+            (!client.LegalName.Equals(profile.LegalName, StringComparison.Ordinal) ||
+             client.LegalNameIsManual))
         {
             client.LegalName = profile.LegalName;
+            client.LegalNameIsManual = false;
             changed = true;
         }
 
-        if (!client.TradeNameIsManual &&
+        if ((!client.TradeNameIsManual ||
+             GstClientNameRecognitionPolicy.IsUnresolvedName(client.TradeName, client.Gstin)) &&
             GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.TradeName, client.Gstin) &&
-            !client.TradeName.Equals(profile.TradeName, StringComparison.Ordinal))
+            (!client.TradeName.Equals(profile.TradeName, StringComparison.Ordinal) ||
+             client.TradeNameIsManual))
         {
             client.TradeName = profile.TradeName;
+            client.TradeNameIsManual = false;
             changed = true;
         }
 

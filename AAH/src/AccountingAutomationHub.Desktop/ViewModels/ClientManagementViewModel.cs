@@ -2863,8 +2863,13 @@ public sealed partial class ClientManagementViewModel :
         {
             ClientCode = client.ClientCode;
             ClientName = client.ClientName;
-            LegalName = client.LegalName;
-            TradeName = client.TradeName;
+            // A GSTIN persisted in a business-name field is a legacy fallback,
+            // not a registered Legal/Trade Name. Leave it unresolved until
+            // matching source evidence or the operator supplies a real name.
+            LegalName = GstClientNameRecognitionPolicy.IsUnresolvedName(client.LegalName, client.Gstin)
+                ? string.Empty : client.LegalName;
+            TradeName = GstClientNameRecognitionPolicy.IsUnresolvedName(client.TradeName, client.Gstin)
+                ? string.Empty : client.TradeName;
             Gstin = client.Gstin;
             AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
             Pan = client.Pan;
@@ -2936,7 +2941,11 @@ public sealed partial class ClientManagementViewModel :
         var normalizedGstin = NormalizeTaxNumber(Gstin);
 
         if (normalizedGstin.Length == 15 &&
-            GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
+            (GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin) ||
+             (TradeName.Trim().Length > 0 &&
+              GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin)) ||
+             (LegalName.Trim().Length > 0 &&
+              GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin))))
         {
             CancelLookup();
             try
@@ -2955,13 +2964,17 @@ public sealed partial class ClientManagementViewModel :
                 {
                     if (GstClientNameRecognitionPolicy.HasSourceBusinessName(discoveredClientName, normalizedGstin))
                         ClientName = AccountingText.DisplayName(discoveredClientName);
-                    if (profile.LegalName.Length > 0 && LegalName.Length == 0)
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.LegalName, normalizedGstin) &&
+                        (GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin) ||
+                         (!_legalNameIsManual && _legalNameAutoFilled)))
                     {
                         LegalName = profile.LegalName;
                         _legalNameAutoFilled = true;
                         _legalNameIsManual = false;
                     }
-                    if (profile.TradeName.Length > 0 && TradeName.Length == 0)
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.TradeName, normalizedGstin) &&
+                        (GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin) ||
+                         (!_tradeNameIsManual && _tradeNameAutoFilled)))
                     {
                         TradeName = profile.TradeName;
                         _tradeNameAutoFilled = true;
@@ -3450,8 +3463,8 @@ public sealed partial class ClientManagementViewModel :
                     ClientName = AccountingText.DisplayName(discoveredClientName);
                 }
 
-                if (result.LegalName.Length > 0 &&
-                    (LegalName.Length == 0 ||
+                if (GstClientNameRecognitionPolicy.HasSourceBusinessName(result.LegalName, normalizedGstin) &&
+                    (GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin) ||
                      (!_legalNameIsManual && _legalNameAutoFilled)))
                 {
                     LegalName = result.LegalName;
@@ -3459,8 +3472,8 @@ public sealed partial class ClientManagementViewModel :
                     _legalNameIsManual = false;
                 }
 
-                if (result.TradeName.Length > 0 &&
-                    (TradeName.Length == 0 ||
+                if (GstClientNameRecognitionPolicy.HasSourceBusinessName(result.TradeName, normalizedGstin) &&
+                    (GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin) ||
                      (!_tradeNameIsManual && _tradeNameAutoFilled)))
                 {
                     TradeName = result.TradeName;

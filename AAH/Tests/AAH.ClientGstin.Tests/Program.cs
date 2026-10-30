@@ -120,28 +120,105 @@ try
         store.GetById(placeholderClient.Id)?.AdditionalGstins?.Single() != "27ABCDE1234F1Z5")
         throw new Exception($"Source name recovery lost business identity or additional GSTIN: ClientName={profileRecovered.ClientName}; TradeName={profileRecovered.TradeName}; LegalName={profileRecovered.LegalName}; Additional={string.Join(",", store.GetById(placeholderClient.Id)?.AdditionalGstins ?? [])}.");
 
+    var legacyPlaceholder = store.Save(new ClientProfile
+    {
+        ClientCode = "GST-LEGACY-TRADE",
+        ClientName = unresolvedGstin,
+        Gstin = unresolvedGstin,
+        TradeName = unresolvedGstin,
+        TradeNameIsManual = true,
+        LegalName = unresolvedGstin,
+        LegalNameIsManual = true,
+        Pan = "ABCDE1234F",
+        FinancialYear = "2023-24",
+        AdditionalGstins = ["27ABCDE1234F1Z5"]
+    });
+    var legacyRepaired = store.ApplyImportedGstProfile(
+        legacyPlaceholder.Id,
+        new GstinProfileLookupResult
+        {
+            Gstin = unresolvedGstin,
+            TradeName = "SOURCE VERIFIED TRADERS",
+            LegalName = "SOURCE VERIFIED TRADERS PRIVATE LIMITED"
+        });
+    if (legacyRepaired.TradeName != "SOURCE VERIFIED TRADERS" ||
+        legacyRepaired.LegalName != "SOURCE VERIFIED TRADERS PRIVATE LIMITED" ||
+        legacyRepaired.TradeNameIsManual || legacyRepaired.LegalNameIsManual ||
+        store.GetById(legacyPlaceholder.Id)?.AdditionalGstins?.Single() != "27ABCDE1234F1Z5")
+        throw new Exception("Legacy GSTIN-as-Trade/Legal-Name placeholders were not safely repaired.");
+
     var manualClient = store.Save(new ClientProfile
     {
         ClientCode = "GST-NAME-MANUAL",
         ClientName = "MY HAND-ENTERED COMPANY",
         Gstin = unresolvedGstin,
+        TradeName = "MY SHOP TRADE NAME",
+        TradeNameIsManual = true,
+        LegalName = "MY COMPANY LEGAL NAME",
+        LegalNameIsManual = true,
         Pan = "ABCDE1234F",
         FinancialYear = "2024-25",
         AdditionalGstins = ["27ABCDE1234F1Z5"]
     });
     store.ApplyImportedGstProfile(manualClient.Id,
-        new GstinProfileLookupResult { Gstin = unresolvedGstin, TradeName = "Different GST Source Name" });
-    if (store.GetById(manualClient.Id)?.ClientName != "MY HAND-ENTERED COMPANY")
-        throw new Exception("GST profile lookup replaced user's manual Client Name.");
-    // The new Auto Folder moves GSTIN evidence away from Downloads.
-    // Keep GSTIN-specific nested JSON discoverable for the existing profile
-    // lookup; do not cross-assign a different registration's trade name.
-    var gstFolder = Path.Combine(root, "AutoFolder", "GST", unresolvedGstin, "GSTR-3B");
+        new GstinProfileLookupResult
+        {
+            Gstin = unresolvedGstin,
+            TradeName = "Different GST Source Name",
+            LegalName = "Different GST Legal Name"
+        });
+    var retainedManual = store.GetById(manualClient.Id);
+    if (retainedManual?.ClientName != "MY HAND-ENTERED COMPANY" ||
+        retainedManual.TradeName != "MY SHOP TRADE NAME" ||
+        retainedManual.LegalName != "MY COMPANY LEGAL NAME" ||
+        !retainedManual.TradeNameIsManual || !retainedManual.LegalNameIsManual)
+        throw new Exception("GST profile lookup replaced genuine manual Client/Trade/Legal names.");
+    // An editor may have looked up this GSTIN before the automation worker
+    // moved its verified source into Auto Folder. A negative session cache must
+    // not prevent recognition after that file move.
+    var lookups = new GstinProfileLookupService(Path.Combine(root, "clients-test.sqlite"));
+    lookups.Initialize();
+    var noSource = await lookups.LookupAsync(unresolvedGstin, Path.Combine(root, "nonexistent-ereturns"));
+    if (noSource.WasFound)
+        throw new Exception("Unverified GSTIN was incorrectly treated as an actual business name.");
+
+    // Match the real multi-GSTIN routing: only the linked client/primary GSTIN
+    // may provide the shared client trade name.
+    var linkedRoot = Path.Combine(root, "AutoFolder");
+    var gstFolder = Path.Combine(linkedRoot, "GST", unresolvedGstin, "GSTR-3B");
     Directory.CreateDirectory(gstFolder);
     File.WriteAllText(Path.Combine(gstFolder, "profile.json"),
         """{"gstin":"29ABCDE1234F1Z5","lgnm":"SOURCE VERIFIED TRADERS PRIVATE LIMITED","trdnm":"SOURCE VERIFIED TRADERS"}""");
-    var lookups = new GstinProfileLookupService(Path.Combine(root, "clients-test.sqlite"));
-    lookups.Initialize();
+    var otherGstinFolder = Path.Combine(linkedRoot, "GST", "27ABCDE1234F1Z5", "GSTR-3B");
+    Directory.CreateDirectory(otherGstinFolder);
+    File.WriteAllText(Path.Combine(otherGstinFolder, "other-profile.json"),
+        """{"gstin":"27ABCDE1234F1Z5","lgnm":"GUJARAT BRANCH LEGAL NAME","trdnm":"GUJARAT BRANCH TRADE NAME"}""");
+    using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+        $"Data Source={Path.Combine(root, "clients-test.sqlite")}"))
+    {
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS AutomationFolders
+            (
+                ClientId INTEGER NOT NULL,
+                FolderPath TEXT NOT NULL
+            );
+            INSERT INTO AutomationFolders (ClientId, FolderPath)
+            VALUES ($ClientId, $FolderPath);
+            """;
+        command.Parameters.AddWithValue("$ClientId", placeholderClient.Id);
+        command.Parameters.AddWithValue("$FolderPath", linkedRoot);
+        command.ExecuteNonQuery();
+    }
+    var editorEvidence = await lookups.LookupAsync(
+        unresolvedGstin, Path.Combine(root, "nonexistent-ereturns"));
+    if (editorEvidence.TradeName != "SOURCE VERIFIED TRADERS" ||
+        editorEvidence.LegalName != "SOURCE VERIFIED TRADERS PRIVATE LIMITED" ||
+        editorEvidence.SourcePath.Length == 0)
+        throw new Exception("Editor did not recover matching primary GSTIN from moved Auto Folder evidence.");
+
     var folderEvidence = await lookups.LookupFolderAsync(
         unresolvedGstin, Path.Combine(root, "AutoFolder", "GST", unresolvedGstin));
     if (folderEvidence.TradeName != "SOURCE VERIFIED TRADERS" ||
@@ -152,7 +229,7 @@ try
         "27ABCDE1234F1Z5", Path.Combine(root, "AutoFolder", "GST", unresolvedGstin));
     if (differentGstin.TradeName.Length > 0 || differentGstin.LegalName.Length > 0)
         throw new Exception("A source from another GST registration was used as client-name evidence.");
-    Console.WriteLine("PASS: 2/2 nested GSTIN name lookup and cross-registration isolation checks.");
+    Console.WriteLine("PASS: linked primary GSTIN editor, negative-cache retry, nested lookup and cross-registration isolation.");
 
     Console.WriteLine("PASS: 4/4 source-backed Client Name recovery and manual-name preservation checks.");
 
