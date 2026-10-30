@@ -233,6 +233,37 @@ try
 
     Console.WriteLine("PASS: 4/4 source-backed Client Name recovery and manual-name preservation checks.");
 
+    // Guard against the regression where a new Additional GSTIN saves but
+    // source discovery waits for a full Downloads scan before the first import.
+    // This is a source-wiring contract check; live imports also require
+    // the existing Auto Import policy and linked-folder prerequisites.
+    var sourceRoot = new DirectoryInfo(Directory.GetCurrentDirectory());
+    while (sourceRoot is not null &&
+           !File.Exists(Path.Combine(sourceRoot.FullName, "AAH", "src",
+               "AccountingAutomationHub.Desktop", "Services", "BackgroundAutomationService.cs")))
+        sourceRoot = sourceRoot.Parent;
+    if (sourceRoot is null)
+        throw new Exception("AAH source root unavailable for Added GSTIN import-wiring regression.");
+
+    var automationSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "Services", "BackgroundAutomationService.cs"));
+    var editorSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+        "AccountingAutomationHub.Desktop", "ViewModels", "ClientManagementViewModel.cs"));
+    var scheduleAt = automationSource.IndexOf(
+        "public bool ScheduleNewClientGstinSourceDiscovery(", StringComparison.Ordinal);
+    var firstImportAt = automationSource.IndexOf(
+        "QueueSalesPurchaseSourceSet(clientId, financialYear, \"Sales\", gstin, immediate: true);",
+        scheduleAt < 0 ? 0 : scheduleAt, StringComparison.Ordinal);
+    var historyScanAt = automationSource.IndexOf(
+        "foreach (var root in recoveryRoots)",
+        scheduleAt < 0 ? 0 : scheduleAt, StringComparison.Ordinal);
+    if (scheduleAt < 0 || firstImportAt < scheduleAt || historyScanAt < firstImportAt ||
+        !automationSource.Contains("_salesPurchaseActiveClientSnapshotUtc = DateTime.MinValue;", StringComparison.Ordinal) ||
+        !automationSource.Contains("historicalReindex: true", StringComparison.Ordinal) ||
+        !editorSource.Contains("_automationService?.ScheduleNewClientGstinSourceDiscovery(", StringComparison.Ordinal))
+        throw new Exception("Added GSTIN no longer queues an immediate registration-scoped import before historical discovery.");
+    Console.WriteLine("PASS: new GSTIN Save starts immediate source-set import and refreshes client ownership.");
+
     Console.WriteLine("PASS: 9/9 multi-GSTIN client preservation, retrieval, and integrity checks.");
 }
 finally
