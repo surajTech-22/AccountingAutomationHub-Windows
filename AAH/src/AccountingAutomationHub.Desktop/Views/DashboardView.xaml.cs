@@ -49,6 +49,17 @@ public partial class DashboardView : UserControl
 
     private DashboardViewModel? ViewModel => DataContext as DashboardViewModel;
 
+    private void DashboardGstin_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string gstin } ||
+            string.IsNullOrWhiteSpace(gstin)) return;
+        // Navigate through the existing shell and client-management editor.
+        // Never change the selected Client/FY just to edit a registration.
+        if (Window.GetWindow(this)?.DataContext is MainWindowViewModel main)
+            main.OpenDashboardGstinManagement(gstin);
+    }
+
+
     private void DashboardView_Loaded(object sender, RoutedEventArgs e)
     {
         var window = Window.GetWindow(this);
