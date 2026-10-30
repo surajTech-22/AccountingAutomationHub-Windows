@@ -348,7 +348,7 @@ public sealed class SqliteSalesRecordRepository :
         delete.Transaction = transaction;
         delete.CommandText = "DELETE FROM SalesImportBatches WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear" +
             (target.Length == 15
-                ? " AND ((ClientGstin=$Gstin COLLATE NOCASE) OR NOT EXISTS (SELECT 1 FROM SalesRecords r WHERE r.BatchId=SalesImportBatches.Id));"
+                ? " AND ClientGstin=$Gstin COLLATE NOCASE;"
                 : ";");
         delete.Parameters.AddWithValue("$ClientId", clientId);
         delete.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
