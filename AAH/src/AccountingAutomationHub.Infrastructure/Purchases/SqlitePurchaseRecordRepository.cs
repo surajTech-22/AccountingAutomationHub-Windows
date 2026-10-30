@@ -14,17 +14,21 @@ public sealed class SqlitePurchaseRecordRepository :
 {
     private readonly string _connectionString;
 
-    public SqlitePurchaseRecordRepository()
-    {
-        ApplicationDataPaths.EnsureFolders();
+    public SqlitePurchaseRecordRepository() : this(ApplicationDataPaths.DatabasePath) { }
 
-        _connectionString =
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = ApplicationDataPaths.DatabasePath,
-                Mode = SqliteOpenMode.ReadWriteCreate,
-                Cache = SqliteCacheMode.Private
-            }.ToString();
+    // Allows real isolated SQLite registration regressions without touching a
+    // Windows user's accounting database.
+    public SqlitePurchaseRecordRepository(string databasePath)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("Database path is required.", nameof(databasePath));
+        ApplicationDataPaths.EnsureFolders();
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private
+        }.ToString();
     }
 
     public void Initialize() =>
