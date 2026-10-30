@@ -164,6 +164,7 @@
  </Style.Triggers>
 </Style></UserControl.Resources>
 
+    <Grid>
     <ScrollViewer x:Name="DashboardScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Background="{DynamicResource AppBackgroundBrush}" ScrollChanged="DashboardScrollViewer_ScrollChanged">
         <StackPanel Margin="20,20,20,28">
             <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
@@ -945,4 +946,56 @@
 
         </StackPanel>
     </ScrollViewer>
+    <!-- Compact GSTIN-only management panel: never navigates to the full client editor. -->
+    <Border x:Name="GstinManagementPanel" Grid.ZIndex="20" HorizontalAlignment="Right"
+            Width="455" MaxWidth="455" Visibility="Collapsed" Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0" Margin="18,17,18,12">
+                <StackPanel>
+                    <TextBlock Text="GSTIN Management" FontSize="19" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"/>
+                    <TextBlock x:Name="GstinPanelClientText" FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,5,32,0"/>
+                    <TextBlock x:Name="GstinPanelTargetText" FontSize="10"
+                               Foreground="#1D4ED8" Margin="0,4,32,0"/>
+                </StackPanel>
+                <Button Content="✕" Click="GstinManagementClose_Click" HorizontalAlignment="Right"
+                        VerticalAlignment="Top" Padding="9,4" ToolTip="Close GSTIN Management"/>
+            </Grid>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="18,8,18,10">
+                    <TextBlock Text="Primary GSTIN" FontWeight="SemiBold"/>
+                    <TextBox x:Name="GstinPanelPrimaryBox" MaxLength="15" Padding="10,8"
+                             CharacterCasing="Upper" Margin="0,6,0,17"
+                             ToolTip="Primary GSTIN for the selected Client/FY"/>
+                    <TextBlock Text="Additional GSTINs" FontWeight="SemiBold"/>
+                    <TextBlock Text="One GSTIN per line. These registrations share the client's PAN."
+                               FontSize="10" TextWrapping="Wrap" Margin="0,4,0,8"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBox x:Name="GstinPanelAdditionalBox" AcceptsReturn="True" MinHeight="125"
+                             VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                             CharacterCasing="Upper" Padding="10,8"/>
+                    <TextBlock Text="Removing an additional GSTIN also removes that registration's imported records. Source evidence files remain untouched."
+                               FontSize="10" TextWrapping="Wrap" Margin="0,13,0,0"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock x:Name="GstinPanelStatusText" TextWrapping="Wrap"
+                               Margin="0,14,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </ScrollViewer>
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                        Margin="12" VerticalAlignment="Center">
+                <Button Content="Cancel" Click="GstinManagementClose_Click"
+                        Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,9,0"/>
+                <Button Content="Save GSTINs" Click="GstinManagementSave_Click"
+                        Style="{StaticResource PrimaryButtonStyle}" Padding="14,8"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+    </Grid>
 </UserControl>
