@@ -2936,7 +2936,11 @@ public sealed partial class ClientManagementViewModel :
         var normalizedGstin = NormalizeTaxNumber(Gstin);
 
         if (normalizedGstin.Length == 15 &&
-            GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin))
+            (GstClientNameRecognitionPolicy.IsUnresolvedName(ClientName, normalizedGstin) ||
+             (TradeName.Trim().Length > 0 &&
+              GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin)) ||
+             (LegalName.Trim().Length > 0 &&
+              GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin))))
         {
             CancelLookup();
             try
@@ -2955,13 +2959,17 @@ public sealed partial class ClientManagementViewModel :
                 {
                     if (GstClientNameRecognitionPolicy.HasSourceBusinessName(discoveredClientName, normalizedGstin))
                         ClientName = AccountingText.DisplayName(discoveredClientName);
-                    if (profile.LegalName.Length > 0 && LegalName.Length == 0)
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.LegalName, normalizedGstin) &&
+                        (GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin) ||
+                         (!_legalNameIsManual && _legalNameAutoFilled)))
                     {
                         LegalName = profile.LegalName;
                         _legalNameAutoFilled = true;
                         _legalNameIsManual = false;
                     }
-                    if (profile.TradeName.Length > 0 && TradeName.Length == 0)
+                    if (GstClientNameRecognitionPolicy.HasSourceBusinessName(profile.TradeName, normalizedGstin) &&
+                        (GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin) ||
+                         (!_tradeNameIsManual && _tradeNameAutoFilled)))
                     {
                         TradeName = profile.TradeName;
                         _tradeNameAutoFilled = true;
@@ -3450,8 +3458,8 @@ public sealed partial class ClientManagementViewModel :
                     ClientName = AccountingText.DisplayName(discoveredClientName);
                 }
 
-                if (result.LegalName.Length > 0 &&
-                    (LegalName.Length == 0 ||
+                if (GstClientNameRecognitionPolicy.HasSourceBusinessName(result.LegalName, normalizedGstin) &&
+                    (GstClientNameRecognitionPolicy.IsUnresolvedName(LegalName, normalizedGstin) ||
                      (!_legalNameIsManual && _legalNameAutoFilled)))
                 {
                     LegalName = result.LegalName;
@@ -3459,8 +3467,8 @@ public sealed partial class ClientManagementViewModel :
                     _legalNameIsManual = false;
                 }
 
-                if (result.TradeName.Length > 0 &&
-                    (TradeName.Length == 0 ||
+                if (GstClientNameRecognitionPolicy.HasSourceBusinessName(result.TradeName, normalizedGstin) &&
+                    (GstClientNameRecognitionPolicy.IsUnresolvedName(TradeName, normalizedGstin) ||
                      (!_tradeNameIsManual && _tradeNameAutoFilled)))
                 {
                     TradeName = result.TradeName;
