@@ -4945,25 +4945,37 @@ public sealed class BackgroundAutomationService : IDisposable
         return extension is ".json" or ".zip";
     }
 
-    private void IndexLinkedSalesPurchaseSourceSetComponent(
+    private IReadOnlyList<string> IndexLinkedSalesPurchaseSourceSetComponent(
         AutomationFolderRegistration folder,
         string path,
         string fileHash,
         string module)
     {
         var client = _clientRepository.GetById(folder.ClientId);
-        if (client is null) return;
-        var gstin = NormalizeGstin(client.Gstin);
-        if (gstin.Length != 15 || !File.Exists(path)) return;
+        if (client is null || !File.Exists(path)) return [];
         try
         {
+            var identity = _fileClassifier.GetIdentitySearchText(path);
+            var sourceGstins = ExtractCentralSourceOwnerGstins(path, identity)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var owned = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                .Select(NormalizeGstin)
+                .Where(sourceGstins.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             var info = new FileInfo(path);
-            SalesPurchaseSourceCache.Record(
-                path, module, gstin, folder.FinancialYear, fileHash, info.Length, info.LastWriteTimeUtc);
+            foreach (var gstin in owned)
+                SalesPurchaseSourceCache.Record(
+                    path, module, gstin, folder.FinancialYear, fileHash, info.Length, info.LastWriteTimeUtc);
+            if (owned.Length == 0)
+                AutomationDiagnosticLog.Write("SALES-PURCHASE-MULTIGST",
+                    "Linked source could not prove ownership of any registered GSTIN; deferred.", path);
+            return owned;
         }
         catch (Exception exception)
         {
             AutomationDiagnosticLog.Write("SALES-PURCHASE-SET", $"Linked source indexing deferred: {exception.Message}", path);
+            return [];
         }
     }
 
@@ -5587,10 +5599,11 @@ public sealed class BackgroundAutomationService : IDisposable
                 if (!IsDataFileMonitoringEnabled(folder, item.Path, fileHash, item.ManualReimport)) return;
                 if (IsGstReturnSourceSetComponent(item.Path))
                 {
-                    IndexLinkedSalesPurchaseSourceSetComponent(folder, item.Path, fileHash, "Sales");
+                    var registeredGstins = IndexLinkedSalesPurchaseSourceSetComponent(folder, item.Path, fileHash, "Sales");
                     RecordHistory(folder, item.Path, fileHash, "Sales", "Skipped",
                         "GSTR-1 source component indexed into the grouped GSTIN/FY Sales source set; Auto Import will evaluate the complete set once instead of using the manual Sales header parser.");
-                    QueueSalesPurchaseSourceSet(folder.ClientId, folder.FinancialYear, "Sales");
+                    foreach (var registeredGstin in registeredGstins)
+                        QueueSalesPurchaseSourceSet(folder.ClientId, folder.FinancialYear, "Sales", registeredGstin);
                     return;
                 }
                 await ProcessSalesAsync(folder, item.Path, fileHash, cancellationToken, classificationPassword);
@@ -5605,10 +5618,11 @@ public sealed class BackgroundAutomationService : IDisposable
                 }
                 if (IsGstReturnSourceSetComponent(item.Path))
                 {
-                    IndexLinkedSalesPurchaseSourceSetComponent(folder, item.Path, fileHash, "Purchase");
+                    var registeredGstins = IndexLinkedSalesPurchaseSourceSetComponent(folder, item.Path, fileHash, "Purchase");
                     RecordHistory(folder, item.Path, fileHash, "Purchase", "Skipped",
                         "GSTR-2A/2B source component indexed into the grouped GSTIN/FY Purchase source set; Auto Import will evaluate the complete set once instead of treating this component as a separate import.");
-                    QueueSalesPurchaseSourceSet(folder.ClientId, folder.FinancialYear, "Purchase");
+                    foreach (var registeredGstin in registeredGstins)
+                        QueueSalesPurchaseSourceSet(folder.ClientId, folder.FinancialYear, "Purchase", registeredGstin);
                     return;
                 }
                 await ProcessPurchaseAsync(folder, item.Path, fileHash, cancellationToken, classificationPassword);
