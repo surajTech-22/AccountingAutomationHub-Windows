@@ -226,22 +226,40 @@ public sealed class SqlitePurchaseRecordRepository :
             StringComparison.OrdinalIgnoreCase);
     }
 
-    public int ClearModule(long clientId, string financialYear)
+    public int ClearModule(long clientId, string financialYear, string? registrationGstin = null)
     {
+        var target = (registrationGstin ?? string.Empty).Trim().ToUpperInvariant();
+        if (target.Length > 0 && target.Length != 15)
+            throw new InvalidOperationException("Select an exact 15-character registered GSTIN for a scoped module clear.");
         using var connection = OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var count = connection.CreateCommand();
         count.Transaction = transaction;
-        count.CommandText = "SELECT COUNT(*) FROM PurchaseRecords WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear;";
+        count.CommandText = "SELECT COUNT(*) FROM PurchaseRecords WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear" +
+            (target.Length == 15 ? " AND ClientGstin=$Gstin COLLATE NOCASE;" : ";");
         count.Parameters.AddWithValue("$ClientId", clientId);
         count.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        if (target.Length == 15) count.Parameters.AddWithValue("$Gstin", target);
         var rows = Convert.ToInt32(count.ExecuteScalar(), CultureInfo.InvariantCulture);
-
+        if (target.Length == 15)
+        {
+            using var records = connection.CreateCommand();
+            records.Transaction = transaction;
+            records.CommandText = "DELETE FROM PurchaseRecords WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear AND ClientGstin=$Gstin COLLATE NOCASE;";
+            records.Parameters.AddWithValue("$ClientId", clientId);
+            records.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+            records.Parameters.AddWithValue("$Gstin", target);
+            records.ExecuteNonQuery();
+        }
         using var delete = connection.CreateCommand();
         delete.Transaction = transaction;
-        delete.CommandText = "DELETE FROM PurchaseImportBatches WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear;";
+        delete.CommandText = "DELETE FROM PurchaseImportBatches WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear" +
+            (target.Length == 15
+                ? " AND ((ClientGstin=$Gstin COLLATE NOCASE) OR NOT EXISTS (SELECT 1 FROM PurchaseRecords r WHERE r.BatchId=PurchaseImportBatches.Id));"
+                : ";");
         delete.Parameters.AddWithValue("$ClientId", clientId);
         delete.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        if (target.Length == 15) delete.Parameters.AddWithValue("$Gstin", target);
         delete.ExecuteNonQuery();
         transaction.Commit();
         return rows;
