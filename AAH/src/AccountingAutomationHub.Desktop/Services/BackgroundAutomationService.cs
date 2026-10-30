@@ -439,6 +439,120 @@ public sealed class BackgroundAutomationService : IDisposable
         return Math.Max(0, _queue.Count - before);
     }
 
+    /// <summary>
+    /// A newly saved additional GSTIN can already have historical GSTR-1/2A/2B
+    /// files in E-returns, Downloads or a linked Automation Folder. Normal
+    /// file watchers only see new file events, so discover those old sources
+    /// once after Save Client, never on each textbox keystroke.
+    /// </summary>
+    public void ScheduleNewClientGstinSourceDiscovery(
+        long clientId, string financialYear, IReadOnlyList<string> addedRegistrations)
+    {
+        var gstins = addedRegistrations
+            .Select(NormalizeGstin)
+            .Where(gstin => gstin.Length == 15)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var lifetime = _lifetime;
+        if (clientId <= 0 || gstins.Length == 0 ||
+            lifetime is null || lifetime.IsCancellationRequested) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var client = _clientRepository.GetById(clientId);
+                if (client is null || client.IsArchived ||
+                    !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                    return;
+                var activeGstins = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
+                    .Select(NormalizeGstin).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!gstins.Any(activeGstins.Contains)) return;
+
+                // Prepare new registration folders and GST evidence routing without
+                // touching any other Client/FY or altering existing source files.
+                var folders = _automationRepository.GetFolders()
+                    .Where(folder => folder.ClientId == clientId &&
+                                     folder.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                                     !folder.IsPaused && Directory.Exists(folder.FolderPath))
+                    .ToArray();
+                foreach (var folder in folders)
+                {
+                    lifetime.Token.ThrowIfCancellationRequested();
+                    EnsureClientGstinFolders(folder, client);
+                    ScheduleRegisteredClientGstBootstrap(folder, client.Id);
+                }
+
+                if (_globalPause ||
+                    !_settings.GetBool(ApplicationSettingKeys.AutomationEnabled) ||
+                    !_settings.GetBool(ApplicationSettingKeys.AutomationAutoImportKnown))
+                    return;
+
+                // Reclassify historical sources after ownership changes. The normal
+                // startup metadata/observed-state shortcuts would otherwise ignore a
+                // file already scanned before the new GSTIN belonged to this client.
+                // The source verifier and per-GSTIN content fingerprints still prevent
+                // cross-registration import or replacing unchanged Sales/Purchase data.
+                var pending = new List<Task>();
+                foreach (var root in GetCentralSalesPurchaseRoots())
+                {
+                    lifetime.Token.ThrowIfCancellationRequested();
+                    IEnumerable<string> candidates;
+                    try { candidates = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories); }
+                    catch { continue; }
+
+                    foreach (var candidate in candidates)
+                    {
+                        lifetime.Token.ThrowIfCancellationRequested();
+                        if (!IsCentralSalesPurchaseCandidate(candidate)) continue;
+                        string path;
+                        try { path = Path.GetFullPath(candidate); }
+                        catch { continue; }
+
+                        _salesPurchaseObservedStates.TryRemove(path, out _);
+                        if (!_salesPurchaseSourceInFlight.TryAdd(path, 0)) continue;
+                        pending.Add(ReindexNewRegistrationSourceAsync(path, lifetime.Token));
+                        if (pending.Count < 12) continue;
+                        var completed = await Task.WhenAny(pending).ConfigureAwait(false);
+                        pending.Remove(completed);
+                        await completed.ConfigureAwait(false);
+                    }
+                }
+                if (pending.Count > 0) await Task.WhenAll(pending).ConfigureAwait(false);
+
+                // Reuse the unchanged, registration-scoped grouped importer. No
+                // per-client full-year reimport is initiated for existing GSTINs.
+                foreach (var gstin in gstins.Where(activeGstins.Contains))
+                {
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Sales", gstin);
+                    QueueSalesPurchaseSourceSet(clientId, financialYear, "Purchase", gstin);
+                }
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                AutomationDiagnosticLog.Write("GSTIN-ADDED",
+                    $"New-registration source discovery deferred: {exception.Message}",
+                    $"{clientId}|{financialYear}");
+            }
+        }, CancellationToken.None);
+    }
+
+    private async Task ReindexNewRegistrationSourceAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ProcessCentralSalesPurchaseSourceAsync(
+                path, cancellationToken, allowHandledMetadataFastSkip: false).ConfigureAwait(false);
+        }
+        finally
+        {
+            _salesPurchaseSourceInFlight.TryRemove(path, out _);
+        }
+    }
+
     public UniversalDumpImportResult StageUniversalDump(long clientId, string financialYear, IEnumerable<string> selectedPaths)
     {
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.Import))
