@@ -662,17 +662,22 @@ public sealed class PurchaseAutoImportService :
 
     private static bool PeriodInFinancialYear(string period, string financialYear)
     {
+        // NormalizePeriod returns YYYYMM, not MMYYYY. The previous code
+        // interpreted the first two digits of "202603" as month 20, so EVERY
+        // cached 2025-26 Winman export failed the FY source filter.
         var normalized = NormalizePeriod(period);
         if (normalized.Length != 6 || financialYear.Length < 4) return false;
-        if (!int.TryParse(normalized[..2], out var month) || !int.TryParse(normalized[2..], out var year)) return false;
+        if (!int.TryParse(normalized[..4], out var year) ||
+            !int.TryParse(normalized[4..], out var month) ||
+            month is < 1 or > 12) return false;
         if (!int.TryParse(financialYear[..4], out var startYear)) return false;
         return month >= 4 ? year == startYear : year == startYear + 1;
     }
 
     private static string PeriodToMonthKey(string period)
     {
-        var normalized = NormalizePeriod(period);
-        return normalized.Length == 6 ? normalized[2..] + normalized[..2] : string.Empty;
+        // Preserve the canonical YYYYMM order used by E-returns source folders.
+        return NormalizePeriod(period);
     }
 
     private static string NormalizePathToken(string path) =>
