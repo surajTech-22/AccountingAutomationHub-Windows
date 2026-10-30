@@ -727,33 +727,33 @@ public sealed class ClientDiagnosticExportService
 
         var purchaseRows = new List<IReadOnlyList<string>>
         {
-            new[] { "__PurchaseId", "Client GSTIN", "GST Date", "Document Date", "Supplier GSTIN", "Supplier", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value", "IGST", "CGST", "SGST", "Cess", "Round Off", "Purchase Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "GST Applicability", "Reconciliation Status", "Place of Supply", "Reverse Charge", "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount", "Item Purchase Ledger", "Godown", "Batch", "Part No/SKU", "Inventory Review Status" }
+            new[] { "__PurchaseId", "GST Date", "Document Date", "Supplier GSTIN", "Supplier", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value", "IGST", "CGST", "SGST", "Cess", "Round Off", "Purchase Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "GST Applicability", "Reconciliation Status", "Place of Supply", "Reverse Charge", "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount", "Item Purchase Ledger", "Godown", "Batch", "Part No/SKU", "Inventory Review Status", "Client GSTIN" }
         };
         foreach (var row in purchaseRecords)
             purchaseRows.Add([
-                row.PersistentId.ToString(CultureInfo.InvariantCulture), row.ClientGstin, Date(row.GstDate), Date(row.DocumentDate), row.SupplierGstin, row.SupplierName,
+                row.PersistentId.ToString(CultureInfo.InvariantCulture), Date(row.GstDate), Date(row.DocumentDate), row.SupplierGstin, row.SupplierName,
                 row.DocumentType, row.DocumentNumber, Num(row.DocumentValue), Num(row.Rate), Num(row.TaxableValue), Num(row.Igst), Num(row.Cgst), Num(row.Sgst), Num(row.Cess), Num(row.RoundOff),
                 row.PurchaseLedger, row.IgstLedger, row.CgstLedger, row.SgstLedger, row.GstApplicability, row.ReconciliationStatus, row.PlaceOfSupply, row.ReverseCharge,
                 row.StockItemPersistentId > 0 ? row.StockItemPersistentId.ToString(CultureInfo.InvariantCulture) : string.Empty, row.TallyStockMasterId, row.ItemName, row.HsnCode,
                 Num(row.ActualQuantity), Num(row.BilledQuantity), Num(row.FreeQuantity), row.Unit, row.RateUnit, Num(row.ItemRate), Num(row.ItemAmount), row.ItemPurchaseLedger,
-                row.Godown, row.BatchName, row.PartNumberSku, InventoryReviewStatus(row.ItemName, row.StockItemPersistentId, row.TallyStockMasterId, row.Unit)]);
+                row.Godown, row.BatchName, row.PartNumberSku, InventoryReviewStatus(row.ItemName, row.StockItemPersistentId, row.TallyStockMasterId, row.Unit), row.ClientGstin]);
         if (purchaseRows.Count > 1) result.Add(new DiagnosticSheet("Purchase", purchaseRows, HiddenLeadingColumns: 1));
 
         var salesRows = new List<IReadOnlyList<string>>
         {
             new[]
             {
-                "__SalesId", "Client GSTIN", "GST Date", "Document Date", "Customer GSTIN", "Customer", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value",
+                "__SalesId", "GST Date", "Document Date", "Customer GSTIN", "Customer", "Document Type", "Document No", "Document Value", "Rate", "Taxable Value",
                 "IGST", "CGST", "SGST", "Cess", "Cess Rate", "Round Off", "Sales Ledger", "IGST Ledger", "CGST Ledger", "SGST Ledger", "Place of Supply", "Return Period",
                 "AAH Stock Item ID", "Tally Stock MASTERID", "Item", "HSN/SAC", "Actual Qty", "Billed Qty", "Free Qty", "Unit", "Rate Unit", "Item Rate", "Item Amount",
                 "Item Sales Ledger", "Accounting Amount", "Godown", "Batch", "Batch Actual Qty", "Batch Billed Qty", "Batch Amount", "Discount %", "Discount Amount", "Order No",
                 "Tracking No", "Manufacturing Date", "Expiry Date", "Item Description", "Part No/SKU", "MRP", "Serial/Lot No", "Cost Centre", "Price Level", "Alternate Qty",
-                "Alternate Unit", "Delivery Note No", "Buyer Order No", "Buyer Order Date", "Narration", "Import Source", "Inventory Review Status"
+                "Alternate Unit", "Delivery Note No", "Buyer Order No", "Buyer Order Date", "Narration", "Import Source", "Inventory Review Status", "Client GSTIN"
             }
         };
         foreach (var row in salesRecords)
             salesRows.Add([
-                row.PersistentId.ToString(CultureInfo.InvariantCulture), row.ClientGstin, Date(row.GstDate), Date(row.DocumentDate), row.CustomerGstin, row.CustomerName,
+                row.PersistentId.ToString(CultureInfo.InvariantCulture), Date(row.GstDate), Date(row.DocumentDate), row.CustomerGstin, row.CustomerName,
                 row.DocumentType, row.DocumentNumber, Num(row.DocumentValue), Num(row.Rate), Num(row.TaxableValue), Num(row.Igst), Num(row.Cgst), Num(row.Sgst), Num(row.Cess), Num(row.CessRate), Num(row.RoundOff),
                 row.SalesLedger, row.IgstLedger, row.CgstLedger, row.SgstLedger, row.PlaceOfSupply, row.ReturnPeriod,
                 row.StockItemPersistentId > 0 ? row.StockItemPersistentId.ToString(CultureInfo.InvariantCulture) : string.Empty, row.TallyStockMasterId, row.ItemName, row.HsnCode,
@@ -761,7 +761,7 @@ public sealed class ClientDiagnosticExportService
                 row.Godown, row.BatchName, Num(row.BatchActualQuantity), Num(row.BatchBilledQuantity), Num(row.BatchAmount), Num(row.DiscountPercent), Num(row.DiscountAmount), row.OrderNumber,
                 row.TrackingNumber, Date(row.ManufacturingDate), Date(row.ExpiryDate), row.ItemDescription, row.PartNumberSku, Num(row.Mrp), row.SerialLotNumber, row.CostCentre, row.PriceLevel,
                 Num(row.AlternateQuantity), row.AlternateUnit, row.DeliveryNoteNumber, row.BuyerOrderNumber, Date(row.BuyerOrderDate), row.Narration, row.ImportSource,
-                InventoryReviewStatus(row.ItemName, row.StockItemPersistentId, row.TallyStockMasterId, row.Unit)]);
+                InventoryReviewStatus(row.ItemName, row.StockItemPersistentId, row.TallyStockMasterId, row.Unit), row.ClientGstin]);
         if (salesRows.Count > 1) result.Add(new DiagnosticSheet("Sales", salesRows, HiddenLeadingColumns: 1));
 
         var tallyLink = Safe(() => _tallyRepository.GetLinkForClient(client.Id), (TallyClientLink?)null);
