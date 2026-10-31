@@ -22,6 +22,7 @@ public static class TallyBranchConsolidationMasterPlanner
         ("Sales Accounts", "Sales"),
         ("Purchase Accounts", "Purchase"),
         ("Bank Accounts", "Banks"),
+        ("Cash-in-Hand", "Cash"),
         ("Direct Expenses", "Direct Expenses"),
         ("Indirect Expenses", "Expenses"),
         ("Direct Incomes", "Direct Incomes"),
@@ -62,7 +63,6 @@ public static class TallyBranchConsolidationMasterPlanner
         var normalized = branches.OrderBy(x => x.BranchId, StringComparer.OrdinalIgnoreCase).ToArray();
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var gstins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var commonPan = "";
         foreach (var branch in normalized)
         {
@@ -82,11 +82,15 @@ public static class TallyBranchConsolidationMasterPlanner
                 throw new InvalidOperationException("Different-PAN entities are outside same-PAN branch consolidation.");
             if (!branch.FinancialYear.Trim().Equals(financialYear.Trim(), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Branch and consolidated financial years must match.");
-            var gstin = branch.Gstin.Trim().ToUpperInvariant();
-            if (gstin.Length != 15 || !gstin.Take(2).All(char.IsDigit) ||
-                !gstin.Substring(2, 10).Equals(commonPan, StringComparison.OrdinalIgnoreCase) ||
-                !gstins.Add(gstin))
-                throw new InvalidOperationException("Every registered branch must have a unique GSTIN belonging to the same PAN.");
+            var gstin = (branch.Gstin ?? string.Empty).Trim().ToUpperInvariant();
+            // Multiple branches can share a registration within the same state,
+            // and non-GST branches can be name-only. The authoritative branch ID
+            // (not GSTIN) separates their ledger and voucher identities.
+            // When a GSTIN IS supplied, it must belong to this one PAN.
+            if (gstin.Length > 0 &&
+                (gstin.Length != 15 || !gstin.Take(2).All(char.IsDigit) ||
+                 !gstin.Substring(2, 10).Equals(commonPan, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("A branch's GSTIN must belong to the consolidated PAN.");
         }
 
         // Name/parent checks are based on the FRESH selected destination company;
