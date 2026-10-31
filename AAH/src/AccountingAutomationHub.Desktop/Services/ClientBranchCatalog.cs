@@ -116,6 +116,18 @@ public static class ClientBranchCatalog
                 });
             }
         }
+        // When a company becomes branched, the existing primary GST registration
+        // is also a first-class branch. Its existing accounting records are not
+        // migrated here: the scoped importer must reconcile them separately.
+        if (result.Count > 0 && IsGstinFormat(primary) && usedGstins.Add(primary))
+        {
+            var name = UniqueDisplayName(StateBranchName(primary), primary, usedNames);
+            result.Insert(0, new ClientBranchRecord
+            {
+                BranchId = LegacyBranchId(client.Id, primary, name),
+                Name = name, Gstin = primary, IsAutoNamed = true
+            });
+        }
         return result;
     }
 
