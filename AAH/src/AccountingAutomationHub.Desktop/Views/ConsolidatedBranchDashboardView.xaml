@@ -60,15 +60,18 @@
                     <TextBlock Text="{Binding ConsolidationNotice}" Margin="0,7,0,0"
                                TextWrapping="Wrap"
                                Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding HistoricalParentSummary}" Margin="0,7,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
                 </StackPanel>
             </Border>
 
             <TextBlock Text="Accounting by branch" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,9"/>
-            <DataGrid ItemsSource="{Binding Branches}" IsReadOnly="True" Height="280"
+            <DataGrid ItemsSource="{Binding VerifiedBranches}" IsReadOnly="True" Height="280"
                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                       HeadersVisibility="Column" GridLinesVisibility="Horizontal">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Branch / unassigned history" Width="3*" Binding="{Binding Name}"/>
+                    <DataGridTextColumn Header="Branch" Width="3*" Binding="{Binding Name}"/>
                     <DataGridTextColumn Header="Sales" Width="*" Binding="{Binding SalesDisplay}"/>
                     <DataGridTextColumn Header="Purchase" Width="*" Binding="{Binding PurchaseDisplay}"/>
                     <DataGridTextColumn Header="Banking" Width="*" Binding="{Binding BankDisplay}"/>
