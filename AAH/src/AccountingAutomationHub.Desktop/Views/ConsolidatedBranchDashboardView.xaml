@@ -5,7 +5,9 @@
     <!-- Consolidated branch counts are read-only and exclude unverified parent
          history. The original Dashboard Tally panel below retains its existing
          parent Client/FY link/export commands without reclassifying branch data. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+    <ScrollViewer x:Name="ConsolidatedScrollViewer"
+                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  PreviewMouseWheel="ConsolidatedScrollViewer_PreviewMouseWheel"
                   Background="{DynamicResource AppBackgroundBrush}">
         <StackPanel Margin="20,20,20,28">
             <Border Style="{StaticResource CardBorderStyle}">

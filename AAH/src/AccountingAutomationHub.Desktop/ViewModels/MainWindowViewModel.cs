@@ -159,6 +159,7 @@ public sealed class MainWindowViewModel :
     private int _visiblePresentationGeneration;
     private int _safePresentationWarmGeneration;
     private NavigationItem? _selectedNavigationItem;
+    private PageViewModel? _selectedNavigationPage;
     private PageViewModel? _currentPage;
     private string _applicationState =
         "Client Directory ready.";
@@ -1077,15 +1078,16 @@ public sealed class MainWindowViewModel :
         {
             if (HasBranchWorkspaces && value is not null && !NavigationItems.Contains(value))
                 return;
-            if (!SetProperty(
-                    ref _selectedNavigationItem,
-                    value) ||
-                value is null)
+            if (!SetProperty(ref _selectedNavigationItem, value))
+                return;
+            if (value is null)
             {
+                _selectedNavigationPage = null;
                 return;
             }
 
             var nextPage = value.PageFactory();
+            _selectedNavigationPage = nextPage;
             if (ReferenceEquals(CurrentPage, nextPage))
             {
                 // Sidebar/workspace rebuilds can temporarily clear and re-select the
@@ -2514,6 +2516,20 @@ public sealed class MainWindowViewModel :
             available.Add(_actionCenterNavigationItem);
         AppendGlobalNavigation(available);
 
+        // The prepared-cache framework publishes module readiness independently.
+        // A completion or re-activation does NOT imply the sidebar changed.
+        // Preserve the existing NavigationItem objects, selected page, WPF frame
+        // and scroll state when the computed menu and requested page match.
+        if (NavigationItems.SequenceEqual(available) &&
+            ((SelectedNavigationItem is { } activeItem &&
+              activeItem.Title.Equals(previousTitle, StringComparison.OrdinalIgnoreCase) &&
+              ReferenceEquals(CurrentPage, _selectedNavigationPage)) ||
+             (SelectedNavigationItem is null && hiddenActivityPageTitle.Length > 0 &&
+              hiddenActivityPageTitle.Equals(previousTitle, StringComparison.OrdinalIgnoreCase))))
+        {
+            return;
+        }
+
         _selectedNavigationItem = null;
         OnPropertyChanged(nameof(SelectedNavigationItem));
         NavigationItems.Clear();
@@ -3311,7 +3327,16 @@ public sealed class MainWindowViewModel :
                 // WPF collections and stalled the dispatcher even though navigation ViewModels
                 // were already cached.
                 QueueHiddenModulePresentationWarm(update.Snapshot, update);
-                QueueWorkspaceNavigationRefresh();
+                // Only data-dependent sidebar entries need reconciliation.
+                // All other module completions update their own prepared page;
+                // rebuilding navigation here clears controls, tabs and scroll
+                // positions despite the active Client/FY never changing.
+                if (!(HasBranchWorkspaces && !_isPrivateBranchActive) &&
+                    (update.Module is ClientWorkspaceModule.Purchase or
+                        ClientWorkspaceModule.Sales or ClientWorkspaceModule.Cash or
+                        ClientWorkspaceModule.Stock or ClientWorkspaceModule.Journal or
+                        ClientWorkspaceModule.Actions))
+                    QueueWorkspaceNavigationRefresh();
             }
             catch (Exception exception)
             {

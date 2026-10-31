@@ -295,6 +295,60 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       !shellModel.Contains("RefreshAfterCommittedAccountingChange();\n        // Fix118", StringComparison.Ordinal),
     "Unchanged Tally pulses must not reconstruct company selection, metric cards or Consolidated Dashboard.");
 Console.WriteLine("PASS: Tally heartbeat UI stability, stable dropdown selection and consolidated dashboard instance.");
+// Run the ACTUAL production wheel calculation through .NET on all boundaries.
+Check(ConsolidatedDashboardWheelRouting.CanScrollNested(45, 200, +120) &&
+      ConsolidatedDashboardWheelRouting.CanScrollNested(45, 200, -120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(0, 200, +120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(200, 200, -120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(0, 0, -120),
+    "Nested grids must scroll locally except at their top/bottom boundary.");
+Check(ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, 3) == 248 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, +120, 3) == 152 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(5, 900, 450, +120, 3) == 0 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(895, 900, 450, -120, 3) == 900 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, 0) == 200 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, -1) == 650,
+    "Consolidated wheel distance, Windows settings and viewport boundaries regressed.");
+var consolidatedViewCode = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Views", "ConsolidatedBranchDashboardView.xaml.cs"));
+Check(consolidatedView.Contains("PreviewMouseWheel=\"ConsolidatedScrollViewer_PreviewMouseWheel\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("x:Name=\"ConsolidatedScrollViewer\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("ConsolidatedDashboardWheelRouting.CanScrollNested(", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("ConsolidatedDashboardWheelRouting.OuterTarget(", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("VisualTreeHelper.GetParent(current)", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("outer.ScrollToVerticalOffset(target);", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("if (canScrollHere) return;", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("e.Handled = true;", StringComparison.Ordinal) &&
+      !dashboardTallyViewCode.Contains("ConsolidatedScrollViewer_PreviewMouseWheel", StringComparison.Ordinal),
+    "Consolidated must route nested mouse wheel to the outer page while preserving inner grids and normal Dashboard scrolling.");
+// Shared Fix134/127/128 framework: committed module snapshots may refresh
+// an active projection, but the same navigation MUST NEVER be destroyed/recreated.
+var navigationRebuild = shellModel.Split("private void RebuildWorkspaceNavigation(", StringSplitOptions.None)[1]
+    .Split("private bool CanViewModule(", StringSplitOptions.None)[0];
+var moduleReadyHandler = shellModel.Split("private void OnWorkspaceModuleReady(", StringSplitOptions.None)[1]
+    .Split("private void QueueAllSafeModulePresentations(", StringSplitOptions.None)[0];
+Check(navigationRebuild.Contains("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) &&
+      navigationRebuild.Contains("activeItem.Title.Equals(previousTitle", StringComparison.Ordinal) &&
+      navigationRebuild.Contains("ReferenceEquals(CurrentPage, _selectedNavigationPage)", StringComparison.Ordinal) &&
+      shellModel.Contains("_selectedNavigationPage = nextPage;", StringComparison.Ordinal) &&
+      navigationRebuild.IndexOf("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) <
+      navigationRebuild.LastIndexOf("NavigationItems.Clear();", StringComparison.Ordinal) &&
+      !navigationRebuild.Contains("activeItem.PageFactory()", StringComparison.Ordinal) &&
+      moduleReadyHandler.Contains("QueueHiddenModulePresentationWarm(update.Snapshot, update);", StringComparison.Ordinal) &&
+      moduleReadyHandler.Contains("(update.Module is ClientWorkspaceModule.Purchase or", StringComparison.Ordinal) &&
+      moduleReadyHandler.Contains("ClientWorkspaceModule.Actions))", StringComparison.Ordinal),
+    "A module cache completion must not destroy the existing WPF navigation frame or trigger a page factory unless the menu changes.");
+Check(dashboardNative.Contains("UpdateAccountingMetricsIfChanged(cached.DashboardAccountingMetrics);", StringComparison.Ordinal) &&
+      dashboardNative.Contains("UpdateGstr3bTilesIfChanged(tiles);", StringComparison.Ordinal) &&
+      dashboardNative.Contains("AccountingSummaryMetrics.Count == updated.Count", StringComparison.Ordinal) &&
+      dashboardNative.Contains("Gstr3bMonthTiles.Count == updated.Count", StringComparison.Ordinal) &&
+      dashboardNative.Contains("AutoImportSummaryMetrics.Count == updated.Count", StringComparison.Ordinal) &&
+      dashboardNative.Contains("UpdateAutoImportMetricsIfChanged(newMetrics);", StringComparison.Ordinal) &&
+      !dashboardNative.Contains("        AccountingSummaryMetrics.Clear();\n        Gstr3bMonthTiles.Clear();\n\n        if (!_workspaceStateCache.TryPeekReadOnly", StringComparison.Ordinal),
+    "Dashboard must not clear/rebuild the same accounting cards and GST tiles on each prepared-cache notification.");
+Console.WriteLine("PASS: shared module framework reuses navigation, active WPF frame and unchanged dashboard projections.");
+Console.WriteLine("PASS: consolidated wheel boundaries, nested Tally panel, branch DataGrid and single outer scroll authority.");
 Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
 Console.WriteLine("PASS: consolidated link remains usable; ordinary parent voucher export is blocked until group XML routing is verified.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
