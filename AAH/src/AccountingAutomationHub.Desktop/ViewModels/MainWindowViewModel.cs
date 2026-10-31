@@ -908,10 +908,10 @@ public sealed class MainWindowViewModel :
         OpenSettingsCommand = new RelayCommand(OpenSettings);
         RefreshTallyCommand = new AsyncRelayCommand(
             () => _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true),
-            () => !_tallyCoordinator.IsBusy);
+            () => !_isPrivateBranchActive && !_tallyCoordinator.IsBusy);
         ConfirmTopTallyLinkCommand = new AsyncRelayCommand(
             ConfirmTopTallyLinkAsync,
-            () => _clientContext.CurrentClient is not null && SelectedTallyCompany is not null && !_tallyCoordinator.IsBusy);
+            () => !_isPrivateBranchActive && _clientContext.CurrentClient is not null && SelectedTallyCompany is not null && !_tallyCoordinator.IsBusy);
         OpenLinkedTallyCommand = new AsyncRelayCommand(
             OpenLinkedTallyAsync,
             CanOpenLinkedTally);
@@ -2609,6 +2609,7 @@ public sealed class MainWindowViewModel :
         NotifyWorkspaceChanged();
         ConfirmTopTallyLinkCommand.RaiseCanExecuteChanged();
         OpenLinkedTallyCommand.RaiseCanExecuteChanged();
+        RefreshTallyCommand.RaiseCanExecuteChanged();
 
         if (e.PropertyName !=
             nameof(ActiveClientContext.CurrentClient))
@@ -2954,6 +2955,11 @@ public sealed class MainWindowViewModel :
 
     private async Task OpenLinkedTallyAsync()
     {
+        if (_isPrivateBranchActive)
+        {
+            ApplicationState = "Use the verified parent Tally company. Private branch linking is disabled until ledger read-back is complete.";
+            return;
+        }
         var client = _clientContext.CurrentClient;
         if (client is null)
         {
@@ -3004,6 +3010,11 @@ public sealed class MainWindowViewModel :
 
     private async Task ConfirmTopTallyLinkAsync()
     {
+        if (_isPrivateBranchActive)
+        {
+            ApplicationState = "Branch Tally linking is disabled until the saved parent company and branch ledgers pass verified read-back.";
+            return;
+        }
         var client = _clientContext.CurrentClient;
         if (client is null)
         {
