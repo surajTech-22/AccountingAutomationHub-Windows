@@ -240,10 +240,17 @@ public sealed class DashboardViewModel :
             Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
             Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
             Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
-            if (_clientContext.CurrentClient is { } current)
-                _tallyCoordinator.SetOutboundAutoSyncEnabled(current, false);
+            IsTallyAutoSyncSettingsOpen = false;
             TallyAutoSyncStatus = "Consolidated Tally linking is available. Consolidated voucher export awaits source-owned group XML routing.";
         }
+        if (_clientContext.CurrentClient is { } current)
+            _tallyCoordinator.SetOutboundAutoSyncEnabled(current,
+                !active && !_tallyAutoSyncMode.Equals("Off", StringComparison.OrdinalIgnoreCase));
+        OnPropertyChanged(nameof(IsTallyAutoSyncOff));
+        OnPropertyChanged(nameof(IsTallyAutoSyncEnabled));
+        OnPropertyChanged(nameof(IsTallyAutoSyncSelected));
+        OnPropertyChanged(nameof(IsTallyAutoSyncFull));
+        OnPropertyChanged(nameof(IsTallySessionAutomationVisible));
         RefreshTallyCommandStates();
     }
 
@@ -885,7 +892,7 @@ public sealed class DashboardViewModel :
         }
     }
 
-    public bool IsTallyAutoSyncOff { get => TallyAutoSyncMode.Equals("Off", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Off"; } }
+    public bool IsTallyAutoSyncOff { get => _isConsolidatedTallyScope || TallyAutoSyncMode.Equals("Off", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Off"; } }
     public bool IsTallyAutoSyncEnabled
     {
         get => !IsTallyAutoSyncOff;
@@ -898,8 +905,8 @@ public sealed class DashboardViewModel :
                 TallyAutoSyncMode = "Off";
         }
     }
-    public bool IsTallyAutoSyncSelected { get => TallyAutoSyncMode.Equals("Selected", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Selected"; } }
-    public bool IsTallyAutoSyncFull { get => TallyAutoSyncMode.Equals("Full Auto", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Full Auto"; } }
+    public bool IsTallyAutoSyncSelected { get => !_isConsolidatedTallyScope && TallyAutoSyncMode.Equals("Selected", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Selected"; } }
+    public bool IsTallyAutoSyncFull { get => !_isConsolidatedTallyScope && TallyAutoSyncMode.Equals("Full Auto", StringComparison.OrdinalIgnoreCase); set { if (value) TallyAutoSyncMode = "Full Auto"; } }
 
     public string TallyAutoSyncStatus { get => _tallyAutoSyncStatus; private set => SetProperty(ref _tallyAutoSyncStatus, value); }
     public bool IsTallyAutoSyncSettingsOpen
