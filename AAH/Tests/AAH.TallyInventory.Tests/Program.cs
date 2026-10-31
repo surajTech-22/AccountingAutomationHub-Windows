@@ -326,6 +326,7 @@ internal static class Program
             TallyInventoryRootPolicy.AppendRequiredCategories(b, Array.Empty<string>(), Array.Empty<StockSimpleMasterRecord>());
             Check(b.Length == 0, "An empty inventory dependency set created a Master.");
         });
+        TallyBranchMasterPlannerTests.Run();
         Console.WriteLine($"PASS: {_passed}/{_passed} production Tally inventory regressions.");
     }
 }

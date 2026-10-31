@@ -245,7 +245,7 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
 Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
-      shellModel.Contains("Existing consolidated Tally company connection", StringComparison.Ordinal) &&
+      shellModel.Contains("Consolidated · existing Dashboard Tally link and export design", StringComparison.Ordinal) &&
       shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
       automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
       automationSource.Contains("RelocateOwnedGstEvidence(", StringComparison.Ordinal),
@@ -286,7 +286,8 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       tallyApplyMethod.IndexOf("OpenCompanies.Clear();", StringComparison.Ordinal) &&
       tallySelectionMethod.Contains("ReferenceEquals(_selectedCompany, company) && !_manualSelectionPending", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (TallyMetrics.SequenceEqual(updated)) return;", StringComparison.Ordinal) &&
-      shellModel.Contains("CurrentPage is ConsolidatedBranchDashboardViewModel existing", StringComparison.Ordinal) &&
+      shellModel.Contains("_consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
+       shellModel.Contains("ReferenceEquals(CurrentPage, expected.PageFactory())", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public long ParentClientId => _parentClientId;", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public void RefreshAfterCommittedAccountingChange()", StringComparison.Ordinal) &&
       shellModel.Contains("consolidated.RefreshAfterCommittedAccountingChange();", StringComparison.Ordinal) &&
@@ -294,6 +295,25 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       shellModel.Contains("if ((change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or", StringComparison.Ordinal) &&
       !shellModel.Contains("RefreshAfterCommittedAccountingChange();\n        // Fix118", StringComparison.Ordinal),
     "Unchanged Tally pulses must not reconstruct company selection, metric cards or Consolidated Dashboard.");
+var tallyPageModel = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "ViewModels", "ConsolidatedTallyImportViewModel.cs"));
+var tallyPageView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Views", "ConsolidatedTallyImportView.xaml"));
+var appTemplates = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "App.xaml"));
+Check(shellModel.Contains("new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel)", StringComparison.Ordinal) &&
+      shellModel.Contains("new NavigationItem(\"Tally Import\"", StringComparison.Ordinal) &&
+      shellModel.Contains("() => _consolidatedTallyImportPage!", StringComparison.Ordinal) &&
+      shellModel.Contains("if (NavigationItems.Count == choices.Count", StringComparison.Ordinal) &&
+      tallyPageModel.Contains("public DashboardViewModel ExistingDashboardWorkspace", StringComparison.Ordinal) &&
+      tallyPageModel.Contains("public long ParentClientId", StringComparison.Ordinal) &&
+      tallyPageView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
+      tallyPageView.Contains("DataContext=\"{Binding ExistingDashboardWorkspace}\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
+      appTemplates.Contains("DataType=\"{x:Type viewModels:ConsolidatedTallyImportViewModel}\"", StringComparison.Ordinal) &&
+      !tallyPageView.Contains("TallyClientView", StringComparison.Ordinal),
+    "Separate Consolidated Tally Import module must reuse the current Dashboard Tally design, not the recovery page.");
+Console.WriteLine("PASS: original Consolidated Dashboard Tally card preserved and separate Tally Import module shares its UI and coordinator.");
 Console.WriteLine("PASS: Tally heartbeat UI stability, stable dropdown selection and consolidated dashboard instance.");
 // Run the ACTUAL production wheel calculation through .NET on all boundaries.
 Check(ConsolidatedDashboardWheelRouting.CanScrollNested(45, 200, +120) &&
