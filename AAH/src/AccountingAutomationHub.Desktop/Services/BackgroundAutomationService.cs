@@ -1436,7 +1436,59 @@ public sealed class BackgroundAutomationService : IDisposable
                         throw new InvalidOperationException(
                             "Branch folder is already linked to another accounting owner; no automatic relink permitted.");
                     if (owner is null)
-                        RegisterFolderCore(entry.FolderPath, branchProfile);
+                    {
+                        // XYZ/Branches/Karnataka -> XYZ/Karnataka was a
+                        // same-volume, marker-verified move. Carry the existing
+                        // folder ID, Auto Import history and source-cache paths
+                        // to the new location. Never register a second watcher
+                        // or treat the same files as a new unprocessed folder.
+                        var old = _automationRepository.GetFolders().FirstOrDefault(f =>
+                            f.ClientId == branchProfile.Id &&
+                            f.FinancialYear.Equals(branchProfile.FinancialYear, StringComparison.OrdinalIgnoreCase));
+                        if (old is not null &&
+                            !Path.GetFullPath(old.FolderPath).Equals(
+                                Path.GetFullPath(entry.FolderPath), StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (Directory.Exists(old.FolderPath))
+                                throw new InvalidOperationException(
+                                    "Existing branch Auto Import location is still live; refusing automatic relink.");
+                            var oldLegacyRoot = Path.GetFullPath(Path.Combine(
+                                folder.FolderPath, ClientBranchAutoImportLayout.BranchesDirectory))
+                                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                            if (!Path.GetFullPath(old.FolderPath).StartsWith(
+                                    oldLegacyRoot, StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidOperationException(
+                                    "Branch registration is not a legacy branch folder; refusing automatic relink.");
+                            RemoveWatcher(old.FolderId);
+                            try
+                            {
+                                RebaseAutomationFolderPaths([
+                                    (old.FolderId, old.FolderPath, entry.FolderPath,
+                                        Path.GetFileName(entry.FolderPath))
+                                ]);
+                                var refreshed = _automationRepository.GetByFolderId(old.FolderId);
+                                if (refreshed is not null) EnsureWatcher(refreshed);
+                            }
+                            catch
+                            {
+                                // Physical rollback only if the DB still owns
+                                // the old path. Never undo a committed rebase
+                                // with a conflicting destination.
+                                var now = _automationRepository.GetByFolderId(old.FolderId);
+                                if (now is not null && Path.GetFullPath(now.FolderPath).Equals(
+                                        Path.GetFullPath(old.FolderPath), StringComparison.OrdinalIgnoreCase) &&
+                                    Directory.Exists(entry.FolderPath) && !Directory.Exists(old.FolderPath))
+                                {
+                                    var legacyParent = Path.GetDirectoryName(old.FolderPath)!;
+                                    Directory.CreateDirectory(legacyParent);
+                                    Directory.Move(entry.FolderPath, old.FolderPath);
+                                }
+                                throw;
+                            }
+                        }
+                        else
+                            RegisterFolderCore(entry.FolderPath, branchProfile);
+                    }
                 }
                 AutomationDiagnosticLog.Write("BRANCH-FOLDER",
                     $"Prepared {entries.Count} named branch Auto Import folders for {client.ClientCode}. Registered GSTIN branches use separate durable ClientId owners; name-only branches remain review-only.",
@@ -3209,8 +3261,8 @@ public sealed class BackgroundAutomationService : IDisposable
         {
             // Central source discovery may overlap branch watcher roots.
             // Source identity is resolved below, before any parent write.
-            var isBranchCandidate = path.Replace('/', '\\').Contains(
-                "\\Branches\\", StringComparison.OrdinalIgnoreCase);
+            var isBranchCandidate = _automationRepository.GetFolders().Any(
+                f => IsWithinBranchContainer(f.FolderPath, path));
             // Fix131: historical startup indexing must not reopen/reclassify/rehash every
             // unchanged Sales/Purchase source on every launch. The saved source cache can
             // prove an exact size+mtime path is already part of a handled source-set. Live
@@ -4343,17 +4395,7 @@ public sealed class BackgroundAutomationService : IDisposable
     }
 
     private static bool IsWithinBranchContainer(string registeredRoot, string filePath)
-    {
-        try
-        {
-            var prefix = Path.GetFullPath(Path.Combine(
-                registeredRoot, ClientBranchAutoImportLayout.BranchesDirectory))
-                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            return Path.GetFullPath(filePath).StartsWith(prefix,
-                StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
-    }
+        => ClientBranchAutoImportLayout.IsWithinBranchPath(registeredRoot, filePath);
 
     private static bool IsManagedEvidencePath(AutomationFolderRegistration folder, string path)
     {
