@@ -81,6 +81,10 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         private set => SetProperty(ref _warning, value);
     }
 
+    // Only committed module data changes request a branch readback; a
+    // Tally connection status pulse must never call this or reload the page.
+    public void RefreshAfterCommittedAccountingChange() => _ = RefreshAsync();
+
     private async Task RefreshAsync()
     {
         try
