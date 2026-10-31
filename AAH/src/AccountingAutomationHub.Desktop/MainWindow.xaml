@@ -271,7 +271,7 @@
                          mode permits selecting the isolated accounting scope. -->
                     <StackPanel Margin="12,0,12,7"
                                 Visibility="{Binding HasConfiguredBranchWorkspaces, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock Text="BRANCH WORKSPACES" Foreground="#94A3B8" FontSize="10"
+                        <TextBlock Text="COMPANY / BRANCH" Foreground="#94A3B8" FontSize="10"
                                    FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <TextBlock Text="{Binding BranchAccountingHint}" Foreground="#94A3B8"
                                    FontSize="10" TextWrapping="Wrap" Margin="0,0,0,5"/>
@@ -424,11 +424,11 @@
                         <StackPanel Grid.Column="0"
                                     VerticalAlignment="Center"
                                     Margin="0,0,14,0">
-                            <TextBlock Text="{Binding CurrentPage.Title}"
+                            <TextBlock Text="{Binding WorkspacePageTitle}"
                                        FontSize="20"
                                        FontWeight="SemiBold"
                                        TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{Binding CurrentPage.Subtitle}"
+                            <TextBlock Text="{Binding WorkspacePageSubtitle}"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        FontSize="12"
                                        TextTrimming="CharacterEllipsis"
