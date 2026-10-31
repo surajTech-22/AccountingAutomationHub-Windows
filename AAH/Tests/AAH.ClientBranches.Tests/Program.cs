@@ -229,6 +229,9 @@ Check(dashboardNative.Contains("public bool ShowTallyPanel => true;", StringComp
       dashboardNative.Contains("HasConfirmedTallyLink = link is not null;", StringComparison.Ordinal) &&
       dashboardNative.Contains("CanConfirmTallyLink = pending &&", StringComparison.Ordinal) &&
       dashboardNative.Contains("CanUnlinkTallyLink = link is not null", StringComparison.Ordinal) &&
+      dashboardNative.Contains("if (_isConsolidatedTallyScope) return false;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("if (_isConsolidatedTallyScope) return;", StringComparison.Ordinal) &&
+      shellModel.Contains("_dashboardViewModel.SetConsolidatedTallyScope(", StringComparison.Ordinal) &&
       !dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
       !dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
       !dashboardNative.Contains("if (_isPrivateBranchDashboard) return;", StringComparison.Ordinal) &&
@@ -271,6 +274,7 @@ Check(consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordin
       !shellModel.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal),
       "Consolidated and each branch must have an independent current-Client/FY Tally link and native export path.");
 Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
+Console.WriteLine("PASS: consolidated link remains usable; ordinary parent voucher export is blocked until group XML routing is verified.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");
