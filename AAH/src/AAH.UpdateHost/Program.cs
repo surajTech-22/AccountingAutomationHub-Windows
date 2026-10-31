@@ -570,25 +570,37 @@ internal static class Program
         if (parent.HasExited) return true;
         if (!parent.ProcessName.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Graceful update shutdown target is not AAH.");
-        try
+        // The event can be temporarily unavailable while a new AAH instance
+        // starts or while an old one is finishing normal cleanup. Wait for
+        // either graceful exit or listener registration; do not equate an
+        // absent event with authorization to terminate the process.
+        var listenerDiscovery = Stopwatch.StartNew();
+        while (listenerDiscovery.Elapsed < TimeSpan.FromSeconds(20))
         {
-            using var exitSignal = EventWaitHandle.OpenExisting(
-                @"Local\AccountingAutomationHub.UpdateShutdown.v1." + parent.Id);
-            exitSignal.Set();
-            Log("Sent graceful update shutdown to original AAH PID " + parent.Id +
-                "; waiting for its own import/export/Tally cleanup.");
+            if (parent.HasExited) return true;
+            try
+            {
+                using var exitSignal = EventWaitHandle.OpenExisting(
+                    @"Local\AccountingAutomationHub.UpdateShutdown.v1." + parent.Id);
+                exitSignal.Set();
+                Log("Sent graceful update shutdown to original AAH PID " + parent.Id +
+                    "; waiting for its own import/export/Tally cleanup.");
+                return await WaitForOriginalExitAsync(parent, timeout);
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                await Task.Delay(500);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Log("AAH update-shutdown signal access denied; no forced termination.");
+                return false;
+            }
         }
-        catch (WaitHandleCannotBeOpenedException)
-        {
-            Log("AAH update-shutdown event absent. Update deferred; no forced termination.");
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Log("AAH update-shutdown signal access denied; no forced termination.");
-            return false;
-        }
-        return await WaitForOriginalExitAsync(parent, timeout);
+        if (parent.HasExited) return true;
+        Log("AAH PID " + parent.Id + " still has no shutdown listener after startup grace. " +
+            "This may be a pre-protocol or stuck instance; deferring without force-kill or data changes.");
+        return false;
     }
 
     private static async Task<bool> WaitForOriginalExitAsync(Process parent, TimeSpan timeout)

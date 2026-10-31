@@ -48,6 +48,7 @@ public partial class App : System.Windows.Application
     private EventWaitHandle? _updateShutdownEvent;
     private RegisteredWaitHandle? _updateShutdownWait;
     private int _updateShutdownRequestInProgress;
+    private bool _updateShutdownStartupReady;
     private bool _isExiting;
     private bool _lastBalloonOpensActionCenter;
     private string _lastBalloonTargetPage = string.Empty;
@@ -144,6 +145,10 @@ public partial class App : System.Windows.Application
                 Shutdown();
                 return;
             }
+            // Publish the PID-specific shutdown listener as soon as single-instance
+            // ownership is known. Slow startup must not look like a legacy process
+            // with no graceful-update protocol.
+            StartUpdateShutdownListener();
 
             if (networkClientMode)
             {
@@ -253,7 +258,6 @@ public partial class App : System.Windows.Application
             WorkNotifications = new WorkNotificationAgentService(this);
             InitializeTrayIcon();
             StartActivationListener();
-            StartUpdateShutdownListener();
             // Independent background GitHub release checks for normal AAH installations.
             // Enrolled LAN clients retain their own Main Server approved update route.
             // Unsigned legacy installs fail closed until a trusted signed bootstrap.
@@ -345,6 +349,7 @@ public partial class App : System.Windows.Application
 
             lanStartupWindow?.Close();
             lanStartupWindow = null;
+            Volatile.Write(ref _updateShutdownStartupReady, true);
         }
         catch (Exception exception)
         {
@@ -1179,17 +1184,31 @@ public partial class App : System.Windows.Application
         if (Interlocked.Exchange(ref _updateShutdownRequestInProgress, 1) != 0)
             return;
         var exitStarted = false;
+        var quiescenceStarted = false;
         try
         {
+            // Listener exists early, but no updater may stop partly initialized
+            // accounting services. A verified request waits for startup readiness.
+            var startupWait = System.Diagnostics.Stopwatch.StartNew();
+            while (!Volatile.Read(ref _updateShutdownStartupReady) &&
+                   !_isExiting && startupWait.Elapsed < TimeSpan.FromMinutes(3))
+                await Task.Delay(250);
+            if (_isExiting) return;
+            if (!Volatile.Read(ref _updateShutdownStartupReady))
+            {
+                WriteShutdownDiagnostic("Verified updater deferred: AAH startup has not finished.");
+                return;
+            }
             // Only the verified updater's PID-specific event reaches this method.
             // Quiesce NEW automatic observations before testing for idle. The normal
             // window X, tray visibility and user Auto Import pause remain unchanged.
             AutomationService?.BeginVerifiedUpdateQuiescence();
-            var deadline = DateTime.UtcNow.AddMinutes(10);
+            quiescenceStarted = true;
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var quietSamples = 0;
-            var nextBusyDiagnostic = DateTime.UtcNow;
+            var nextBusyDiagnostic = TimeSpan.Zero;
             WriteShutdownDiagnostic("Verified updater requested graceful exit; new automation intake quiesced.");
-            while (DateTime.UtcNow < deadline && !_isExiting)
+            while (elapsed.Elapsed < TimeSpan.FromMinutes(10) && !_isExiting)
             {
                 var tallyBusy = _mainViewModel?.IsTallyBusy ?? false;
                 var automationBusy = AutomationService?.HasPendingWorkForUpdate ?? false;
@@ -1197,12 +1216,12 @@ public partial class App : System.Windows.Application
                 if (tallyBusy || automationBusy || distributedBusy)
                 {
                     quietSamples = 0;
-                    if (DateTime.UtcNow >= nextBusyDiagnostic)
+                    if (elapsed.Elapsed >= nextBusyDiagnostic)
                     {
                         WriteShutdownDiagnostic(
                             $"Verified updater waiting: tally={tallyBusy} distributed={distributedBusy} " +
                             (AutomationService?.VerifiedUpdateBusySummary ?? "automation=not-started"));
-                        nextBusyDiagnostic = DateTime.UtcNow.AddSeconds(10);
+                        nextBusyDiagnostic = elapsed.Elapsed + TimeSpan.FromSeconds(10);
                     }
                 }
                 else if (++quietSamples >= 3)
@@ -1222,7 +1241,7 @@ public partial class App : System.Windows.Application
         }
         finally
         {
-            if (!exitStarted && !_isExiting)
+            if (quiescenceStarted && !exitStarted && !_isExiting)
             {
                 try { AutomationService?.EndVerifiedUpdateQuiescence(); }
                 catch (Exception exception) { WriteShutdownDiagnostic("Verified updater resume failed: " + exception); }
@@ -1243,6 +1262,7 @@ public partial class App : System.Windows.Application
                 if (!Dispatcher.HasShutdownStarted)
                     Dispatcher.BeginInvoke(new Action(() => _ = ExitForVerifiedUpdateWhenIdleAsync()));
             }, null, Timeout.Infinite, executeOnlyOnce: false);
+            WriteShutdownDiagnostic("Verified updater shutdown listener active for PID " + Environment.ProcessId);
         }
         catch (Exception exception)
         {
@@ -1442,10 +1462,8 @@ public partial class App : System.Windows.Application
         if (_runtimeCleaned) return;
         _runtimeCleaned = true;
         WriteShutdownDiagnostic("Application shutdown started; stopping Accounting/Tally runtime.");
-        _updateShutdownWait?.Unregister(null);
-        _updateShutdownWait = null;
-        _updateShutdownEvent?.Dispose();
-        _updateShutdownEvent = null;
+        // Retain the PID-specific shutdown event until OnExit finishes cleanup.
+        // Otherwise the update host may find a still-running AAH with no event.
         if (_performanceHeartbeat is not null)
         {
             _performanceHeartbeat.Stop();
@@ -1562,6 +1580,10 @@ public partial class App : System.Windows.Application
             return;
         }
         CleanupRuntime();
+        _updateShutdownWait?.Unregister(null);
+        _updateShutdownWait = null;
+        _updateShutdownEvent?.Dispose();
+        _updateShutdownEvent = null;
         try
         {
             if (_ownsSingleInstanceMutex)

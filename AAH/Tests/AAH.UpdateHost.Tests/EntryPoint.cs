@@ -58,6 +58,20 @@ internal static class EntryPoint
                desktopSource.Contains("ExitForVerifiedUpdateWhenIdleAsync()", StringComparison.Ordinal) &&
                desktopSource.Contains("if (tallyBusy || automationBusy || distributedBusy)", StringComparison.Ordinal),
             "Verified updater shutdown is no longer PID-scoped, drains incorrectly or does not restore monitoring.");
+        // Early PID listener registration and deferred destruction mean an
+        // updater cannot mistake normal startup/cleanup for an unsupported old app.
+        var startupRegistration = desktopSource.IndexOf("StartUpdateShutdownListener();", StringComparison.Ordinal);
+        var lateUi = desktopSource.IndexOf("InitializeTrayIcon();", StringComparison.Ordinal);
+        var onExit = desktopSource.IndexOf("protected override void OnExit(", StringComparison.Ordinal);
+        var cleanup = desktopSource.IndexOf("private void CleanupRuntime()", StringComparison.Ordinal);
+        var unregister = desktopSource.IndexOf("_updateShutdownWait?.Unregister(null);", StringComparison.Ordinal);
+        Assert(startupRegistration > 0 && lateUi > startupRegistration &&
+               cleanup > 0 && onExit > cleanup && unregister > onExit &&
+               desktopSource.Contains("Volatile.Read(ref _updateShutdownStartupReady)", StringComparison.Ordinal) &&
+               desktopSource.Contains("System.Diagnostics.Stopwatch.StartNew()", StringComparison.Ordinal),
+            "Update listener absent during startup, disposed before process exit or uses a wall-clock deadline.");
+        Console.WriteLine("PASS: listener covers startup and cleanup; update waits for safe initialized idle.");
+
         Assert(automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !manualReimport) return false;", StringComparison.Ordinal) &&
                automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !item.ManualReimport)", StringComparison.Ordinal) &&
                automationSource.Contains("_queue.Any(item => item.ManualReimport)", StringComparison.Ordinal) &&
