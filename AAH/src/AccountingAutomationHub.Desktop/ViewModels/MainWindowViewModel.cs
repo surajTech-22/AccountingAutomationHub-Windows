@@ -2226,9 +2226,11 @@ public sealed class MainWindowViewModel :
                 : scope.IsConsolidated
                     ? "Consolidated reporting is for the saved branch scopes only. Live combined balances and Tally import remain blocked until every member ledger is scope-verified."
                     : "Dedicated branch records and modules require verified scope-aware repositories. Existing parent Client/FY rows cannot be presented as this branch's books.";
-            var view = new BranchScopePreviewViewModel(
-                "Dashboard", "Account scope / import verification", scope.DisplayName,
-                scope.ScopeId, scope.FinancialYear, note);
+            PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
+                ? new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)
+                : new BranchScopePreviewViewModel(
+                    "Dashboard", "Account scope / import verification", scope.DisplayName,
+                    scope.ScopeId, scope.FinancialYear, note);
             var choices = new List<NavigationItem>
             {
                 new("Dashboard", "⌂", "Source-verified scope overview", () => view)
