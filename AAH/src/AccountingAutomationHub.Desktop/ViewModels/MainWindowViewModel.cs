@@ -1096,13 +1096,27 @@ public sealed class MainWindowViewModel :
     public PageViewModel? CurrentPage
     {
         get => _currentPage;
-        private set => SetProperty(
-            ref _currentPage,
-            value);
+        private set
+        {
+            if (SetProperty(ref _currentPage, value))
+            {
+                OnPropertyChanged(nameof(WorkspacePageTitle));
+                OnPropertyChanged(nameof(WorkspacePageSubtitle));
+            }
+        }
     }
 
     public bool HasActiveWorkspace =>
         _clientContext.CurrentClient is not null;
+
+    public string WorkspacePageTitle =>
+        _isPrivateBranchActive && SelectedBranchWorkspace is { } selected
+            ? selected.DisplayName + " · " + (CurrentPage?.Title ?? "Dashboard")
+            : CurrentPage?.Title ?? string.Empty;
+    public string WorkspacePageSubtitle =>
+        _isPrivateBranchActive && SelectedBranchWorkspace is { } selected
+            ? "Branch · " + selected.Gstin + " · FY " + CurrentFinancialYear
+            : CurrentPage?.Subtitle ?? string.Empty;
 
     // Branch scopes must never reuse legacy ClientId/FY repositories under a
     // different visual label. Only the unbranched NORMAL scope can post there.
@@ -1277,6 +1291,8 @@ public sealed class MainWindowViewModel :
             OnPropertyChanged(nameof(HasBranchWorkspaces));
             OnPropertyChanged(nameof(HasConfiguredBranchWorkspaces));
             OnPropertyChanged(nameof(BranchAccountingHint));
+            OnPropertyChanged(nameof(WorkspacePageTitle));
+            OnPropertyChanged(nameof(WorkspacePageSubtitle));
         }
         finally { _refreshingBranchWorkspaces = false; }
     }
@@ -2363,18 +2379,12 @@ public sealed class MainWindowViewModel :
         var available = new List<NavigationItem>();
         if (canReadNetworkData)
         {
-            if (_isPrivateBranchActive)
-            {
-                var owner = SelectedBranchWorkspace;
-                var branchDashboard = new BranchScopePreviewViewModel(
-                    "Dashboard", "Separate branch accounting overview",
-                    owner?.DisplayName ?? client.ClientName,
-                    owner?.ScopeId ?? "REVIEW", client.FinancialYear,
-                    "Branch records are held under a separate, durable ClientId. Existing Sales, Purchase, Bank, Cash, Journal and other accounting modules use that ID. Existing parent records were not moved. Tally export is blocked until verified mapping to the existing Tally company is complete.");
-                available.Add(new NavigationItem("Dashboard", "⌂",
-                    "Private branch accounting scope", () => branchDashboard));
-            }
-            else available.Add(_dashboardNavigationItem);
+            // The private branch already IS an isolated saved ClientId/FY.
+            // Use the same real DashboardViewModel, cache, accounting cards and
+            // Auto Import activity as every ordinary client workspace. A
+            // verification-placeholder page must never replace its Dashboard.
+            // Tally export remains separately guarded for branch accounts.
+            available.Add(_dashboardNavigationItem);
         }
 
         var hasValidGstin = HasValidGstin(client);
