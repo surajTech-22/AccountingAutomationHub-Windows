@@ -445,4 +445,9 @@ finally
     try { Directory.Delete(privateDbFolder, true); } catch { }
 }
 
+var desktopProject = File.ReadAllText(Path.Combine(app, "AccountingAutomationHub.Desktop.csproj"));
+Require(desktopProject.Contains("<Version>4.0.0.536</Version>", StringComparison.Ordinal) &&
+        desktopProject.Contains("<FileVersion>4.0.0.536</FileVersion>", StringComparison.Ordinal),
+    "candidate release version must match the tested Group Companies scope release");
+
 Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts and read-back-only financial summaries.");
