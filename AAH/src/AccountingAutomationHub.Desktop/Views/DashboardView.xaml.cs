@@ -169,9 +169,14 @@ public partial class DashboardView : UserControl
             }
         }
         if (window?.DataContext is not MainWindowViewModel main) return;
-        BalanceSheetToggle.IsChecked = main.IsFinancialStatementEnabled("Balance Sheet");
-        ProfitLossToggle.IsChecked = main.IsFinancialStatementEnabled("P&L");
-        RefreshAllSearchSuggestions();
+        // The consolidated Tally-only projection must not initialize hidden
+        // financial-statement toggles or universal-search activity.
+        if (!TallyOnlyMode)
+        {
+            BalanceSheetToggle.IsChecked = main.IsFinancialStatementEnabled("Balance Sheet");
+            ProfitLossToggle.IsChecked = main.IsFinancialStatementEnabled("P&L");
+            RefreshAllSearchSuggestions();
+        }
         if (!ReferenceEquals(_tallyLogoOwner, main))
         {
             DetachTallyLogoEvents();
