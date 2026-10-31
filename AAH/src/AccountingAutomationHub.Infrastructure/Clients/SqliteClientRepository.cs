@@ -100,6 +100,19 @@ public sealed class SqliteClientRepository :
                 IX_Clients_Gstin
             ON Clients(Gstin COLLATE NOCASE);
 
+            CREATE TABLE IF NOT EXISTS InternalBranchAccounts
+            (
+                ParentClientId INTEGER NOT NULL,
+                BranchId       TEXT NOT NULL COLLATE NOCASE,
+                ChildClientId  INTEGER NOT NULL UNIQUE,
+                CreatedUtc     TEXT NOT NULL,
+                PRIMARY KEY (ParentClientId, BranchId),
+                FOREIGN KEY (ParentClientId) REFERENCES Clients(Id),
+                FOREIGN KEY (ChildClientId) REFERENCES Clients(Id)
+            );
+            CREATE INDEX IF NOT EXISTS IX_InternalBranchAccounts_Child
+                ON InternalBranchAccounts(ChildClientId);
+
             CREATE TABLE IF NOT EXISTS ClientAdditionalGstins
             (
                 ClientId    INTEGER NOT NULL,
@@ -263,8 +276,9 @@ public sealed class SqliteClientRepository :
                 UpdatedUtc
             FROM Clients
             WHERE
-                $IncludeArchived = 1
-                OR IsArchived = 0
+                NOT EXISTS (SELECT 1 FROM InternalBranchAccounts AS b
+                            WHERE b.ChildClientId = Clients.Id)
+                AND ($IncludeArchived = 1 OR IsArchived = 0)
             ORDER BY
                 IsArchived,
                 ClientCode COLLATE NOCASE,
@@ -481,6 +495,67 @@ public sealed class SqliteClientRepository :
 
         var now =
             DateTime.UtcNow;
+        // The ordinary Client editor must never overwrite a private branch account.
+        if (normalized.Id > 0)
+        {
+            using var privateChild = connection.CreateCommand();
+            privateChild.Transaction = transaction;
+            privateChild.CommandText =
+                "SELECT 1 FROM InternalBranchAccounts WHERE ChildClientId=$Id LIMIT 1;";
+            privateChild.Parameters.AddWithValue("$Id", normalized.Id);
+            if (privateChild.ExecuteScalar() is not null)
+                throw new InvalidOperationException(
+                    "Branch accounting Client profiles are maintained by the parent Branch workspace.");
+
+            // Dashboard GSTIN quick edits and other background profile updates
+            // bypass the Client Editor. They must still preserve durable branch
+            // registration/FY/PAN identity, or imported branch data becomes orphaned.
+            using var linked = connection.CreateCommand();
+            linked.Transaction = transaction;
+            linked.CommandText = """
+                SELECT c.Gstin, c.Pan, c.FinancialYear
+                FROM InternalBranchAccounts b
+                JOIN Clients c ON c.Id=b.ChildClientId
+                WHERE b.ParentClientId=$Parent;
+                """;
+            linked.Parameters.AddWithValue("$Parent", normalized.Id);
+            var branchGstins = new List<string>();
+            string? originalPan = null;
+            string? originalFy = null;
+            using (var reader = linked.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    branchGstins.Add(reader.GetString(0));
+                    originalPan ??= reader.GetString(1);
+                    originalFy ??= reader.GetString(2);
+                }
+            }
+            if (branchGstins.Count > 0)
+            {
+                using var previousPrimary = connection.CreateCommand();
+                previousPrimary.Transaction = transaction;
+                previousPrimary.CommandText = "SELECT Gstin FROM Clients WHERE Id=$Id;";
+                previousPrimary.Parameters.AddWithValue("$Id", normalized.Id);
+                var registeredPrimary = previousPrimary.ExecuteScalar()?.ToString() ?? "";
+                if (!registeredPrimary.Equals(normalized.Gstin, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Cannot change primary GSTIN while private branch accounting exists. Reconcile the affected branch records first.");
+                if (originalFy is not null && !originalFy.Equals(normalized.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Cannot change the financial year of a Client with private branch books.");
+                if (originalPan is not null && !originalPan.Equals(normalized.Pan, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Cannot change PAN after private branch accounting is linked.");
+                if (additional is not null)
+                {
+                    var retained = new[] { normalized.Gstin }.Concat(additional)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach (var registeredBranchGstin in branchGstins.Where(x => x.Length == 15))
+                        if (!retained.Contains(registeredBranchGstin))
+                            throw new InvalidOperationException(
+                                "Cannot remove a GSTIN linked to a private branch account. Reconcile the branch books before editing registrations.");
+                }
+            }
+        }
         // Within a financial year one GSTIN must have exactly one Client Profile
         // owner. Otherwise the shared source watcher would double-import it.
         if (additional is not null || normalized.Id == 0)
@@ -708,6 +783,7 @@ public sealed class SqliteClientRepository :
                 """
                 SELECT 1 FROM Clients AS c
                 WHERE c.Id <> $Client AND c.FinancialYear = $FY COLLATE NOCASE
+                  AND NOT EXISTS (SELECT 1 FROM InternalBranchAccounts AS b WHERE b.ChildClientId = c.Id)
                   AND (c.Gstin = $Gstin COLLATE NOCASE OR EXISTS (
                     SELECT 1 FROM ClientAdditionalGstins AS a
                     WHERE a.ClientId = c.Id AND a.Gstin = $Gstin COLLATE NOCASE))

@@ -53,6 +53,10 @@ public sealed partial class ClientManagementViewModel :
     private string _validationText = string.Empty;
     private string _lookupStatusText = string.Empty;
     private bool _isGroupManagerOpen;
+    private bool _isGroupCompanyDashboardOpen;
+    private string _groupCompanyDashboardTitle = "Group of Companies";
+    private string _groupCompanyDashboardSummary = "";
+    private string _groupCompanyDashboardWarnings = "";
     private ClientGroupCatalogData _clientGroupData = new();
     private ClientGroupFolderNode? _selectedGroupFolder;
     private ClientProfile? _selectedGroupAvailableClient;
@@ -89,6 +93,7 @@ public sealed partial class ClientManagementViewModel :
     private string _gstin = string.Empty;
     private string _additionalGstinsText = string.Empty;
     private string _branchEntriesText = string.Empty;
+    private bool _enableSeparateBranchBooks;
     private string _pan = string.Empty;
     private string _state = string.Empty;
     private string _financialYear = string.Empty;
@@ -208,6 +213,9 @@ public sealed partial class ClientManagementViewModel :
         ReloadCommand = new RelayCommand(LoadClients);
         OpenGroupManagerCommand = new RelayCommand(OpenGroupManager, () => !NetworkClientRuntime.IsNetworkClient);
         CloseGroupManagerCommand = new RelayCommand(CloseGroupManager);
+        OpenGroupCompanyDashboardCommand = new RelayCommand(OpenGroupCompanyDashboard,
+            () => !NetworkClientRuntime.IsNetworkClient && IsSelectedGroupCompanyFolder);
+        CloseGroupCompanyDashboardCommand = new RelayCommand(() => IsGroupCompanyDashboardOpen = false);
         AddGroupFolderCommand = new RelayCommand(AddGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is not null);
         RenameGroupFolderCommand = new RelayCommand(RenameGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is { IsRoot: false });
         DeleteGroupFolderCommand = new RelayCommand(DeleteGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is { IsRoot: false });
@@ -259,6 +267,7 @@ public sealed partial class ClientManagementViewModel :
 
     public event EventHandler? WorkspaceOpenRequested;
 
+    public ObservableCollection<GroupCompanyMemberRow> GroupCompanyDashboardMembers { get; } = [];
     public ObservableCollection<ClientProfile> Clients { get; } = [];
     public ObservableCollection<ClientGroupFolderNode> GroupFolderRoots { get; } = [];
     public ObservableCollection<ClientProfile> GroupAvailableClients { get; } = [];
@@ -305,6 +314,29 @@ public sealed partial class ClientManagementViewModel :
         private set => SetProperty(ref _isGroupManagerOpen, value);
     }
 
+    public bool IsGroupCompanyDashboardOpen
+    {
+        get => _isGroupCompanyDashboardOpen;
+        private set => SetProperty(ref _isGroupCompanyDashboardOpen, value);
+    }
+    public string GroupCompanyDashboardTitle
+    {
+        get => _groupCompanyDashboardTitle;
+        private set => SetProperty(ref _groupCompanyDashboardTitle, value);
+    }
+    public string GroupCompanyDashboardSummary
+    {
+        get => _groupCompanyDashboardSummary;
+        private set => SetProperty(ref _groupCompanyDashboardSummary, value);
+    }
+    public string GroupCompanyDashboardWarnings
+    {
+        get => _groupCompanyDashboardWarnings;
+        private set => SetProperty(ref _groupCompanyDashboardWarnings, value);
+    }
+    public bool IsSelectedGroupCompanyFolder => SelectedGroupFolder?.Type.Equals(
+        ClientGroupFolderTypes.CompanyGroup, StringComparison.OrdinalIgnoreCase) == true;
+
     public ClientGroupFolderNode? SelectedGroupFolder
     {
         get => _selectedGroupFolder;
@@ -319,6 +351,7 @@ public sealed partial class ClientManagementViewModel :
             RefreshGroupCommands();
             MoveSelectedGroupSourceCommand?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(IsSelectedGroupCaFolder));
+            OnPropertyChanged(nameof(IsSelectedGroupCompanyFolder));
             OnPropertyChanged(nameof(SelectedGroupPath));
         }
     }
@@ -729,6 +762,12 @@ public sealed partial class ClientManagementViewModel :
         set => SetProperty(ref _branchEntriesText, value ?? string.Empty);
     }
 
+    public bool EnableSeparateBranchBooks
+    {
+        get => _enableSeparateBranchBooks;
+        set => SetProperty(ref _enableSeparateBranchBooks, value);
+    }
+
     public string Pan
     {
         get => _pan;
@@ -977,9 +1016,12 @@ public sealed partial class ClientManagementViewModel :
     public RelayCommand ReloadCommand { get; }
     public RelayCommand OpenGroupManagerCommand { get; }
     public RelayCommand CloseGroupManagerCommand { get; }
+    public RelayCommand OpenGroupCompanyDashboardCommand { get; }
+    public RelayCommand CloseGroupCompanyDashboardCommand { get; }
 
     public void CloseGroupManager()
     {
+        IsGroupCompanyDashboardOpen = false;
         IsGroupFolderEditorOpen = false;
         IsGroupManagerOpen = false;
     }
@@ -1027,11 +1069,32 @@ public sealed partial class ClientManagementViewModel :
 
     private void OpenGroupManager()
     {
+        IsGroupCompanyDashboardOpen = false;
         IsGroupFolderEditorOpen = false;
         IsGroupClientPickerOpen = false;
         IsGroupMoveFolderOpen = false;
         LoadGroupManager();
         IsGroupManagerOpen = true;
+    }
+
+    private void OpenGroupCompanyDashboard()
+    {
+        if (!IsSelectedGroupCompanyFolder || SelectedGroupFolder is null) return;
+        // The company-group dashboard only reads the current authorized
+        // Client/FY profiles. Never sum different FYs or silently post Tally.
+        var result = GroupCompanyAccountingPolicy.Build(
+            _clientGroupData, SelectedGroupFolder.Id, _allClients);
+        GroupCompanyDashboardMembers.Clear();
+        foreach (var member in result.Members)
+            GroupCompanyDashboardMembers.Add(member);
+        GroupCompanyDashboardTitle = "Group of Companies: " + result.GroupName;
+        GroupCompanyDashboardSummary =
+            $"{result.Members.Count} client records · {result.VerifiedPanCount} verified PAN(s) · " +
+            "same PAN = branch accounts; different PAN = companies under one owner. Financial years remain separate.";
+        GroupCompanyDashboardWarnings = result.Warnings.Count > 0
+            ? "Review before posting: " + string.Join(" | ", result.Warnings)
+            : "PAN classification complete. Tally transfer posting is disabled until ledger and branch-scope read-back passes.";
+        IsGroupCompanyDashboardOpen = true;
     }
 
     private void LoadGroupManager()
@@ -2110,6 +2173,7 @@ public sealed partial class ClientManagementViewModel :
 
     private void RefreshGroupCommands()
     {
+        OpenGroupCompanyDashboardCommand?.RaiseCanExecuteChanged();
         AddGroupFolderCommand?.RaiseCanExecuteChanged();
         RenameGroupFolderCommand?.RaiseCanExecuteChanged();
         DeleteGroupFolderCommand?.RaiseCanExecuteChanged();
@@ -2942,6 +3006,7 @@ public sealed partial class ClientManagementViewModel :
             Gstin = string.Empty;
             AdditionalGstinsText = string.Empty;
             BranchEntriesText = string.Empty;
+            EnableSeparateBranchBooks = false;
             Pan = string.Empty;
             State = string.Empty;
             FinancialYear = GetDefaultFinancialYear();
@@ -3004,6 +3069,8 @@ public sealed partial class ClientManagementViewModel :
             AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
             BranchEntriesText = ClientBranchCatalog.Format(ClientBranchCatalog.Resolve(
                 client, _preferenceRepository.Get(ClientBranchCatalog.Key(client.Id))));
+            EnableSeparateBranchBooks = BranchAccountingModePreference.IsEnabled(
+                _preferenceRepository.Get(BranchAccountingModePreference.Key(client.Id)));
             Pan = client.Pan;
             State = client.State;
             FinancialYear = client.FinancialYear;
@@ -3151,8 +3218,40 @@ public sealed partial class ClientManagementViewModel :
             var priorAdditional = EditingId > 0
                 ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
                 : Array.Empty<string>();
-            var branches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var parsedBranches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var existingClient = EditingId > 0 ? _repository.GetById(EditingId) : null;
+            var existingBranches = existingClient is null
+                ? Array.Empty<ClientBranchRecord>()
+                : ClientBranchCatalog.Resolve(existingClient,
+                    _preferenceRepository.Get(ClientBranchCatalog.Key(EditingId))).ToArray();
+            var branches = ClientBranchCatalog.Reconcile(
+                EditingId, parsedBranches, existingBranches);
             var enteredAdditional = ClientBranchCatalog.AdditionalGstins(branches, normalizedGstin, normalizedPan);
+            // The previous multi-GSTIN flow remains merged/GST-wise until the
+            // user explicitly opts into separate branch books. Once internal
+            // accounting IDs exist, never silently orphan or reassign them.
+            var privateBranchAccounts = EditingId > 0
+                ? new AccountingAutomationHub.Infrastructure.Clients.SqliteInternalBranchAccountRepository()
+                    .FindByParent(EditingId)
+                : Array.Empty<AccountingAutomationHub.Infrastructure.Clients.InternalBranchAccountLink>();
+            if (!EnableSeparateBranchBooks && privateBranchAccounts.Count > 0)
+                throw new InvalidOperationException(
+                    "Separate branch accounting cannot be turned off while saved private branch books exist. Reconcile them first.");
+            if (EnableSeparateBranchBooks && branches.Count == 0)
+                throw new InvalidOperationException(
+                    "Add at least one branch before enabling separate accounting books.");
+            foreach (var privateAccount in privateBranchAccounts)
+            {
+                var savedBranch = branches.FirstOrDefault(x =>
+                    x.BranchId.Equals(privateAccount.BranchId, StringComparison.OrdinalIgnoreCase));
+                if (savedBranch is null)
+                    throw new InvalidOperationException(
+                        "Cannot remove or rename a branch with separate accounting records without an explicit scope migration.");
+                var child = _repository.GetById(privateAccount.ChildClientId);
+                if (child is null || !child.Gstin.Equals(savedBranch.Gstin, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Branch GSTIN changed after private accounting began; export/migration review is required.");
+            }
             AdditionalGstinsText = string.Join(Environment.NewLine, enteredAdditional);
             var newlyAdded = enteredAdditional
                 .Except(priorAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -3191,6 +3290,12 @@ public sealed partial class ClientManagementViewModel :
             // Branches are metadata on this Client, not separate Client/FY records.
             // Save after the validated profile; existing GST-wise import remains unchanged.
             _preferenceRepository.Set(ClientBranchCatalog.Key(saved.Id), ClientBranchCatalog.Serialize(branches));
+            _preferenceRepository.Set(BranchAccountingModePreference.Key(saved.Id),
+                EnableSeparateBranchBooks ? "true" : "false");
+            // Branch accounting folders are opt-in. An ordinary multi-GSTIN
+            // Client retains its previous GST-wise Auto Import folder structure.
+            if (EnableSeparateBranchBooks)
+                _automationService?.EnsureBranchFoldersForClient(saved.Id, branches);
 
             // Fix137 R41: every newly-created Client/FY starts with the canonical Tally
             // chart instead of an empty Master Centre. This includes Previous-FY profile

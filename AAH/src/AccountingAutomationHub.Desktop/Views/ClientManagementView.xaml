@@ -633,7 +633,12 @@
                                  AcceptsReturn="True" Height="94" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Padding="10,7" Margin="0,5,0,5"
                                  ToolTip="Examples: Head Office | 29ABCDE1234F1Z5; South Branch; 27ABCDE1234F1Z5. GSTINs must have the same PAN as the client." />
-                        <TextBlock Text="Branches are created automatically when you save. A branch GSTIN is added to this client's existing GST-wise imports; a name-only branch does not create a GST registration. Single-GSTIN clients without branches work exactly as before."
+                        <TextBlock Text="Branch names and GSTINs are saved with the parent client. The existing multi-GSTIN/GST-wise import workflow stays unchanged unless separate branch accounting is explicitly enabled."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,7" />
+                        <CheckBox Content="Enable separate branch accounting books and named Auto Import folders"
+                                  IsChecked="{Binding EnableSeparateBranchBooks, Mode=TwoWay}"
+                                  FontWeight="SemiBold" Margin="0,3,0,4" />
+                        <TextBlock Text="When enabled, branches use separate protected accounting IDs. Existing records are not moved automatically. Branch folders are prepared, but automatic posting from them and Tally transfers remain blocked until source and ledger reconciliation. Use manual imports inside each branch for now."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,13" />
 
                         <Grid>
@@ -806,6 +811,11 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Group of Companies Dashboard"
+                                    Command="{Binding OpenGroupCompanyDashboardCommand}"
+                                    Visibility="{Binding IsSelectedGroupCompanyFolder, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    Padding="13,7" Margin="0,0,8,0"
+                                    ToolTip="Read-only PAN-based group/branch classification. Existing client accounting data and Tally imports are untouched."/>
                             <Button Content="+ Make Group" Command="{Binding BeginAddGroupFolderCommand}" Padding="13,7" Margin="0,0,8,0"
                                     ToolTip="Creates a new top-level Firm, Company, CA, Auditor or Company Group. Drag it into another Group only when nesting is required."/>
                             <Button Content="Close" Command="{Binding CloseGroupManagerCommand}" Padding="14,7"/>
@@ -938,6 +948,58 @@
                 <Border Grid.Row="2" Padding="14,9" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Background="#FAFBFC">
                     <TextBlock Text="{Binding GroupManagerStatus}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
                 </Border>
+
+                <!-- Separate accounting authority for the existing Company Group type only.
+                     Do not expose group-level posting while branch ledgers have no verified
+                     scoped persistence; each individual Client/FY remains authoritative. -->
+                <Grid Grid.RowSpan="3" Panel.ZIndex="26"
+                      Visibility="{Binding IsGroupCompanyDashboardOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Border Background="#80000000"/>
+                    <Border Margin="22" Padding="17" Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10"
+                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinHeight="340">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" LastChildFill="True">
+                                <Button Content="Close" DockPanel.Dock="Right" Padding="15,7"
+                                        Command="{Binding CloseGroupCompanyDashboardCommand}"/>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding GroupCompanyDashboardTitle}" FontSize="20" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Group Dashboard | Tally Import scope preview"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock Grid.Row="1" Margin="0,12,0,12" TextWrapping="Wrap"
+                                       Text="{Binding GroupCompanyDashboardSummary}"/>
+                            <DataGrid Grid.Row="2" ItemsSource="{Binding GroupCompanyDashboardMembers}"
+                                      IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+                                      CanUserDeleteRows="False" HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Client / Company" Width="2*" Binding="{Binding ClientName}"/>
+                                    <DataGridTextColumn Header="Code" Width="*" Binding="{Binding ClientCode}"/>
+                                    <DataGridTextColumn Header="FY" Width="*" Binding="{Binding FinancialYear}"/>
+                                    <DataGridTextColumn Header="PAN" Width="1.4*" Binding="{Binding Pan}"/>
+                                    <DataGridTextColumn Header="Accounting relation" Width="2*" Binding="{Binding Relationship}"/>
+                                    <DataGridTextColumn Header="GST registrations" Width="*" Binding="{Binding GstRegistrationCount}"/>
+                                    <DataGridTextColumn Header="Review" Width="2*" Binding="{Binding Warning}"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <StackPanel Grid.Row="3" Margin="0,10,0,0">
+                                <TextBlock Text="{Binding GroupCompanyDashboardWarnings}" TextWrapping="Wrap"
+                                           FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap"
+                                           Text="No group voucher, synthetic Tally company, financial consolidation, or transfer is posted from this view. Individual Client/FY books remain unchanged until branch-scoped import and Tally read-back tests pass."
+                                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
 
                 <Grid Grid.RowSpan="3" Panel.ZIndex="30" Visibility="{Binding IsGroupFolderEditorOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <Border Background="#1A000000"/>
