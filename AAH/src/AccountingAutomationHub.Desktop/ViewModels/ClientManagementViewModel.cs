@@ -3198,6 +3198,9 @@ public sealed partial class ClientManagementViewModel :
             // Branches are metadata on this Client, not separate Client/FY records.
             // Save after the validated profile; existing GST-wise import remains unchanged.
             _preferenceRepository.Set(ClientBranchCatalog.Key(saved.Id), ClientBranchCatalog.Serialize(branches));
+            // Also set up every branch's module folders immediately on Save,
+            // without waiting for the background watcher to refresh its cache.
+            _automationService?.EnsureBranchFoldersForClient(saved.Id, branches);
 
             // Fix137 R41: every newly-created Client/FY starts with the canonical Tally
             // chart instead of an empty Master Centre. This includes Previous-FY profile
