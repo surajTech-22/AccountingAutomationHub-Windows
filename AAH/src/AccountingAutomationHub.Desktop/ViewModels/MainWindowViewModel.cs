@@ -3890,8 +3890,8 @@ public sealed class MainWindowViewModel :
         // Only the five accounting transaction areas appear in this
         // consolidated totals view. Master/Stock/Settings/Tally authority
         // notifications must never cause a page readback or visible redraw.
-        if (change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or
-            AccountingLiveArea.Purchase or AccountingLiveArea.Sales or AccountingLiveArea.Journal &&
+        if ((change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or
+             AccountingLiveArea.Purchase or AccountingLiveArea.Sales or AccountingLiveArea.Journal) &&
             CurrentPage is ConsolidatedBranchDashboardViewModel consolidated &&
             openClient is not null && openClient.Id == consolidated.ParentClientId &&
             openClient.FinancialYear.Equals(change.FinancialYear, StringComparison.OrdinalIgnoreCase))
