@@ -165,6 +165,9 @@ public sealed class MainWindowViewModel :
     private TopClientWorkspaceChoice? _selectedTopClientChoice;
     private TopFinancialYearChoice? _selectedTopFinancialYearChoice;
     private bool _refreshingTopWorkspaceSelectors;
+    private BranchAccountingWorkspace? _selectedBranchWorkspace;
+    private bool _refreshingBranchWorkspaces;
+    private string _branchWorkspaceProblem = string.Empty;
 
     public MainWindowViewModel()
         : this(null, null, null, null)
@@ -1061,6 +1064,8 @@ public sealed class MainWindowViewModel :
         get => _selectedNavigationItem;
         set
         {
+            if (HasBranchWorkspaces && value is not null && !NavigationItems.Contains(value))
+                return;
             if (!SetProperty(
                     ref _selectedNavigationItem,
                     value) ||
@@ -1095,6 +1100,62 @@ public sealed class MainWindowViewModel :
     public bool HasActiveWorkspace =>
         _clientContext.CurrentClient is not null;
 
+    // Branch scopes must never reuse legacy ClientId/FY repositories under a
+    // different visual label. Only the unbranched NORMAL scope can post there.
+    public ObservableCollection<BranchAccountingWorkspace> BranchWorkspaces { get; } = [];
+    public bool HasBranchWorkspaces => BranchWorkspaces.Count > 1;
+    public BranchAccountingWorkspace? SelectedBranchWorkspace
+    {
+        get => _selectedBranchWorkspace;
+        set
+        {
+            if (!BranchWorkspaces.Contains(value) || ReferenceEquals(_selectedBranchWorkspace, value)) return;
+            _selectedBranchWorkspace = value;
+            OnPropertyChanged();
+            if (!_refreshingBranchWorkspaces && _clientContext.CurrentClient is not null)
+                RebuildWorkspaceNavigation("Dashboard");
+        }
+    }
+
+    private void RefreshBranchWorkspaces()
+    {
+        _refreshingBranchWorkspaces = true;
+        try
+        {
+            BranchWorkspaces.Clear();
+            _selectedBranchWorkspace = null;
+            _branchWorkspaceProblem = string.Empty;
+            var client = _clientContext.CurrentClient;
+            if (client is not null && !NetworkClientRuntime.IsNetworkClient)
+            {
+                var branches = ClientBranchCatalog.Resolve(client,
+                    _applicationPreferences.Get(ClientBranchCatalog.Key(client.Id)));
+                try
+                {
+                    foreach (var scope in BranchAccountingWorkspaceCatalog.Build(client, branches))
+                        BranchWorkspaces.Add(scope);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // Never fall back to NORMAL on a conflicting PAN/branch
+                    // identity: that would expose legacy parent accounting data.
+                    _branchWorkspaceProblem = ex.Message;
+                    BranchWorkspaces.Add(new BranchAccountingWorkspace(
+                        client.Id, client.FinancialYear, "CONSOLIDATED",
+                        "Consolidated — review required", "", "", true,
+                        ["Dashboard", "Tally Import"], false));
+                    BranchWorkspaces.Add(new BranchAccountingWorkspace(
+                        client.Id, client.FinancialYear, "REVIEW",
+                        "Branch configuration blocked", "", "", false, ["Branch Overview"], false));
+                }
+            }
+            _selectedBranchWorkspace = BranchWorkspaces.FirstOrDefault();
+            OnPropertyChanged(nameof(SelectedBranchWorkspace));
+            OnPropertyChanged(nameof(HasBranchWorkspaces));
+        }
+        finally { _refreshingBranchWorkspaces = false; }
+    }
+
     public double SidebarWidth => NetworkClientRuntime.IsNetworkClient ? 200d : 260d;
 
     public string CurrentClient =>
@@ -1111,6 +1172,8 @@ public sealed class MainWindowViewModel :
     // knows how to open them without making them permanent sidebar items.
     public IReadOnlyList<string> GetGoToDestinations()
     {
+        if (HasBranchWorkspaces)
+            return NavigationItems.Select(item => item.Title).ToArray();
         var result = NavigationItems
             .Select(item => item.Title)
             .Where(title => !string.IsNullOrWhiteSpace(title))
@@ -1725,7 +1788,7 @@ public sealed class MainWindowViewModel :
     public bool NavigateFromAccountingActivity(string title)
     {
         var client = _clientContext.CurrentClient;
-        if (client is null) return false;
+        if (client is null || HasBranchWorkspaces) return false;
 
         if (title.Equals("GST", StringComparison.OrdinalIgnoreCase) && (!HasValidGstin(client) || !CanViewModule(GovernancePermissions.GstView)))
             return false;
@@ -2075,6 +2138,42 @@ public sealed class MainWindowViewModel :
         if (client is null)
         {
             CloseWorkspaceCore(clearRepository: false);
+            return;
+        }
+
+        if (HasBranchWorkspaces)
+        {
+            var scope = SelectedBranchWorkspace ?? BranchWorkspaces[0];
+            var note = _branchWorkspaceProblem.Length > 0
+                ? "Branch identity review required: " + _branchWorkspaceProblem
+                : scope.IsConsolidated
+                    ? "Consolidated reporting is for the saved branch scopes only. Live combined balances and Tally import remain blocked until every member ledger is scope-verified."
+                    : "Dedicated branch records and modules require verified scope-aware repositories. Existing parent Client/FY rows cannot be presented as this branch's books.";
+            var view = new BranchScopePreviewViewModel(
+                "Dashboard", "Account scope / import verification", scope.DisplayName,
+                scope.ScopeId, scope.FinancialYear, note);
+            var choices = new List<NavigationItem>
+            {
+                new("Dashboard", "⌂", "Source-verified scope overview", () => view)
+            };
+            if (scope.IsConsolidated)
+            {
+                var tallyView = new BranchScopePreviewViewModel(
+                    "Tally Import", "Consolidated Tally verification", scope.DisplayName,
+                    scope.ScopeId, scope.FinancialYear,
+                    "Consolidated Tally import is pending source-backed branch ledgers, duplicate-safe DR/CR validation and existing-company read-back. No unverified Tally company or voucher will be created.");
+                choices.Add(new NavigationItem(
+                    "Tally Import", "T", "Blocked until verified branch reconciliation", () => tallyView));
+            }
+            _selectedNavigationItem = null;
+            OnPropertyChanged(nameof(SelectedNavigationItem));
+            NavigationItems.Clear();
+            foreach (var item in choices) NavigationItems.Add(item);
+            SelectedNavigationItem = choices.FirstOrDefault(x =>
+                x.Title.Equals(preferredTitle, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+            ApplicationState = scope.DisplayName +
+                " · branch-scoped accounting pending verified storage/importer routing; parent records preserved.";
+            NotifyWorkspaceChanged();
             return;
         }
 
@@ -2428,6 +2527,8 @@ public sealed class MainWindowViewModel :
         object? sender,
         PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(ActiveClientContext.CurrentClient))
+            RefreshBranchWorkspaces();
         NotifyWorkspaceChanged();
         ConfirmTopTallyLinkCommand.RaiseCanExecuteChanged();
         OpenLinkedTallyCommand.RaiseCanExecuteChanged();
@@ -2460,6 +2561,7 @@ public sealed class MainWindowViewModel :
         // startup-prepared/frozen snapshot. Timestamp/reactivation work runs after paint;
         // only a six-month frozen or still-missing stream is rescanned in background.
         RebuildWorkspaceNavigation(_dashboardNavigationItem.Title);
+        if (HasBranchWorkspaces) return; // never warm/display unscoped parent books in branch views.
         if (_workspaceStateCache.TryPeekReadOnly(openedClient.Id, openedClient.FinancialYear, out var openingSnapshot))
         {
             QueueWarmCurrentWorkspaceAfterPaint(openingSnapshot);
