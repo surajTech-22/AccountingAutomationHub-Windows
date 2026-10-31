@@ -3627,6 +3627,7 @@ public sealed class BackgroundAutomationService : IDisposable
             .ToArray();
         if (folders.Length == 0) return;
         var folder = folders[0];
+        var handledOwnerId = _privateBranchAccounts.FindByChild(clientId) is null ? 0 : clientId;
 
         var setFingerprint = SalesPurchaseSourceCache.GetSetFingerprint(module, gstin, financialYear);
         if (setFingerprint.Length == 0) return;
@@ -3634,7 +3635,7 @@ public sealed class BackgroundAutomationService : IDisposable
         // Fix39 durable source-set gate: after one successful/current pass, an unchanged
         // GSTIN+FY set does not even re-enter the Sales/Purchase parser on later watcher
         // events or app startups. Explicit module reimport remains independent of this state.
-        if (SalesPurchaseSourceCache.IsSetHandled(module, gstin, financialYear, setFingerprint))
+        if (SalesPurchaseSourceCache.IsSetHandled(module, gstin, financialYear, setFingerprint, handledOwnerId))
         {
             AutomationDiagnosticLog.Write("SALES-PURCHASE-SET", $"{module} GSTIN/FY source-set unchanged; grouped Auto Import skipped before parsing.", $"{client.ClientCode}|{financialYear}");
             return;
@@ -3648,7 +3649,7 @@ public sealed class BackgroundAutomationService : IDisposable
                 // worker may have completed while this one was waiting.
                 var currentSetFingerprint = SalesPurchaseSourceCache.GetSetFingerprint(module, gstin, financialYear);
                 if (currentSetFingerprint.Length == 0 ||
-                    SalesPurchaseSourceCache.IsSetHandled(module, gstin, financialYear, currentSetFingerprint))
+                    SalesPurchaseSourceCache.IsSetHandled(module, gstin, financialYear, currentSetFingerprint, handledOwnerId))
                     return;
 
                 try
@@ -3794,7 +3795,8 @@ public sealed class BackgroundAutomationService : IDisposable
         ResolveCachedSalesPurchaseActions(folder, "Sales", gstin, client.FinancialYear);
         ResolveAutomationAction(folder, "Sales", $"SOURCESET:SALES:{setFingerprint}");
         SalesPurchaseSourceCache.MarkSetHandled(
-            "Sales", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
+            "Sales", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported",
+            _privateBranchAccounts.FindByChild(client.Id) is null ? 0 : client.Id);
         if (!current)
             RaiseAccountingDataChanged(folder, "Sales", result.PersistedRows, "GSTIN/FY GSTR-1 source set");
         else
@@ -3866,7 +3868,8 @@ public sealed class BackgroundAutomationService : IDisposable
         ResolveCachedSalesPurchaseActions(folder, "Purchase", gstin, client.FinancialYear);
         ResolveAutomationAction(folder, "Purchase", $"SOURCESET:PURCHASE:{setFingerprint}");
         SalesPurchaseSourceCache.MarkSetHandled(
-            "Purchase", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported");
+            "Purchase", gstin, client.FinancialYear, setFingerprint, accountingContentFingerprint, current ? "Current" : "Imported",
+            _privateBranchAccounts.FindByChild(client.Id) is null ? 0 : client.Id);
         if (!current)
             RaiseAccountingDataChanged(folder, "Purchase", persisted, "GSTIN/FY GSTR-2A/2B source set");
         else
