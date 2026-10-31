@@ -102,6 +102,57 @@ public sealed class SqliteGstBranchOwnershipMigration
             pendingReconciliation);
     }
 
+    /// <summary>
+    /// Rebase exact source-evidence paths after a marker/GSTIN-verified
+    /// same-volume folder move. This edits only already migrated child
+    /// records, never the parent's unassigned records.
+    /// </summary>
+    public int RebaseMovedEvidencePaths(long parentId, long branchId,
+        string financialYear, string gstin, string oldFolder, string newFolder)
+    {
+        if (string.IsNullOrWhiteSpace(oldFolder) || string.IsNullOrWhiteSpace(newFolder))
+            throw new ArgumentException("Both folder paths are required.");
+        var oldPrefix = Path.GetFullPath(oldFolder).TrimEnd(Path.DirectorySeparatorChar) +
+            Path.DirectorySeparatorChar;
+        var newPrefix = Path.GetFullPath(newFolder).TrimEnd(Path.DirectorySeparatorChar) +
+            Path.DirectorySeparatorChar;
+        var normalized = new string(gstin.Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant).ToArray());
+        using var connection = SqliteConnectionPolicy.Open(_connectionString);
+        using var tx = connection.BeginTransaction();
+        using (var check = connection.CreateCommand())
+        {
+            check.Transaction = tx;
+            check.CommandText = """
+                SELECT COUNT(*) FROM InternalBranchAccounts a
+                JOIN Clients child ON child.Id=a.ChildClientId
+                WHERE a.ParentClientId=$Parent AND a.ChildClientId=$Child
+                  AND child.FinancialYear=$Fy AND UPPER(child.Gstin)=$Gstin;
+                """;
+            AddScope(check, parentId, branchId, financialYear, normalized);
+            if (Convert.ToInt32(check.ExecuteScalar()) != 1)
+                throw new InvalidOperationException("Cannot rebase GST sources without exact saved branch ownership.");
+        }
+        var updated = 0;
+        foreach (var table in new[] { "Gstr3bReturns", "GstLedgerPeriods", "GstPortalSourceState" })
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = tx;
+            command.CommandText = $"""
+                UPDATE {table}
+                SET SourcePath=$NewPrefix || substr(SourcePath,length($OldPrefix)+1)
+                WHERE ClientId=$Child AND FinancialYear=$Fy AND UPPER(Gstin)=$Gstin
+                  AND substr(SourcePath,1,length($OldPrefix))=$OldPrefix COLLATE NOCASE;
+                """;
+            AddScope(command, parentId, branchId, financialYear, normalized);
+            command.Parameters.AddWithValue("$OldPrefix", oldPrefix);
+            command.Parameters.AddWithValue("$NewPrefix", newPrefix);
+            updated += command.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return updated;
+    }
+
     private static int MoveNonconflicting(SqliteConnection connection, SqliteTransaction transaction,
         string table, string exclusion, long parentId, long branchId,
         string financialYear, string gstin)
