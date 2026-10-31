@@ -193,9 +193,17 @@
                             Background="{DynamicResource AppBackgroundBrush}"
                             Visibility="{Binding HasBranches, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel>
-                            <TextBlock Text="Branches" FontWeight="SemiBold" FontSize="14"/>
+                            <TextBlock Text="Branches / GSTINs" FontWeight="SemiBold" FontSize="14"/>
                             <TextBlock Text="{Binding BranchCount, StringFormat='{}Branches: {0}'}"
                                        Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,4,0,8"/>
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,7,0,7"
+                                    Visibility="{Binding ShowUnassignedPrimaryGstin, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock Text="Primary GSTIN" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Gstin}" FontSize="10" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </Border>
                             <ItemsControl ItemsSource="{Binding ClientBranches}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
