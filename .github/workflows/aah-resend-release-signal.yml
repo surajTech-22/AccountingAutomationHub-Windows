@@ -1,0 +1,58 @@
+name: AAH Verified Release Re-notification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/aah-resend-release-signal.yml'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing stable release to re-notify (does not rebuild or reinstall)'
+        required: true
+        default: 'v4.0.0.534'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resend:
+    if: ${{ github.repository == 'surajTech-22/AccountingAutomationHub-Windows' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[AAH-RESEND-v4.0.0.534]')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify the EXISTING stable release then resend its exact version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || 'v4.0.0.534' }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/aah-latest.json"
+          python3 - "$RUNNER_TEMP/aah-latest.json" "$RELEASE_TAG" <<'PY'
+          import json, sys
+          item=json.load(open(sys.argv[1], encoding='utf-8'))
+          required={'AAH_App-win-x64.zip','AAH_AutoUpdate.json','AAH_Setup.exe',
+                    'AAH_Update.exe','AAH_Update.exe.sha256'}
+          actual={asset['name'] for asset in item.get('assets', [])}
+          assert item['tag_name']==sys.argv[2], 'Cannot send stale or wrong version'
+          assert not item['draft'] and not item['prerelease'], 'Not a stable release'
+          assert required <= actual, f'Missing verified assets: {required-actual}'
+          print('PASS: existing stable release and update assets verified:', sys.argv[2])
+          PY
+          # This is only a public wakeup. Installed AAH independently verifies
+          # the real GitHub release, protocol and SHA-256 before any update.
+          RESPONSE=$(curl --fail --silent --show-error --max-time 30 --retry 2 \
+            -H "Content-Type: text/plain" \
+            -X POST --data-binary "$RELEASE_TAG" \
+            "https://ntfy.sh/aah-surajtech22-windows-release-signal-v1")
+          NTFY_RESPONSE="$RESPONSE" python3 - "$RELEASE_TAG" <<'PY'
+          import json, os, sys
+          event=json.loads(os.environ['NTFY_RESPONSE'])
+          assert event.get('event')=='message', 'ntfy did not acknowledge a message'
+          assert event.get('topic')=='aah-surajtech22-windows-release-signal-v1'
+          assert event.get('message')==sys.argv[1], 'ntfy returned wrong release'
+          print('PASS: ntfy accepted AAH release resend:', event['message'], 'event ID:', event['id'])
+          PY
