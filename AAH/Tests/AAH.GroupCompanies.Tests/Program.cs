@@ -199,4 +199,22 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
         autom.Contains("BRANCH-CENTRAL-SOURCE-DEFER", StringComparison.Ordinal),
     "branch files could be posted through the parent importer before scope isolation");
 
+
+// Assert WPF pages parse as XML and the active shell never offers the
+// legacy unscoped module menu under Consolidated/Branch selection.
+var mainShellView = File.ReadAllText(Path.Combine(app, "MainWindow.xaml"));
+var scopeView = File.ReadAllText(Path.Combine(app, "Views", "BranchScopePreviewView.xaml"));
+var shellVm = File.ReadAllText(Path.Combine(app, "ViewModels", "MainWindowViewModel.cs"));
+var applicationXaml = File.ReadAllText(Path.Combine(app, "App.xaml"));
+System.Xml.Linq.XDocument.Parse(mainShellView);
+System.Xml.Linq.XDocument.Parse(scopeView);
+System.Xml.Linq.XDocument.Parse(applicationXaml);
+Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
+        scopeView.Contains("SafetyNote", StringComparison.Ordinal) &&
+        applicationXaml.Contains("viewModels:BranchScopePreviewViewModel", StringComparison.Ordinal) &&
+        shellVm.Contains("if (HasBranchWorkspaces) return; // never warm/display unscoped", StringComparison.Ordinal) &&
+        shellVm.Contains("if (client is null || HasBranchWorkspaces) return false;", StringComparison.Ordinal) &&
+        shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(client, branches)", StringComparison.Ordinal),
+    "Consolidated/branch menu did not block the shared parent accounting data page.");
+
 Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts and read-back-only financial summaries.");
