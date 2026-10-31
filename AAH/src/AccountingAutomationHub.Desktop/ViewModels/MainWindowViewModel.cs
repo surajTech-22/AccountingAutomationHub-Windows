@@ -159,6 +159,7 @@ public sealed class MainWindowViewModel :
     private int _visiblePresentationGeneration;
     private int _safePresentationWarmGeneration;
     private NavigationItem? _selectedNavigationItem;
+    private PageViewModel? _selectedNavigationPage;
     private PageViewModel? _currentPage;
     private string _applicationState =
         "Client Directory ready.";
@@ -1077,15 +1078,16 @@ public sealed class MainWindowViewModel :
         {
             if (HasBranchWorkspaces && value is not null && !NavigationItems.Contains(value))
                 return;
-            if (!SetProperty(
-                    ref _selectedNavigationItem,
-                    value) ||
-                value is null)
+            if (!SetProperty(ref _selectedNavigationItem, value))
+                return;
+            if (value is null)
             {
+                _selectedNavigationPage = null;
                 return;
             }
 
             var nextPage = value.PageFactory();
+            _selectedNavigationPage = nextPage;
             if (ReferenceEquals(CurrentPage, nextPage))
             {
                 // Sidebar/workspace rebuilds can temporarily clear and re-select the
@@ -2521,7 +2523,7 @@ public sealed class MainWindowViewModel :
         if (NavigationItems.SequenceEqual(available) &&
             ((SelectedNavigationItem is { } activeItem &&
               activeItem.Title.Equals(previousTitle, StringComparison.OrdinalIgnoreCase) &&
-              CurrentPage is not null) ||
+              ReferenceEquals(CurrentPage, _selectedNavigationPage)) ||
              (SelectedNavigationItem is null && hiddenActivityPageTitle.Length > 0 &&
               hiddenActivityPageTitle.Equals(previousTitle, StringComparison.OrdinalIgnoreCase))))
         {
