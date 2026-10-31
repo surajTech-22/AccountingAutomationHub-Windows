@@ -295,6 +295,34 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       !shellModel.Contains("RefreshAfterCommittedAccountingChange();\n        // Fix118", StringComparison.Ordinal),
     "Unchanged Tally pulses must not reconstruct company selection, metric cards or Consolidated Dashboard.");
 Console.WriteLine("PASS: Tally heartbeat UI stability, stable dropdown selection and consolidated dashboard instance.");
+// Run the ACTUAL production wheel calculation through .NET on all boundaries.
+Check(ConsolidatedDashboardWheelRouting.CanScrollNested(45, 200, +120) &&
+      ConsolidatedDashboardWheelRouting.CanScrollNested(45, 200, -120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(0, 200, +120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(200, 200, -120) &&
+      !ConsolidatedDashboardWheelRouting.CanScrollNested(0, 0, -120),
+    "Nested grids must scroll locally except at their top/bottom boundary.");
+Check(ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, 3) == 248 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, +120, 3) == 152 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(5, 900, 450, +120, 3) == 0 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(895, 900, 450, -120, 3) == 900 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, 0) == 200 &&
+      ConsolidatedDashboardWheelRouting.OuterTarget(200, 900, 450, -120, -1) == 650,
+    "Consolidated wheel distance, Windows settings and viewport boundaries regressed.");
+var consolidatedViewCode = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Views", "ConsolidatedBranchDashboardView.xaml.cs"));
+Check(consolidatedView.Contains("PreviewMouseWheel=\"ConsolidatedScrollViewer_PreviewMouseWheel\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("x:Name=\"ConsolidatedScrollViewer\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("ConsolidatedDashboardWheelRouting.CanScrollNested(", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("ConsolidatedDashboardWheelRouting.OuterTarget(", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("VisualTreeHelper.GetParent(current)", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("outer.ScrollToVerticalOffset(target);", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("if (canScrollHere) return;", StringComparison.Ordinal) &&
+      consolidatedViewCode.Contains("e.Handled = true;", StringComparison.Ordinal) &&
+      !dashboardTallyViewCode.Contains("ConsolidatedScrollViewer_PreviewMouseWheel", StringComparison.Ordinal),
+    "Consolidated must route nested mouse wheel to the outer page while preserving inner grids and normal Dashboard scrolling.");
+Console.WriteLine("PASS: consolidated wheel boundaries, nested Tally panel, branch DataGrid and single outer scroll authority.");
 Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
 Console.WriteLine("PASS: consolidated link remains usable; ordinary parent voucher export is blocked until group XML routing is verified.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
