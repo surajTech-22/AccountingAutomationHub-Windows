@@ -203,10 +203,10 @@ public static class SalesPurchaseSourceCache
         }
     }
 
-    public static bool IsSetHandled(string module, string gstin, string financialYear, string setFingerprint)
+    public static bool IsSetHandled(string module, string gstin, string financialYear, string setFingerprint, long ownerClientId = 0)
     {
         if (string.IsNullOrWhiteSpace(setFingerprint)) return false;
-        var key = BuildHandledSetKey(module, gstin, financialYear);
+        var key = BuildHandledSetKey(module, gstin, financialYear, ownerClientId);
         if (key.Length == 0) return false;
         lock (Gate)
         {
@@ -237,10 +237,11 @@ public static class SalesPurchaseSourceCache
         string financialYear,
         string setFingerprint,
         string accountingSourceFingerprint,
-        string status)
+        string status,
+        long ownerClientId = 0)
     {
         if (string.IsNullOrWhiteSpace(setFingerprint)) return;
-        var key = BuildHandledSetKey(module, gstin, financialYear);
+        var key = BuildHandledSetKey(module, gstin, financialYear, ownerClientId);
         if (key.Length == 0) return;
         lock (Gate)
         {
@@ -250,6 +251,7 @@ public static class SalesPurchaseSourceCache
                 Module = NormalizeModule(module),
                 Gstin = NormalizeGstin(gstin),
                 FinancialYear = NormalizeFinancialYear(financialYear),
+                OwnerClientId = ownerClientId,
                 SetFingerprint = setFingerprint.Trim(),
                 AccountingSourceFingerprint = (accountingSourceFingerprint ?? string.Empty).Trim(),
                 Status = (status ?? string.Empty).Trim(),
@@ -416,7 +418,7 @@ public static class SalesPurchaseSourceCache
             var loaded = JsonSerializer.Deserialize<List<SalesPurchaseHandledSetState>>(gzip) ?? [];
             foreach (var state in loaded)
             {
-                var key = BuildHandledSetKey(state.Module, state.Gstin, state.FinancialYear);
+                var key = BuildHandledSetKey(state.Module, state.Gstin, state.FinancialYear, state.OwnerClientId);
                 if (key.Length == 0 || string.IsNullOrWhiteSpace(state.SetFingerprint)) continue;
                 HandledSets[key] = state;
             }
@@ -499,14 +501,17 @@ public static class SalesPurchaseSourceCache
         return "PURCHASE";
     }
 
-    private static string BuildHandledSetKey(string module, string gstin, string financialYear)
+    private static string BuildHandledSetKey(string module, string gstin, string financialYear, long ownerClientId = 0)
     {
         var normalizedModule = NormalizeModule(module);
         var normalizedGstin = NormalizeGstin(gstin);
         var normalizedFy = NormalizeFinancialYear(financialYear);
-        return normalizedModule.Length == 0 || normalizedGstin.Length != 15 || normalizedFy.Length == 0
-            ? string.Empty
-            : $"{normalizedModule}|{normalizedGstin}|{normalizedFy}";
+        if (normalizedModule.Length == 0 || normalizedGstin.Length != 15 || normalizedFy.Length == 0)
+            return string.Empty;
+        // Preserve existing V1 keys for normal clients. Separate branch books
+        // must not inherit the parent's already-handled marker for the same GSTIN.
+        var oldKey = $"{normalizedModule}|{normalizedGstin}|{normalizedFy}";
+        return ownerClientId > 0 ? oldKey + "|CLIENT:" + ownerClientId : oldKey;
     }
 
     private static string BuildKey(string path, string module, string gstin, string financialYear) =>
@@ -550,6 +555,7 @@ public sealed class SalesPurchaseSourceCacheEntry
 
 public sealed class SalesPurchaseHandledSetState
 {
+    public long OwnerClientId { get; set; }
     public string Module { get; set; } = string.Empty;
     public string Gstin { get; set; } = string.Empty;
     public string FinancialYear { get; set; } = string.Empty;

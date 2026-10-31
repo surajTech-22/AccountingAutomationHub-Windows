@@ -233,11 +233,13 @@ System.Xml.Linq.XDocument.Parse(scopeView);
 System.Xml.Linq.XDocument.Parse(consolidatedView);
 Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewModel", StringComparison.Ordinal) &&
         consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
-        consolidatedView.Contains("ItemsSource=\"{Binding Branches}\"", StringComparison.Ordinal) &&
+        consolidatedView.Contains("ItemsSource=\"{Binding VerifiedBranches}\"", StringComparison.Ordinal) &&
+        consolidatedView.Contains("Text=\"{Binding HistoricalParentSummary}\"", StringComparison.Ordinal) &&
         shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
-Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
+Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
+        mainShellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal) &&
         scopeView.Contains("SafetyNote", StringComparison.Ordinal) &&
         applicationXaml.Contains("viewModels:BranchScopePreviewViewModel", StringComparison.Ordinal) &&
         shellVm.Contains("if (HasBranchWorkspaces && !_isPrivateBranchActive) return;", StringComparison.Ordinal) &&
@@ -446,8 +448,14 @@ finally
 }
 
 var desktopProject = File.ReadAllText(Path.Combine(app, "AccountingAutomationHub.Desktop.csproj"));
-Require(desktopProject.Contains("<Version>4.0.0.536</Version>", StringComparison.Ordinal) &&
-        desktopProject.Contains("<FileVersion>4.0.0.536</FileVersion>", StringComparison.Ordinal),
-    "candidate release version must match the tested Group Companies scope release");
+var versionDoc = System.Xml.Linq.XDocument.Parse(desktopProject);
+var versionValues = versionDoc.Descendants()
+    .Where(x => x.Name.LocalName is "Version" or "AssemblyVersion" or "FileVersion")
+    .Select(x => x.Value).ToArray();
+Require(versionValues.Length == 3 &&
+        versionValues.Distinct(StringComparer.Ordinal).Count() == 1 &&
+        System.Version.TryParse(versionValues[0], out var candidateVersion) &&
+        candidateVersion >= new System.Version(4, 0, 0, 536),
+    "candidate release version must use one consistent version, not an outdated hardcoded 536 gate");
 
 Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts and read-back-only financial summaries.");

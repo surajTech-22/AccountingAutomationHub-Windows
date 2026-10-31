@@ -127,6 +127,21 @@ try
     if(oldStore.GetReturns(oldClient.Id,fy).Count!=2)
         throw new Exception("Migrated GST index still blocks a second registration.");
 
+    // A previously handled parent GSTIN/FY source set must NOT suppress the
+    // same source set when it is first assigned to a private branch ClientId.
+    // Inspect the production cache key without writing any test keys to the
+    // persistent user's cache.
+    var scopedHandledKey = typeof(AccountingAutomationHub.Infrastructure.Imports.SalesPurchaseSourceCache)
+        .GetMethod("BuildHandledSetKey", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new Exception("Grouped source handled-set key is missing.");
+    var parentKey = (string?)scopedHandledKey.Invoke(null, ["Sales", a, fy, 0L]);
+    var branchKey = (string?)scopedHandledKey.Invoke(null, ["Sales", a, fy, 123456L]);
+    var otherBranchKey = (string?)scopedHandledKey.Invoke(null, ["Sales", a, fy, 123457L]);
+    if (string.IsNullOrWhiteSpace(parentKey) || string.IsNullOrWhiteSpace(branchKey) ||
+        parentKey == branchKey || branchKey == otherBranchKey ||
+        !branchKey.Contains("CLIENT:123456", StringComparison.Ordinal))
+        throw new Exception("Historical parent handled flag would suppress branch Sales/Purchase Auto Import.");
+
     Console.WriteLine("PASS: 9/9 multi-GSTIN storage, legacy migration, and merged GST module checks.");
 }
 finally

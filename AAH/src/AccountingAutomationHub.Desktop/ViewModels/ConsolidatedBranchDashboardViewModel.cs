@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Infrastructure.Clients;
 
@@ -27,7 +28,27 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     }
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
+    public ObservableCollection<BranchLedgerReadbackRow> VerifiedBranches { get; } = [];
+    public string HistoricalParentSummary
+    {
+        get
+        {
+            var parent = Branches.FirstOrDefault(x => x.IsLegacyUnassigned);
+            if (parent is null || !parent.HasAnyRecords)
+                return "No unassigned historical parent transactions were found.";
+            return $"Historical parent (reconciliation only): Sales {parent.Sales ?? 0}, Purchase {parent.Purchases ?? 0}, Banking {parent.Banking ?? 0}, Cash {parent.Cash ?? 0}, Journal {parent.Journals ?? 0}. These may overlap manually imported branch records; never add them to the branch totals without source-level verification.";
+        }
+    }
     public string FinancialYear => _financialYear;
+    public int BranchCount => Branches.Count(x => !x.IsLegacyUnassigned);
+    public int VerifiedSalesCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Sales ?? 0);
+    public int VerifiedPurchaseCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Purchases ?? 0);
+    public int VerifiedBankingCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Banking ?? 0);
+    public int VerifiedJournalCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Journals ?? 0);
+    public bool HasUnassignedHistory => Branches.Any(x => x.IsLegacyUnassigned && x.HasAnyRecords);
+    public string ConsolidationNotice => HasUnassignedHistory
+        ? "Historical parent records have not been allocated to branches. These figures deliberately exclude that unverified bucket to avoid double counting."
+        : "Showing source-owned branch records only. Tally balances are not yet reconciled.";
     public string Status
     {
         get => _status;
@@ -45,8 +66,21 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         {
             var snapshot = await Task.Run(() => _readback.Read(_parentClientId, _financialYear));
             Branches.Clear();
-            foreach (var row in snapshot.Branches) Branches.Add(row);
-            Status = $"{snapshot.Branches.Count} accounting scope(s) read from saved SQLite Client/FY ownership.";
+            VerifiedBranches.Clear();
+            foreach (var row in snapshot.Branches)
+            {
+                Branches.Add(row);
+                if (!row.IsLegacyUnassigned) VerifiedBranches.Add(row);
+            }
+            OnPropertyChanged(nameof(HistoricalParentSummary));
+            OnPropertyChanged(nameof(BranchCount));
+            OnPropertyChanged(nameof(VerifiedSalesCount));
+            OnPropertyChanged(nameof(VerifiedPurchaseCount));
+            OnPropertyChanged(nameof(VerifiedBankingCount));
+            OnPropertyChanged(nameof(VerifiedJournalCount));
+            OnPropertyChanged(nameof(HasUnassignedHistory));
+            OnPropertyChanged(nameof(ConsolidationNotice));
+            Status = $"{BranchCount} verified branch book(s) · FY {_financialYear}";
             Warning = snapshot.Warning;
         }
         catch (Exception e)
