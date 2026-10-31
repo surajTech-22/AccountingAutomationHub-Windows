@@ -611,8 +611,9 @@ internal static class Program
             ArgumentList = { "--update-ready=" + token }
         });
         if (launched is null) return false;
-        var limit = DateTime.UtcNow.AddMinutes(3);
-        while (DateTime.UtcNow < limit)
+        // Elapsed timeout must not depend on NTP/Windows clock changes.
+        var restartClock = Stopwatch.StartNew();
+        while (restartClock.Elapsed < TimeSpan.FromMinutes(3))
         {
             if (ready.WaitOne(300))
             {
@@ -697,12 +698,24 @@ internal static class Program
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
+    // UTC stays the machine-readable authority. IST is an explicit display
+    // annotation so Indian operators do not mistake 06:52Z for local 06:52.
+    internal static string FormatTimestamp(DateTimeOffset utcTimestamp)
+    {
+        var utc = utcTimestamp.ToUniversalTime();
+        var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
+        return utc.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
+            " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz",
+                System.Globalization.CultureInfo.InvariantCulture) + "]";
+    }
+
     private static void Log(string message)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            File.AppendAllText(LogPath, DateTime.UtcNow.ToString("O") + " " + message + Environment.NewLine);
+            File.AppendAllText(LogPath, FormatTimestamp(DateTimeOffset.UtcNow) + " " +
+                message + Environment.NewLine);
         }
         catch { }
     }
