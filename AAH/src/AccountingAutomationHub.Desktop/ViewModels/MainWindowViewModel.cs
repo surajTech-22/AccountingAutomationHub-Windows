@@ -2682,7 +2682,10 @@ public sealed class MainWindowViewModel :
         PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ActiveClientContext.CurrentClient))
+        {
             RefreshBranchWorkspaces();
+            _dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive);
+        }
         NotifyWorkspaceChanged();
         ConfirmTopTallyLinkCommand.RaiseCanExecuteChanged();
         OpenLinkedTallyCommand.RaiseCanExecuteChanged();
