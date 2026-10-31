@@ -2519,9 +2519,11 @@ public sealed class MainWindowViewModel :
         // Preserve the existing NavigationItem objects, selected page, WPF frame
         // and scroll state when the computed menu and requested page match.
         if (NavigationItems.SequenceEqual(available) &&
-            SelectedNavigationItem is { } activeItem &&
-            activeItem.Title.Equals(previousTitle, StringComparison.OrdinalIgnoreCase) &&
-            ReferenceEquals(CurrentPage, activeItem.PageFactory() is { } page ? page : null))
+            ((SelectedNavigationItem is { } activeItem &&
+              activeItem.Title.Equals(previousTitle, StringComparison.OrdinalIgnoreCase) &&
+              CurrentPage is not null) ||
+             (SelectedNavigationItem is null && hiddenActivityPageTitle.Length > 0 &&
+              hiddenActivityPageTitle.Equals(previousTitle, StringComparison.OrdinalIgnoreCase))))
         {
             return;
         }
@@ -3328,10 +3330,10 @@ public sealed class MainWindowViewModel :
                 // rebuilding navigation here clears controls, tabs and scroll
                 // positions despite the active Client/FY never changing.
                 if (!(HasBranchWorkspaces && !_isPrivateBranchActive) &&
-                    update.Module is ClientWorkspaceModule.Purchase or
+                    (update.Module is ClientWorkspaceModule.Purchase or
                         ClientWorkspaceModule.Sales or ClientWorkspaceModule.Cash or
                         ClientWorkspaceModule.Stock or ClientWorkspaceModule.Journal or
-                        ClientWorkspaceModule.Actions)
+                        ClientWorkspaceModule.Actions))
                     QueueWorkspaceNavigationRefresh();
             }
             catch (Exception exception)
