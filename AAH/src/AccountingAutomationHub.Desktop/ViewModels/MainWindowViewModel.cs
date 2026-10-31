@@ -2291,6 +2291,12 @@ public sealed class MainWindowViewModel :
             return;
         }
 
+        // Consolidated has its own link but must never export legacy parent
+        // vouchers through the ordinary branch/Client-FY exporter.
+        _dashboardViewModel.SetConsolidatedTallyScope(
+            HasBranchWorkspaces && !_isPrivateBranchActive &&
+            (SelectedBranchWorkspace?.IsConsolidated ?? false));
+
         if (HasBranchWorkspaces && !_isPrivateBranchActive)
         {
             var scope = SelectedBranchWorkspace ?? BranchWorkspaces[0];
