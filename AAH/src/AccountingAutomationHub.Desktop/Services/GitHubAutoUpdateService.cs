@@ -467,6 +467,12 @@ internal static class GitHubAutoUpdateService
             ? thumbprint.ToUpperInvariant() : null;
     }
 
+    // Log in Windows-local time with an explicit UTC offset. This preserves
+    // the exact instant while matching the PC clock (IST is +05:30 on India PCs).
+    // Release ordering and updater decisions do not use this display timestamp.
+    internal static string FormatLocalLogTimestamp(DateTimeOffset instant) =>
+        instant.ToLocalTime().ToString("O", CultureInfo.InvariantCulture);
+
     private static void Log(string line)
     {
         try
@@ -476,7 +482,7 @@ internal static class GitHubAutoUpdateService
                 "AccountingAutomationHub", "AutoUpdateLogs");
             Directory.CreateDirectory(folder);
             File.AppendAllText(Path.Combine(folder, "github-update.log"),
-                DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine,
+                FormatLocalLogTimestamp(DateTimeOffset.UtcNow) + " " + line + Environment.NewLine,
                 Encoding.UTF8);
         }
         catch { /* Update check failures never affect accounting runtime. */ }

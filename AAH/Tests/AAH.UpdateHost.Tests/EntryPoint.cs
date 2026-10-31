@@ -12,6 +12,18 @@ internal static class EntryPoint
 
     private static void Test(string root)
     {
+        // The updater must display PC-local time with an offset, preserving
+        // the original UTC instant used to correlate release event timestamps.
+        var utcEvent = new DateTimeOffset(2026, 10, 31, 6, 19, 33, TimeSpan.Zero);
+        var displayedTime = Program.FormatLocalLogTimestamp(utcEvent);
+        Assert(DateTimeOffset.TryParse(displayedTime,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   System.Globalization.DateTimeStyles.RoundtripKind, out var parsedTime) &&
+               parsedTime.ToUniversalTime() == utcEvent &&
+               parsedTime.Offset == TimeZoneInfo.Local.GetUtcOffset(utcEvent.UtcDateTime),
+            "UpdateHost log timestamp did not retain the UTC instant and PC-local offset.");
+        Console.WriteLine("PASS: updater host logs PC-local offset timestamps without UTC instant loss.");
+
         // An update request must never be able to stop an unrelated process.
         // The production host only signals the already-verified AAH PID.
         var unrelatedShutdownRejected = false;

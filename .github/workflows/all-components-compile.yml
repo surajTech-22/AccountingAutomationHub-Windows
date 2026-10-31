@@ -170,7 +170,7 @@ jobs:
       matrix:
         include:
           - project: AAH.AutoUpdate.Tests
-            marker: 'PASS: 11/11 AAH GitHub auto-update protocol scenarios.'
+            marker: 'PASS: 12/12 AAH GitHub auto-update protocol scenarios.'
           - project: AAH.UpdateHost.Tests
             marker: 'PASS: 8/8 AAH UpdateHost transactional safety scenarios.'
           - project: AAH.BankOcrSafety.Tests
