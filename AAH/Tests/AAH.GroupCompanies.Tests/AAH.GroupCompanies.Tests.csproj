@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/AccountingAutomationHub.Domain/AccountingAutomationHub.Domain.csproj" />
+    <ProjectReference Include="../../src/AccountingAutomationHub.Infrastructure/AccountingAutomationHub.Infrastructure.csproj" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ClientGroupingCatalog.cs" Link="Production/ClientGroupingCatalog.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/GroupCompanyAccountingPolicy.cs" Link="Production/GroupCompanyAccountingPolicy.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/GroupCompanyConsolidationPolicy.cs" Link="Production/GroupCompanyConsolidationPolicy.cs" />
