@@ -638,7 +638,7 @@
                         <CheckBox Content="Enable separate branch accounting books and named Auto Import folders"
                                   IsChecked="{Binding EnableSeparateBranchBooks, Mode=TwoWay}"
                                   FontWeight="SemiBold" Margin="0,3,0,4" />
-                        <TextBlock Text="When enabled, each branch uses its own protected Client/FY accounting identity. Existing data is preserved without automatic reassignment; unverified Tally imports remain blocked."
+                        <TextBlock Text="When enabled, branches use separate protected accounting IDs. Existing records are not moved automatically. Branch folders are prepared, but automatic posting from them and Tally transfers remain blocked until source and ledger reconciliation. Use manual imports inside each branch for now."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,13" />
 
                         <Grid>
