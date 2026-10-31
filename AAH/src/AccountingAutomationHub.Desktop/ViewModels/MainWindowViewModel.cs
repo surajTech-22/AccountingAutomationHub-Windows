@@ -2798,7 +2798,14 @@ public sealed class MainWindowViewModel :
     private void RefreshTopWorkspaceSelectors()
     {
         var current = _clientContext.CurrentClient;
-        var currentIdentity = current is null ? string.Empty : BuildTopClientIdentity(current);
+        // The top Client/FY selectors continue displaying the real parent.
+        // A private branch never becomes another selectable Directory client,
+        // even though all accounting modules run under its isolated ClientId.
+        var branchLink = current is null || NetworkClientRuntime.IsNetworkClient
+            ? null : _privateBranchAccounts.FindByChild(current.Id);
+        var displayedParent = branchLink is null ? current :
+            _clientRepository.GetById(branchLink.ParentClientId);
+        var currentIdentity = displayedParent is null ? string.Empty : BuildTopClientIdentity(displayedParent);
         var priorGuard = _refreshingTopWorkspaceSelectors;
         _refreshingTopWorkspaceSelectors = true;
         try
