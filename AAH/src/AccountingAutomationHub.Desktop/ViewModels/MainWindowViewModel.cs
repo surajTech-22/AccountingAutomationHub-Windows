@@ -1054,8 +1054,20 @@ public sealed class MainWindowViewModel :
         }
     }
 
-    public string TallyConnectionStatus =>
-        _tallyCoordinator.ConnectionStatus;
+    public string TallyConnectionStatus
+    {
+        get
+        {
+            if (_isPrivateBranchActive && _privateBranchParentClientId > 0)
+            {
+                var parentLink = _tallyRepository.GetLinkForClient(_privateBranchParentClientId);
+                return parentLink is null
+                    ? "No existing consolidated Tally company link"
+                    : "Existing consolidated Tally link • " + parentLink.CompanyName;
+            }
+            return _tallyCoordinator.ConnectionStatus;
+        }
+    }
 
     public bool IsTallyConnected =>
         _tallyCoordinator.IsConnected;
@@ -2303,12 +2315,14 @@ public sealed class MainWindowViewModel :
             };
             if (scope.IsConsolidated)
             {
-                var tallyView = new BranchScopePreviewViewModel(
-                    "Tally Import", "Consolidated Tally verification", scope.DisplayName,
-                    scope.ScopeId, scope.FinancialYear,
-                    "Consolidated Tally import is pending source-backed branch ledgers, duplicate-safe DR/CR validation and existing-company read-back. No unverified Tally company or voucher will be created.");
-                choices.Add(new NavigationItem(
-                    "Tally Import", "T", "Blocked until verified branch reconciliation", () => tallyView));
+                // Reopen the existing Tally client page for the existing
+                // consolidated Client/FY. No replacement link or company is
+                // created. The original Tally repository/coordinator remains
+                // authoritative for MasterID, version and duplicate controls.
+                if (CanViewModule(GovernancePermissions.TallyView))
+                    choices.Add(new NavigationItem("Tally Import", "T",
+                        "Existing consolidated Tally company connection",
+                        () => { _tallyClientViewModel.RefreshLocal(); return _tallyClientViewModel; }));
             }
             _selectedNavigationItem = null;
             OnPropertyChanged(nameof(SelectedNavigationItem));
@@ -3037,16 +3051,11 @@ public sealed class MainWindowViewModel :
     }
 
     private bool CanOpenLinkedTally() =>
-        !_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient &&
+        !NetworkClientRuntime.IsNetworkClient &&
         _clientContext.CurrentClient is not null;
 
     private async Task OpenLinkedTallyAsync()
     {
-        if (_isPrivateBranchActive)
-        {
-            ApplicationState = "Use the verified parent Tally company. Private branch linking is disabled until ledger read-back is complete.";
-            return;
-        }
         var client = _clientContext.CurrentClient;
         if (client is null)
         {
@@ -3054,7 +3063,11 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        var link = _tallyRepository.GetLinkForClient(client.Id);
+        // The original saved parent link opens the existing Tally instance.
+        // This never confirms or creates another link for the branch.
+        var linkClient = _isPrivateBranchActive && _privateBranchParentClientId > 0
+            ? _clientRepository.GetById(_privateBranchParentClientId) ?? client : client;
+        var link = _tallyRepository.GetLinkForClient(linkClient.Id);
         if (link is null)
         {
             var message = "This Client/FY does not have a confirmed Tally link yet. Open Tally, select the exact company in the top Tally dropdown and press Link first.";
@@ -3063,7 +3076,7 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        var result = await _tallyApplicationLaunchService.OpenLinkedCompanyAsync(client, link, _tallyCoordinator);
+        var result = await _tallyApplicationLaunchService.OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator);
         ApplicationState = result.Message;
         if (!result.Success)
             MessageBox.Show(result.Message, "Open Linked Tally", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -3072,8 +3085,10 @@ public sealed class MainWindowViewModel :
     private void ShowLinkedTallyInfo()
     {
         var client = _clientContext.CurrentClient;
-        var link = client is null ? null : _tallyRepository.GetLinkForClient(client.Id);
-        var saved = client is null ? null : _tallyApplicationLaunchService.GetSavedLaunchProfile(client.Id);
+        var linkClient = client is not null && _isPrivateBranchActive && _privateBranchParentClientId > 0
+            ? _clientRepository.GetById(_privateBranchParentClientId) ?? client : client;
+        var link = linkClient is null ? null : _tallyRepository.GetLinkForClient(linkClient.Id);
+        var saved = linkClient is null ? null : _tallyApplicationLaunchService.GetSavedLaunchProfile(linkClient.Id);
         var linkedText = link is null
             ? "No confirmed Tally company is linked to the active Client/FY."
             : $"Linked company: {link.CompanyName}\nCompany No.: {(string.IsNullOrWhiteSpace(link.CompanyNumber) ? "Not available" : link.CompanyNumber)}";
