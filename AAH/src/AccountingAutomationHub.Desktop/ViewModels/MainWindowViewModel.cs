@@ -161,6 +161,8 @@ public sealed class MainWindowViewModel :
     private NavigationItem? _selectedNavigationItem;
     private PageViewModel? _selectedNavigationPage;
     private PageViewModel? _currentPage;
+    private ConsolidatedBranchDashboardViewModel? _consolidatedDashboardPage;
+    private ConsolidatedTallyImportViewModel? _consolidatedTallyImportPage;
     private string _applicationState =
         "Client Directory ready.";
     private TopClientWorkspaceChoice? _selectedTopClientChoice;
@@ -2310,12 +2312,20 @@ public sealed class MainWindowViewModel :
             // A navigation/cache update is not a change of Tally company.
             // Preserve the loaded consolidated Dashboard view and its controls
             // while the real accounting ClientId/FY remains unchanged.
+            if (scope.IsConsolidated && _branchWorkspaceProblem.Length == 0)
+            {
+                if (_consolidatedDashboardPage is null ||
+                    _consolidatedDashboardPage.ParentClientId != client.Id ||
+                    !_consolidatedDashboardPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                    _consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel);
+                if (_consolidatedTallyImportPage is null ||
+                    _consolidatedTallyImportPage.ParentClientId != client.Id ||
+                    !_consolidatedTallyImportPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                    _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel);
+            }
+
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
-                ? CurrentPage is ConsolidatedBranchDashboardViewModel existing &&
-                  existing.ParentClientId == client.Id &&
-                  existing.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase)
-                    ? existing
-                    : new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)
+                ? _consolidatedDashboardPage!
                 : new BranchScopePreviewViewModel(
                     "Dashboard", "Account scope / import verification", scope.DisplayName,
                     scope.ScopeId, scope.FinancialYear, note);
@@ -2323,23 +2333,39 @@ public sealed class MainWindowViewModel :
             {
                 new("Dashboard", "⌂", "Source-verified scope overview", () => view)
             };
-            if (scope.IsConsolidated)
+            if (scope.IsConsolidated && _branchWorkspaceProblem.Length == 0 &&
+                CanViewModule(GovernancePermissions.TallyView))
             {
-                // Reopen the existing Tally client page for the existing
-                // consolidated Client/FY. No replacement link or company is
-                // created. The original Tally repository/coordinator remains
-                // authoritative for MasterID, version and duplicate controls.
-                if (CanViewModule(GovernancePermissions.TallyView))
-                    choices.Add(new NavigationItem("Tally Import", "T",
-                        "Existing consolidated Tally company connection",
-                        () => { _tallyClientViewModel.RefreshLocal(); return _tallyClientViewModel; }));
+                // Keep Dashboard's existing Tally panel as-is, but expose the
+                // EXACT SAME link/settings/export design on its own module page.
+                // The generic Tally recovery/import page is not the consolidated
+                // group voucher importer and must never replace these controls.
+                choices.Add(new NavigationItem("Tally Import", "T",
+                    "Consolidated · existing Dashboard Tally link and export design",
+                    () => _consolidatedTallyImportPage!));
             }
+
+            var title = preferredTitle ?? SelectedNavigationItem?.Title ?? "Dashboard";
+            var expected = choices.FirstOrDefault(x =>
+                x.Title.Equals(title, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+            // Snapshot-ready notifications are not navigation actions. Reuse the
+            // current WPF page, controls and scroll without recreating the sidebar.
+            if (NavigationItems.Count == choices.Count &&
+                NavigationItems.Select(x => x.Title).SequenceEqual(
+                    choices.Select(x => x.Title), StringComparer.OrdinalIgnoreCase) &&
+                SelectedNavigationItem is { } selected &&
+                selected.Title.Equals(expected.Title, StringComparison.OrdinalIgnoreCase) &&
+                ReferenceEquals(CurrentPage, _selectedNavigationPage) &&
+                ReferenceEquals(CurrentPage, expected.PageFactory()))
+                return;
+
             _selectedNavigationItem = null;
+            _selectedNavigationPage = null;
             OnPropertyChanged(nameof(SelectedNavigationItem));
             NavigationItems.Clear();
             foreach (var item in choices) NavigationItems.Add(item);
             SelectedNavigationItem = choices.FirstOrDefault(x =>
-                x.Title.Equals(preferredTitle, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+                x.Title.Equals(title, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
             ApplicationState = scope.DisplayName +
                 " · branch-scoped accounting pending verified storage/importer routing; parent records preserved.";
             NotifyWorkspaceChanged();
