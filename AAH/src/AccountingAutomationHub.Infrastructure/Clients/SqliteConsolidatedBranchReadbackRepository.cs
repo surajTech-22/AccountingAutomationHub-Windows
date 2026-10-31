@@ -44,7 +44,7 @@ public sealed class SqliteConsolidatedBranchReadbackRepository
         using (var cmd = db.CreateCommand())
         {
             cmd.CommandText = """
-                SELECT m.ChildClientId, m.BranchId, c.ClientName
+                SELECT m.ChildClientId, m.BranchId, COALESCE(NULLIF(TRIM(c.TradeName), ''), c.ClientName)
                 FROM InternalBranchAccounts m JOIN Clients c ON c.Id=m.ChildClientId
                 WHERE m.ParentClientId=$P AND c.FinancialYear=$FY COLLATE NOCASE AND c.IsArchived=0
                 ORDER BY c.ClientName COLLATE NOCASE;
