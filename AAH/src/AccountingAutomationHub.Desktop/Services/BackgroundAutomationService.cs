@@ -1489,6 +1489,28 @@ public sealed class BackgroundAutomationService : IDisposable
                         else
                             RegisterFolderCore(entry.FolderPath, branchProfile);
                     }
+
+                    // The old multi-GSTIN workflow stored every return,
+                    // ledger and source fingerprint under the parent ClientId.
+                    // Move those records only by exact persisted branch GSTIN.
+                    // This is idempotent and keeps conflicting/period-only data
+                    // at the parent for explicit reconciliation.
+                    var gstMigration = new SqliteGstBranchOwnershipMigration();
+                    var result = gstMigration.Migrate(client.Id, branchProfile.Id,
+                        client.FinancialYear, entry.Gstin);
+                    AutomationDiagnosticLog.Write("BRANCH-GST-MIGRATION",
+                        $"GSTIN {entry.Gstin}: returns={result.ReturnsMoved}, ledgers={result.LedgerPeriodsMoved}, sourceStates={result.PortalSourcesMoved}, bootstrapStates={result.BootstrapStatesMoved}, unresolved={result.UnresolvedConflicts}, unscopedReconciliations={result.ParentReconciliationRows}.",
+                        entry.FolderPath);
+                    // Only an exact GSTIN-named evidence folder with no
+                    // conflicting saved GST rows can be moved automatically.
+                    // Keep files and old paths unchanged if there is any doubt.
+                    if (result.UnresolvedConflicts == 0)
+                        RelocateOwnedGstEvidence(folder.FolderPath, entry.FolderPath,
+                            client.Id, branchProfile.Id, client.FinancialYear,
+                            entry.Gstin, gstMigration);
+                    var linkedChild = _automationRepository.GetByPath(entry.FolderPath);
+                    if (linkedChild is not null && linkedChild.ClientId == branchProfile.Id)
+                        ScheduleRegisteredClientGstBootstrap(linkedChild, branchProfile.Id);
                 }
                 AutomationDiagnosticLog.Write("BRANCH-FOLDER",
                     $"Prepared {entries.Count} named branch Auto Import folders for {client.ClientCode}. Registered GSTIN branches use separate durable ClientId owners; name-only branches remain review-only.",
@@ -1502,6 +1524,45 @@ public sealed class BackgroundAutomationService : IDisposable
             }
         }
         return count;
+    }
+
+    private static void RelocateOwnedGstEvidence(
+        string parentRoot, string branchRoot, long parentId, long branchId,
+        string financialYear, string gstin,
+        SqliteGstBranchOwnershipMigration migration)
+    {
+        var source = Path.Combine(parentRoot, "GST", gstin);
+        var target = Path.Combine(branchRoot, "GST", gstin);
+        if (!Directory.Exists(source)) return;
+        if (new DirectoryInfo(source).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("GST source is a filesystem junction.");
+        if (Directory.Exists(target))
+        {
+            if (Directory.EnumerateFileSystemEntries(target).Any())
+            {
+                AutomationDiagnosticLog.Write("BRANCH-GST-EVIDENCE-REVIEW",
+                    "Both parent and branch have GSTIN evidence folders; retain both without overwrite.",
+                    source);
+                return;
+            }
+            Directory.Delete(target, recursive: false);
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        Directory.Move(source, target);
+        try
+        {
+            var changed = migration.RebaseMovedEvidencePaths(parentId, branchId,
+                financialYear, gstin, source, target);
+            AutomationDiagnosticLog.Write("BRANCH-GST-EVIDENCE",
+                $"Moved exact-GSTIN evidence and updated {changed} saved source paths.",
+                target);
+        }
+        catch
+        {
+            if (!Directory.Exists(source) && Directory.Exists(target))
+                Directory.Move(target, source);
+            throw;
+        }
     }
 
     private static void EnsureClientGstinFolders(
@@ -1612,6 +1673,15 @@ public sealed class BackgroundAutomationService : IDisposable
             {
                 var client = _clientRepository.GetById(clientId);
                 if (client is null || NormalizeGstin(client.Gstin).Length != 15) return;
+                // In separate-books mode the parent is no longer the GSTIN
+                // posting authority. Stop recreating XYZ/GST/<GSTIN> and
+                // importing the same evidence under the parent again.
+                if (_privateBranchAccounts.FindByChild(client.Id) is null &&
+                    _privateBranchAccounts.FindByParent(client.Id).Count > 0 &&
+                    BranchAccountingModePreference.IsEnabled(
+                        _branchPreferenceRepository.Get(
+                            BranchAccountingModePreference.Key(client.Id))))
+                    return;
                 EnsureClientGstinFolders(registration, client);
 
                 // A removed secondary registration's PDFs stay in its old
