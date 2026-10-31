@@ -3450,6 +3450,43 @@ public sealed class BackgroundAutomationService : IDisposable
 
         var target = NormalizeGstin(registrationGstin);
         if (target.Length != 15) return;
+        // Standard shared E-returns source-set discovery previously targeted
+        // only the visible parent Client/GSTIN. When the user opts into separate
+        // branch books, resolve that exact registered GSTIN to its private
+        // accounting ClientId. No change to file parsing, duplicate gates,
+        // validation or the existing Sales/Purchase replacement algorithm.
+        // Missing/ambiguous branch authority must defer, never post to parent.
+        if (BranchAccountingModePreference.IsEnabled(
+            _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(clientId))))
+        {
+            var parent = _clientRepository.GetById(clientId);
+            if (parent is null || parent.IsArchived)
+            {
+                AutomationDiagnosticLog.Write("BRANCH-SOURCE-OWNER-MISSING",
+                    "Cannot resolve active parent Client/FY; source-set retained.", registrationGstin);
+                return;
+            }
+            var registered = ClientBranchCatalog.Resolve(parent,
+                _branchPreferenceRepository.Get(ClientBranchCatalog.Key(clientId)));
+            var matches = registered.Where(b =>
+                b.Gstin.Equals(target, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length != 1)
+            {
+                AutomationDiagnosticLog.Write("BRANCH-SOURCE-AMBIGUOUS",
+                    "A source GSTIN requires one exact registered branch owner; source-set retained.", target);
+                return;
+            }
+            var child = _privateBranchAccounts.GetOrCreate(
+                parent.Id, matches[0].BranchId, matches[0].Name, target);
+            if (!child.FinancialYear.Equals(normalizedFy, StringComparison.OrdinalIgnoreCase) ||
+                !child.Gstin.Equals(target, StringComparison.OrdinalIgnoreCase))
+            {
+                AutomationDiagnosticLog.Write("BRANCH-SOURCE-SCOPE-MISMATCH",
+                    "Branch source-set financial year/GSTIN differs from its durable authority; no import attempted.", target);
+                return;
+            }
+            clientId = child.Id;
+        }
         var key = $"{clientId}|{normalizedFy}|{normalizedModule.ToUpperInvariant()}|{target}";
         _salesPurchaseSetVersions.AddOrUpdate(key, 1L, (_, value) => value + 1L);
         if (!_salesPurchaseSetProcessors.TryAdd(key, 0)) return;
