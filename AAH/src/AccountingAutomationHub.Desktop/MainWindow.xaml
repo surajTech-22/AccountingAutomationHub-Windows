@@ -233,7 +233,7 @@
                     Background="{DynamicResource SidebarBrush}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="150" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="58" />
                         <RowDefinition Height="72" />
@@ -266,15 +266,47 @@
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </Button>
-                    <StackPanel Margin="12,0,12,5"
-                                Visibility="{Binding HasBranchWorkspaces, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock Text="ACCOUNTING SCOPE" Foreground="#94A3B8" FontSize="10"
-                                   FontWeight="SemiBold" Margin="0,0,0,3"/>
-                        <ComboBox ItemsSource="{Binding BranchWorkspaces}"
-                                  SelectedItem="{Binding SelectedBranchWorkspace, Mode=TwoWay}"
-                                  DisplayMemberPath="DisplayName"
-                                  MinHeight="27"
-                                  ToolTip="Consolidated or named branch scope. Unverified branch imports cannot use the parent books."/>
+                    <!-- Branches belong in the left workspace tree, not a Dashboard-only
+                         summary or a scope dropdown. Only explicit separate-books
+                         mode permits selecting the isolated accounting scope. -->
+                    <StackPanel Margin="12,0,12,7"
+                                Visibility="{Binding HasConfiguredBranchWorkspaces, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="BRANCH WORKSPACES" Foreground="#94A3B8" FontSize="10"
+                                   FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding BranchAccountingHint}" Foreground="#94A3B8"
+                                   FontSize="10" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                        <ListBox ItemsSource="{Binding SidebarBranchWorkspaces}"
+                                 SelectedItem="{Binding SelectedSidebarBranchWorkspace, Mode=TwoWay}"
+                                 IsEnabled="{Binding HasBranchWorkspaces}"
+                                 MaxHeight="230" BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 ToolTip="Consolidated and named branch books. Each enabled branch has separate accounting records.">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="{x:Type ListBoxItem}">
+                                    <Setter Property="Padding" Value="10,7"/>
+                                    <Setter Property="Margin" Value="0,2,0,2"/>
+                                    <Setter Property="Foreground" Value="White"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="#1D4ED8"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   Foreground="White" FontSize="12"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Gstin}" Foreground="#B5C5DF"
+                                                   FontSize="10" Margin="0,3,0,0"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </StackPanel>
                     </StackPanel>
 

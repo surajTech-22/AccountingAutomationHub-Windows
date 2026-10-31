@@ -171,6 +171,7 @@ public sealed class MainWindowViewModel :
     private bool _isPrivateBranchActive;
     private readonly SqliteInternalBranchAccountRepository _privateBranchAccounts = new();
     private string _branchWorkspaceProblem = string.Empty;
+    private string _branchParentDisplayName = string.Empty;
 
     public MainWindowViewModel()
         : this(null, null, null, null)
@@ -1107,6 +1108,31 @@ public sealed class MainWindowViewModel :
     // different visual label. Only the unbranched NORMAL scope can post there.
     public ObservableCollection<BranchAccountingWorkspace> BranchWorkspaces { get; } = [];
     public bool HasBranchWorkspaces => BranchWorkspaces.Count > 1;
+
+    // Display every configured branch on the LEFT, even when separate books
+    // have not yet been enabled. Browsing never silently activates a new
+    // accounting importer or reassigns historical parent records.
+    public ObservableCollection<BranchAccountingWorkspace> SidebarBranchWorkspaces { get; } = [];
+    public bool HasConfiguredBranchWorkspaces => SidebarBranchWorkspaces.Count > 1;
+    public string BranchAccountingHint => _branchWorkspaceProblem.Length > 0
+        ? "Branch review required: " + _branchWorkspaceProblem
+        : HasBranchWorkspaces
+            ? "Select Consolidated or a branch"
+            : "Separate books are off. Enable them in Client Directory to open branch modules.";
+    public BranchAccountingWorkspace? SelectedSidebarBranchWorkspace
+    {
+        get => HasBranchWorkspaces ? _selectedBranchWorkspace : SidebarBranchWorkspaces.FirstOrDefault();
+        set
+        {
+            if (value is null || !HasBranchWorkspaces) return;
+            // Match the authoritative, permission-gated accounting scopes, not
+            // arbitrary display rows constructed from GST registrations.
+            var authorizedScope = BranchWorkspaces.FirstOrDefault(x =>
+                x.ScopeId.Equals(value.ScopeId, StringComparison.OrdinalIgnoreCase));
+            if (authorizedScope is not null) SelectedBranchWorkspace = authorizedScope;
+        }
+    }
+
     public BranchAccountingWorkspace? SelectedBranchWorkspace
     {
         get => _selectedBranchWorkspace;
@@ -1177,8 +1203,10 @@ public sealed class MainWindowViewModel :
         try
         {
             BranchWorkspaces.Clear();
+            SidebarBranchWorkspaces.Clear();
             _selectedBranchWorkspace = null;
             _branchWorkspaceProblem = string.Empty;
+            _branchParentDisplayName = string.Empty;
             _privateBranchParentClientId = 0;
             _isPrivateBranchActive = false;
             var current = _clientContext.CurrentClient;
@@ -1190,11 +1218,25 @@ public sealed class MainWindowViewModel :
                 if (parent is null)
                     throw new InvalidOperationException("The private branch parent was not found.");
                 _privateBranchParentClientId = parent.Id;
+                _branchParentDisplayName = parent.ClientName;
                 var separateBooksEnabled = BranchAccountingModePreference.IsEnabled(
                     _applicationPreferences.Get(BranchAccountingModePreference.Key(parent.Id)));
+                var configuredBranches = ClientBranchCatalog.Resolve(parent,
+                    _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
+                // Navigation visibility and accounting activation are separate.
+                // GSTIN registration displays a branch, but cannot turn on
+                // private books or send its imports into the old parent ledger.
+                try
+                {
+                    foreach (var scope in BranchAccountingWorkspaceCatalog.Build(parent, configuredBranches))
+                        SidebarBranchWorkspaces.Add(scope);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _branchWorkspaceProblem = ex.Message;
+                }
                 var branches = separateBooksEnabled
-                    ? ClientBranchCatalog.Resolve(parent,
-                        _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)))
+                    ? configuredBranches
                     : Array.Empty<ClientBranchRecord>();
                 try
                 {
@@ -1223,10 +1265,18 @@ public sealed class MainWindowViewModel :
                         parent.Id, parent.FinancialYear, "REVIEW",
                         "Branch configuration blocked", "", "", false, ["Branch Overview"], false));
                     _selectedBranchWorkspace = BranchWorkspaces[0];
+                    if (SidebarBranchWorkspaces.Count < 2)
+                    {
+                        SidebarBranchWorkspaces.Clear();
+                        foreach (var scope in BranchWorkspaces) SidebarBranchWorkspaces.Add(scope);
+                    }
                 }
             }
             OnPropertyChanged(nameof(SelectedBranchWorkspace));
+            OnPropertyChanged(nameof(SelectedSidebarBranchWorkspace));
             OnPropertyChanged(nameof(HasBranchWorkspaces));
+            OnPropertyChanged(nameof(HasConfiguredBranchWorkspaces));
+            OnPropertyChanged(nameof(BranchAccountingHint));
         }
         finally { _refreshingBranchWorkspaces = false; }
     }
@@ -1563,7 +1613,7 @@ public sealed class MainWindowViewModel :
 
     public string WorkspaceButtonText =>
         HasActiveWorkspace
-            ? $"←  {CurrentClient}"
+            ? $"←  {(_isPrivateBranchActive && _branchParentDisplayName.Length > 0 ? _branchParentDisplayName : CurrentClient)}"
             : "Client Directory";
 
     public string ApplicationState
