@@ -4700,13 +4700,22 @@ public sealed class DashboardViewModel :
         });
     }
 
+    private void UpdateAutoImportMetricsIfChanged(IReadOnlyList<DashboardAccountingMetric> updated)
+    {
+        if (AutoImportSummaryMetrics.Count == updated.Count &&
+            AutoImportSummaryMetrics.Select((item, i) => SameAccountingMetric(item, updated[i])).All(same => same))
+            return;
+        AutoImportSummaryMetrics.Clear();
+        foreach (var metric in updated) AutoImportSummaryMetrics.Add(metric);
+    }
+
     private void RefreshAutoImportPanel()
     {
         var client = _clientContext.CurrentClient;
-        RecentAutoImportFiles.Clear();
-        AutoImportSummaryMetrics.Clear();
+        if (RecentAutoImportFiles.Count > 0) RecentAutoImportFiles.Clear();
         if (client is null)
         {
+            UpdateAutoImportMetricsIfChanged([]);
             AutoImportSummary = "Open a client to view Auto Import activity.";
             AutoImportModules = "Modules: —";
             AutoImportHealthState = "Neutral";
@@ -4724,9 +4733,10 @@ public sealed class DashboardViewModel :
         // Dashboard never scans history, source folders, Bank/Purchase/Sales repositories,
         // or reconstructs duplicate/coverage state when a client is opened.
         var output = _automationService.GetDashboardOutput(client.Id, client.FinancialYear);
+        var newMetrics = new List<DashboardAccountingMetric>();
         foreach (var metric in output.Metrics)
         {
-            AutoImportSummaryMetrics.Add(new DashboardAccountingMetric
+            newMetrics.Add(new DashboardAccountingMetric
             {
                 Label = metric.Label, Value = metric.Value, Detail = metric.Detail,
                 TargetPage = metric.Label.Equals("Banking", StringComparison.OrdinalIgnoreCase) ? "Banking" : metric.Label,
@@ -4735,14 +4745,15 @@ public sealed class DashboardViewModel :
         }
         foreach (var module in new[] { "Banking", "Purchase", "Sales" })
         {
-            if (AutoImportSummaryMetrics.Any(metric => metric.Label.Equals(module, StringComparison.OrdinalIgnoreCase))) continue;
-            AutoImportSummaryMetrics.Add(new DashboardAccountingMetric
+            if (newMetrics.Any(metric => metric.Label.Equals(module, StringComparison.OrdinalIgnoreCase))) continue;
+            newMetrics.Add(new DashboardAccountingMetric
             {
                 Label = module, Value = 0, Detail = "0 automatic transactions",
                 TargetPage = module, StatusState = "Grey"
             });
         }
 
+        UpdateAutoImportMetricsIfChanged(newMetrics);
         AutoImportSuccessfulFiles = output.SuccessfulFiles;
         AutoImportTransactionCount = output.TransactionCount;
         AutoImportErrorCount = output.ErrorCount;
