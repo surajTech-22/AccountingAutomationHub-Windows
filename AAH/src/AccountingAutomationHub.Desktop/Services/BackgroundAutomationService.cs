@@ -3222,7 +3222,18 @@ public sealed class BackgroundAutomationService : IDisposable
                 {
                     var cachedInfo = new FileInfo(path);
                     if (!cachedInfo.Exists) return;
-                    if (SalesPurchaseSourceCache.IsPathMetadataCurrentAndHandled(
+                    // Parent V1 cache state cannot prove that a newly enabled
+                    // private branch owns imported rows. Index historical linked
+                    // sources again, then let the branch ClientId's duplicate gate
+                    // decide whether an accounting import is actually required.
+                    var needsBranchReconciliation = _automationRepository.GetFolders().Any(f =>
+                        !f.IsPaused && Directory.Exists(f.FolderPath) &&
+                        IsPathInsideFolder(path, f.FolderPath) &&
+                        (_privateBranchAccounts.FindByChild(f.ClientId) is not null ||
+                         BranchAccountingModePreference.IsEnabled(
+                             _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(f.ClientId)))));
+                    if (!needsBranchReconciliation &&
+                        SalesPurchaseSourceCache.IsPathMetadataCurrentAndHandled(
                             path, cachedInfo.Length, cachedInfo.LastWriteTimeUtc))
                     {
                         _salesPurchaseObservedStates[path] = $"{cachedInfo.Length}:{cachedInfo.LastWriteTimeUtc.Ticks}";
