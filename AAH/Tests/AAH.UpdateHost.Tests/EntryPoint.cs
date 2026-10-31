@@ -200,7 +200,7 @@ internal static class EntryPoint
         try
         {
             Test(temp);
-            Console.WriteLine("PASS: AAH UpdateHost transactional, multi-process shutdown and restart-readiness regressions.");
+            Console.WriteLine("PASS: 8/8 AAH UpdateHost transactional safety scenarios.");
             return 0;
         }
         finally
