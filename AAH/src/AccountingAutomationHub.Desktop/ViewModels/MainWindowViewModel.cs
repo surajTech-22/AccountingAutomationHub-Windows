@@ -909,10 +909,10 @@ public sealed class MainWindowViewModel :
         OpenSettingsCommand = new RelayCommand(OpenSettings);
         RefreshTallyCommand = new AsyncRelayCommand(
             () => _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true),
-            () => !_isPrivateBranchActive && !_tallyCoordinator.IsBusy);
+            () => !_tallyCoordinator.IsBusy);
         ConfirmTopTallyLinkCommand = new AsyncRelayCommand(
             ConfirmTopTallyLinkAsync,
-            () => !_isPrivateBranchActive && _clientContext.CurrentClient is not null && SelectedTallyCompany is not null && !_tallyCoordinator.IsBusy);
+            () => _clientContext.CurrentClient is not null && SelectedTallyCompany is not null && !_tallyCoordinator.IsBusy);
         OpenLinkedTallyCommand = new AsyncRelayCommand(
             OpenLinkedTallyAsync,
             CanOpenLinkedTally);
@@ -1054,30 +1054,15 @@ public sealed class MainWindowViewModel :
         }
     }
 
+    // The current private branch / Consolidated ClientId alone owns this link.
     public string TallyLinkActionLabel =>
-        _isPrivateBranchActive && _privateBranchParentClientId > 0 &&
-        _tallyRepository.GetLinkForClient(_privateBranchParentClientId) is not null
-            ? "Linked" : "Link";
+        _clientContext.CurrentClient is { } current &&
+        _tallyRepository.GetLinkForClient(current.Id) is not null ? "Linked" : "Link";
 
     public string TallyLinkActionTooltip =>
-        _isPrivateBranchActive
-            ? "Uses the existing consolidated Tally company link. No second link is required. Branch voucher posting needs verified branch-ledger mapping."
-            : "Link the selected Tally CompanyKey through the existing AAH client link workflow.";
+        "Link the selected Tally CompanyKey only to the active Client/FY accounting scope.";
 
-    public string TallyConnectionStatus
-    {
-        get
-        {
-            if (_isPrivateBranchActive && _privateBranchParentClientId > 0)
-            {
-                var parentLink = _tallyRepository.GetLinkForClient(_privateBranchParentClientId);
-                return parentLink is null
-                    ? "No existing consolidated Tally company link"
-                    : "Existing consolidated Tally link • " + parentLink.CompanyName;
-            }
-            return _tallyCoordinator.ConnectionStatus;
-        }
-    }
+    public string TallyConnectionStatus => _tallyCoordinator.ConnectionStatus;
 
     public bool IsTallyConnected =>
         _tallyCoordinator.IsConnected;
@@ -1955,9 +1940,6 @@ public sealed class MainWindowViewModel :
     {
         var client = _clientContext.CurrentClient;
         if (client is null || (HasBranchWorkspaces && !_isPrivateBranchActive)) return false;
-        if (_isPrivateBranchActive && title.Equals("Tally", StringComparison.OrdinalIgnoreCase))
-            return false; // branch Tally posting not yet verified
-
         if (title.Equals("GST", StringComparison.OrdinalIgnoreCase) && (!HasValidGstin(client) || !CanViewModule(GovernancePermissions.GstView)))
             return false;
         if (title.Equals("Banking", StringComparison.OrdinalIgnoreCase) && !CanViewModule(GovernancePermissions.BankView)) return false;
@@ -2498,7 +2480,7 @@ public sealed class MainWindowViewModel :
         }
         if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.ReadData)) available.Add(_portalLoginsNavigationItem);
         if (CanViewModule(GovernancePermissions.ReadData)) available.Add(_taxCreditNavigationItem);
-        if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView)) available.Add(_tallyNavigationItem);
+        if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView)) available.Add(_tallyNavigationItem);
         // R42 Mobile Link is a Client/FY module on the Main Server Windows app. Android
         // authentication and access checks remain enforced by SecureLanServerService.
         if (!NetworkClientRuntime.IsNetworkClient && _secureLanServerService is not null && CanViewModule(GovernancePermissions.ReadData)) available.Add(_mobileLinkNavigationItem);
@@ -3076,10 +3058,8 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        // The original saved parent link opens the existing Tally instance.
-        // This never confirms or creates another link for the branch.
-        var linkClient = _isPrivateBranchActive && _privateBranchParentClientId > 0
-            ? _clientRepository.GetById(_privateBranchParentClientId) ?? client : client;
+        // Open ONLY this active Client/FY's independently linked Tally company.
+        var linkClient = client;
         var link = _tallyRepository.GetLinkForClient(linkClient.Id);
         if (link is null)
         {
@@ -3098,8 +3078,7 @@ public sealed class MainWindowViewModel :
     private void ShowLinkedTallyInfo()
     {
         var client = _clientContext.CurrentClient;
-        var linkClient = client is not null && _isPrivateBranchActive && _privateBranchParentClientId > 0
-            ? _clientRepository.GetById(_privateBranchParentClientId) ?? client : client;
+        var linkClient = client;
         var link = linkClient is null ? null : _tallyRepository.GetLinkForClient(linkClient.Id);
         var saved = linkClient is null ? null : _tallyApplicationLaunchService.GetSavedLaunchProfile(linkClient.Id);
         var linkedText = link is null
@@ -3125,11 +3104,6 @@ public sealed class MainWindowViewModel :
 
     private async Task ConfirmTopTallyLinkAsync()
     {
-        if (_isPrivateBranchActive)
-        {
-            ApplicationState = "Branch Tally linking is disabled until the saved parent company and branch ledgers pass verified read-back.";
-            return;
-        }
         var client = _clientContext.CurrentClient;
         if (client is null)
         {
