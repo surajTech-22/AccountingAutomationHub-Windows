@@ -93,6 +93,7 @@ public sealed partial class ClientManagementViewModel :
     private string _gstin = string.Empty;
     private string _additionalGstinsText = string.Empty;
     private string _branchEntriesText = string.Empty;
+    private bool _enableSeparateBranchBooks;
     private string _pan = string.Empty;
     private string _state = string.Empty;
     private string _financialYear = string.Empty;
@@ -759,6 +760,12 @@ public sealed partial class ClientManagementViewModel :
     {
         get => _branchEntriesText;
         set => SetProperty(ref _branchEntriesText, value ?? string.Empty);
+    }
+
+    public bool EnableSeparateBranchBooks
+    {
+        get => _enableSeparateBranchBooks;
+        set => SetProperty(ref _enableSeparateBranchBooks, value);
     }
 
     public string Pan
@@ -2999,6 +3006,7 @@ public sealed partial class ClientManagementViewModel :
             Gstin = string.Empty;
             AdditionalGstinsText = string.Empty;
             BranchEntriesText = string.Empty;
+            EnableSeparateBranchBooks = false;
             Pan = string.Empty;
             State = string.Empty;
             FinancialYear = GetDefaultFinancialYear();
@@ -3061,6 +3069,8 @@ public sealed partial class ClientManagementViewModel :
             AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
             BranchEntriesText = ClientBranchCatalog.Format(ClientBranchCatalog.Resolve(
                 client, _preferenceRepository.Get(ClientBranchCatalog.Key(client.Id))));
+            EnableSeparateBranchBooks = BranchAccountingModePreference.IsEnabled(
+                _preferenceRepository.Get(BranchAccountingModePreference.Key(client.Id)));
             Pan = client.Pan;
             State = client.State;
             FinancialYear = client.FinancialYear;
@@ -3217,6 +3227,31 @@ public sealed partial class ClientManagementViewModel :
             var branches = ClientBranchCatalog.Reconcile(
                 EditingId, parsedBranches, existingBranches);
             var enteredAdditional = ClientBranchCatalog.AdditionalGstins(branches, normalizedGstin, normalizedPan);
+            // The previous multi-GSTIN flow remains merged/GST-wise until the
+            // user explicitly opts into separate branch books. Once internal
+            // accounting IDs exist, never silently orphan or reassign them.
+            var privateBranchAccounts = EditingId > 0
+                ? new AccountingAutomationHub.Infrastructure.Clients.SqliteInternalBranchAccountRepository()
+                    .FindByParent(EditingId)
+                : Array.Empty<AccountingAutomationHub.Infrastructure.Clients.InternalBranchAccountLink>();
+            if (!EnableSeparateBranchBooks && privateBranchAccounts.Count > 0)
+                throw new InvalidOperationException(
+                    "Separate branch accounting cannot be turned off while saved private branch books exist. Reconcile them first.");
+            if (EnableSeparateBranchBooks && branches.Count == 0)
+                throw new InvalidOperationException(
+                    "Add at least one branch before enabling separate accounting books.");
+            foreach (var privateAccount in privateBranchAccounts)
+            {
+                var savedBranch = branches.FirstOrDefault(x =>
+                    x.BranchId.Equals(privateAccount.BranchId, StringComparison.OrdinalIgnoreCase));
+                if (savedBranch is null)
+                    throw new InvalidOperationException(
+                        "Cannot remove or rename a branch with separate accounting records without an explicit scope migration.");
+                var child = _repository.GetById(privateAccount.ChildClientId);
+                if (child is null || !child.Gstin.Equals(savedBranch.Gstin, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Branch GSTIN changed after private accounting began; export/migration review is required.");
+            }
             AdditionalGstinsText = string.Join(Environment.NewLine, enteredAdditional);
             var newlyAdded = enteredAdditional
                 .Except(priorAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -3255,9 +3290,12 @@ public sealed partial class ClientManagementViewModel :
             // Branches are metadata on this Client, not separate Client/FY records.
             // Save after the validated profile; existing GST-wise import remains unchanged.
             _preferenceRepository.Set(ClientBranchCatalog.Key(saved.Id), ClientBranchCatalog.Serialize(branches));
-            // Also set up every branch's module folders immediately on Save,
-            // without waiting for the background watcher to refresh its cache.
-            _automationService?.EnsureBranchFoldersForClient(saved.Id, branches);
+            _preferenceRepository.Set(BranchAccountingModePreference.Key(saved.Id),
+                EnableSeparateBranchBooks ? "true" : "false");
+            // Branch accounting folders are opt-in. An ordinary multi-GSTIN
+            // Client retains its previous GST-wise Auto Import folder structure.
+            if (EnableSeparateBranchBooks)
+                _automationService?.EnsureBranchFoldersForClient(saved.Id, branches);
 
             // Fix137 R41: every newly-created Client/FY starts with the canonical Tally
             // chart instead of an empty Master Centre. This includes Previous-FY profile
