@@ -142,6 +142,31 @@ if (OperatingSystem.IsWindows())
 }
 Pass("unsigned executable never gains trusted release authority");
 
+// Simulate two running AAH processes with the same release notification.
+// Only one may write the staging cache. Each verified updater executable gets
+// its own immutable path so a running host can never lock a new download.
+var stageRoot = Path.Combine(Path.GetTempPath(),
+    "AAH-GitHub-Stage-Test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    using (var lock1 = GitHubAutoUpdateService.TryAcquireStagingLock(stageRoot))
+    {
+        Require(lock1 is not null, "first update staging lock was refused");
+        using var lock2 = GitHubAutoUpdateService.TryAcquireStagingLock(stageRoot);
+        Require(lock2 is null, "second process could overwrite a concurrently staged updater");
+    }
+    using (var lock3 = GitHubAutoUpdateService.TryAcquireStagingLock(stageRoot))
+        Require(lock3 is not null, "staging lock was not released after host stopped");
+    var firstAttempt = GitHubAutoUpdateService.GetUpdaterAttemptDirectory(stageRoot, "v4.0.0.535");
+    var secondAttempt = GitHubAutoUpdateService.GetUpdaterAttemptDirectory(stageRoot, "v4.0.0.535");
+    Require(firstAttempt != secondAttempt &&
+        Path.GetDirectoryName(firstAttempt) == GitHubAutoUpdateService.GetReleaseCacheDirectory(stageRoot, "v4.0.0.535") &&
+        Path.GetDirectoryName(secondAttempt) == Path.GetDirectoryName(firstAttempt),
+        "repeat updater attempts reused an executable path and could hit a Windows file lock");
+}
+finally { try { Directory.Delete(stageRoot, recursive: true); } catch { } }
+Pass("cross-process staging lock and immutable per-attempt executable paths");
+
 // Cache cleanup must remove past updater copies, not workspace/data folders.
 var cache = Path.Combine(Path.GetTempPath(), "AAH-GitHub-Cache-Test-" + Guid.NewGuid().ToString("N"));
 try
