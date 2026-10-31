@@ -101,7 +101,22 @@ internal static class TallyBranchMasterPlannerTests
 
         Reject(() => Build(verified: false), "stale Tally authority");
         Reject(() => Build(branches: [Branches[0]]), "missing second branch");
-        Reject(() => Build(branches: [Branches[0], Branches[0] with { BranchId = "KA-2" }]), "duplicate GSTIN");
+        var sameRegistration = Build(branches:
+        [
+            Branches[0],
+            Branches[0] with { ClientId = 103, BranchId = "KA-2", DisplayName = "Mysuru" }
+        ]);
+        Check(sameRegistration.Groups.Any(x => x.Name == "Mysuru Banks") &&
+              sameRegistration.Groups.Any(x => x.Name == "Karnataka Banks"),
+              "Two physical branches under one GSTIN must retain different ledger groups.");
+        var noRegistration = Build(branches:
+        [
+            Branches[0],
+            Branches[1] with { Gstin = "" }
+        ]);
+        Check(noRegistration.Groups.Any(x => x.BranchId == "TN-1"),
+              "Name-only branches under one PAN must also receive mandatory groups.");
+        Reject(() => Build(branches: [Branches[0], Branches[0]]), "duplicate branch identity");
         Reject(() => Build(branches: [Branches[0], Branches[1] with { Pan = "ABCDE1234G" }]), "different PAN");
         Reject(() => Build(branches: [Branches[0], Branches[1] with { FinancialYear = "2026-27" }]), "cross FY");
         Reject(() => Build(branches: [Branches[0], Branches[1] with { DisplayName = "Karnataka" }]), "duplicate group names");
