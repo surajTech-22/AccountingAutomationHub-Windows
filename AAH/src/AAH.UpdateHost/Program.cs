@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -611,8 +612,10 @@ internal static class Program
             ArgumentList = { "--update-ready=" + token }
         });
         if (launched is null) return false;
-        var limit = DateTime.UtcNow.AddMinutes(3);
-        while (DateTime.UtcNow < limit)
+        // Use a monotonic elapsed timer: Windows clock corrections, DST and
+        // timezone changes must not lengthen or shorten the restart budget.
+        var readinessTimer = Stopwatch.StartNew();
+        while (readinessTimer.Elapsed < TimeSpan.FromMinutes(3))
         {
             if (ready.WaitOne(300))
             {
@@ -697,12 +700,17 @@ internal static class Program
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
+    // Show the local wall clock and its UTC offset, without changing the
+    // release verifier's UTC semantics or imposing a particular timezone.
+    internal static string FormatLocalLogTimestamp(DateTimeOffset instant) =>
+        instant.ToLocalTime().ToString("O", CultureInfo.InvariantCulture);
+
     private static void Log(string message)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            File.AppendAllText(LogPath, DateTime.UtcNow.ToString("O") + " " + message + Environment.NewLine);
+            File.AppendAllText(LogPath, FormatLocalLogTimestamp(DateTimeOffset.UtcNow) + " " + message + Environment.NewLine);
         }
         catch { }
     }
