@@ -32,6 +32,18 @@ public partial class DashboardView : UserControl
     private string _tallyLogoFinancialYear = string.Empty;
     private string _tallyLogoVerifiedIdentity = string.Empty;
 
+    // The consolidated workspace projects the exact original Tally Link and
+    // Export/Auto Sync card without copying commands, state or XML writers.
+    public static readonly DependencyProperty TallyOnlyModeProperty =
+        DependencyProperty.Register(nameof(TallyOnlyMode), typeof(bool), typeof(DashboardView),
+            new PropertyMetadata(false));
+
+    public bool TallyOnlyMode
+    {
+        get => (bool)GetValue(TallyOnlyModeProperty);
+        set => SetValue(TallyOnlyModeProperty, value);
+    }
+
     public DashboardView()
     {
         InitializeComponent();
@@ -132,6 +144,15 @@ public partial class DashboardView : UserControl
 
     private void DashboardView_Loaded(object sender, RoutedEventArgs e)
     {
+        // Keep the original dashboard untouched. In Consolidated, hide all
+        // unrelated parent-client cards, which would otherwise misrepresent
+        // unassigned legacy records as branch-owned consolidated balances.
+        if (TallyOnlyMode)
+        {
+            foreach (UIElement child in DashboardContentSections.Children)
+                if (!ReferenceEquals(child, DashboardTallyPanel))
+                    child.Visibility = Visibility.Collapsed;
+        }
         var window = Window.GetWindow(this);
         if (!ReferenceEquals(_hostWindow, window))
         {
