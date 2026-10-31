@@ -78,7 +78,11 @@ try
 {
     Directory.CreateDirectory(tempBranchesRoot);
     var trees = ClientBranchAutoImportLayout.Ensure(tempBranchesRoot, plain.Id, stableIds);
-    Check(trees.Count == 4, "Expected one physical branch tree per durable branch.");
+    Check(trees.Count == 4, "Expected one physical branch root per durable branch.");
+    Check(trees.All(x => Path.GetDirectoryName(x.FolderPath)!.Equals(
+              tempBranchesRoot, StringComparison.OrdinalIgnoreCase)) &&
+          !Directory.Exists(Path.Combine(tempBranchesRoot, "Branches")),
+          "XYZ must directly contain named branch folders; do not create XYZ/Branches.");
     Check(trees.All(x => Directory.Exists(x.FolderPath) &&
                          File.Exists(Path.Combine(x.FolderPath, ClientBranchAutoImportLayout.Marker)) &&
                          !Directory.Exists(Path.Combine(x.FolderPath, "Banking")) &&
@@ -89,7 +93,8 @@ try
     var statement = Path.Combine(trees[0].FolderPath, "test-bank.xlsx");
     File.WriteAllText(statement, "Synthetic branch-owned source; never imported");
     Check(ClientBranchAutoImportLayout.TryResolve(tempBranchesRoot, statement, out var found) &&
-          found!.ClientId == plain.Id && found.BranchId == stableIds[0].BranchId,
+          found!.ClientId == plain.Id && found.BranchId == stableIds[0].BranchId &&
+          ClientBranchAutoImportLayout.IsWithinBranchPath(tempBranchesRoot, statement),
         "Flat branch file did not resolve to its durable owner.");
     Check(!ClientBranchAutoImportLayout.TryResolve(tempBranchesRoot,
           Path.Combine(tempBranchesRoot, "Banking", "unscoped.xlsx"), out _),
@@ -112,7 +117,7 @@ try
     var empty = Path.Combine(Path.GetTempPath(), "AAH-NormalClientTest-" + Guid.NewGuid().ToString("N"));
     Check(ClientBranchAutoImportLayout.Ensure(empty, plain.Id, []).Count == 0 &&
           !Directory.Exists(empty), "Unbranched client must not create a Branches directory.");
-    var unclaimed = Path.Combine(tempBranchesRoot, "Branches", "Unclaimed");
+    var unclaimed = Path.Combine(tempBranchesRoot, "Unclaimed");
     Directory.CreateDirectory(unclaimed);
     File.WriteAllText(Path.Combine(unclaimed, "source.xlsx"), "must not be claimed");
     try
@@ -123,6 +128,29 @@ try
     }
     catch (InvalidOperationException ex) when (ex.Message.Contains("Unowned branch", StringComparison.OrdinalIgnoreCase)) { }
     Check(File.Exists(Path.Combine(unclaimed, "source.xlsx")), "Unclaimed folder contents were modified.");
+
+    // Upgrade an existing v536-v538 nested branch without deleting any
+    // user files, losing the marker, or claiming unrelated folders.
+    var migrate = Path.Combine(tempBranchesRoot, "LegacyMigration");
+    Directory.CreateDirectory(migrate);
+    var legacyContainer = Path.Combine(migrate, "Branches");
+    var oldBranch = Path.Combine(legacyContainer, "Old Branch");
+    Directory.CreateDirectory(oldBranch);
+    var migrateBranch = stableIds[0];
+    File.WriteAllText(Path.Combine(oldBranch, ClientBranchAutoImportLayout.Marker),
+        System.Text.Json.JsonSerializer.Serialize(new
+        { ClientId = plain.Id, BranchId = migrateBranch.BranchId, Gstin = migrateBranch.Gstin }));
+    File.WriteAllText(Path.Combine(oldBranch, "purchase.xlsx"), "KEEP");
+    var moved = ClientBranchAutoImportLayout.Ensure(migrate, plain.Id,
+        [new ClientBranchRecord { BranchId = migrateBranch.BranchId,
+            Name = migrateBranch.Name, Gstin = migrateBranch.Gstin }]);
+    Check(moved.Count == 1 &&
+          Path.GetDirectoryName(moved[0].FolderPath)!.Equals(migrate, StringComparison.OrdinalIgnoreCase) &&
+          File.Exists(Path.Combine(moved[0].FolderPath, "purchase.xlsx")) &&
+          ClientBranchAutoImportLayout.TryResolve(migrate,
+              Path.Combine(moved[0].FolderPath, "purchase.xlsx"), out var upgraded) &&
+          upgraded!.BranchId == migrateBranch.BranchId,
+          "Legacy marked branch folder was not moved safely to the XYZ root.");
 }
 finally { try { Directory.Delete(tempBranchesRoot, recursive: true); } catch { } }
 
@@ -182,5 +210,20 @@ Check(shellView.Contains("ItemsSource=\"{Binding SidebarBranchWorkspaces}\"", St
       shellModel.Contains("var branches = separateBooksEnabled", StringComparison.Ordinal) &&
       shellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal),
       "Branch hierarchy is not rendered in the left sidebar or posting safety was bypassed.");
+var consolidatedView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Views", "ConsolidatedBranchDashboardView.xaml"));
+Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComparison.Ordinal) &&
+      !shellModel.Contains("\"Dashboard\", \"Separate branch accounting overview\"", StringComparison.Ordinal) &&
+      shellView.Contains("Text=\"{Binding WorkspacePageTitle}\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("Text=\"Client Identity\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("Text=\"Accounting Activity\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("Text=\"Auto Import Activity\"", StringComparison.Ordinal) &&
+      consolidatedView.Contains("Style=\"{StaticResource CardBorderStyle}\"", StringComparison.Ordinal),
+    "Branch must use native Dashboard and Consolidated must keep the original dashboard design.");
+Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringComparison.Ordinal) &&
+      automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
+      automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
+    "Flat branch import ownership/history or parent watcher exclusion is missing.");
+Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");
