@@ -220,6 +220,13 @@ Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComp
       consolidatedView.Contains("Text=\"Auto Import Activity\"", StringComparison.Ordinal) &&
       consolidatedView.Contains("Style=\"{StaticResource CardBorderStyle}\"", StringComparison.Ordinal),
     "Branch must use native Dashboard and Consolidated must keep the original dashboard design.");
+var dashboardNative = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+Check(dashboardNative.Contains("public bool ShowTallyPanel => !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
+      dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
+      dashboardView.Contains("Visibility=\"{Binding ShowTallyPanel", StringComparison.Ordinal) &&
+      shellModel.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
+    "Native branch Dashboard must not enable Tally export/autosync before verified branch-company authority.");
 Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringComparison.Ordinal) &&
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
