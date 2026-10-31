@@ -75,6 +75,13 @@
                 <Setter Property="behaviors:DataGridColumnFilterBehavior.IsEnabled" Value="True" />
             </Style>
 
+            <DataTemplate DataType="{x:Type viewModels:ConsolidatedBranchDashboardViewModel}">
+                <views:ConsolidatedBranchDashboardView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:BranchScopePreviewViewModel}">
+                <views:BranchScopePreviewView />
+            </DataTemplate>
+
             <DataTemplate DataType="{x:Type viewModels:DashboardViewModel}">
                 <views:DashboardView />
             </DataTemplate>

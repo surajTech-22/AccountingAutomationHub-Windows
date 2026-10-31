@@ -1,0 +1,187 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+
+namespace AccountingAutomationHub.Desktop.Services;
+
+/// <summary>
+/// Layout and SAFE ownership resolution for the future branch-specific Auto
+/// Import route. The legacy registered parent folder remains the only linked
+/// directory; nested Branches folders are not themselves registered as a
+/// second Client or pointed to the parent's ledger-importer by mistake.
+///
+/// No accounting write may be attempted for a branch path until the entire
+/// posting pipeline has been given and verified the branch's durable scope ID.
+/// </summary>
+public static class ClientBranchAutoImportLayout
+{
+    public const string BranchesDirectory = "Branches";
+    public const string Marker = ".aah-branch.json";
+    private static readonly string[] Modules =
+    [
+        "Banking", "Purchase", "Sales", "Cash", "Journal", "GST",
+        "Masters", "Fixed Assets", "Stock", "Other"
+    ];
+
+    public static IReadOnlyList<BranchAutoImportFolder> Ensure(
+        string registeredClientFolder,
+        long clientId,
+        IReadOnlyList<ClientBranchRecord> branches)
+    {
+        if (clientId <= 0) throw new InvalidOperationException("Invalid client account owner.");
+        if (branches.Count == 0) return []; // Original normal-client layout unchanged.
+        var root = Path.GetFullPath(registeredClientFolder);
+        if (!Directory.Exists(root)) return [];
+        if (new DirectoryInfo(root).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Cannot create branch folders through a linked filesystem junction.");
+        var container = Path.Combine(root, BranchesDirectory);
+        if (Directory.Exists(container) &&
+            new DirectoryInfo(container).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Branch container cannot be a filesystem junction.");
+        Directory.CreateDirectory(container);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<BranchAutoImportFolder>();
+        foreach (var branch in branches)
+        {
+            if (string.IsNullOrWhiteSpace(branch.BranchId) || !assigned.Add(branch.BranchId))
+                throw new InvalidOperationException("Every branch must have a unique durable identity.");
+            var existing = FindByMarker(container, clientId, branch.BranchId);
+            var segment = existing is null ? SafeSegment(branch.Name) : Path.GetFileName(existing);
+            if (existing is null && !seen.Add(segment))
+                segment = SafeSegment(branch.Name) + "-" + branch.BranchId[..Math.Min(8, branch.BranchId.Length)];
+            var path = existing ?? Path.Combine(container, segment);
+            if (existing is null)
+            {
+                // Never claim a user-created folder silently. It might contain
+                // data for another company, and a recursive watcher is live.
+                if (Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any())
+                    throw new InvalidOperationException("Unowned branch directory already contains files: " + path);
+                Directory.CreateDirectory(path);
+                var metadata = JsonSerializer.Serialize(new BranchFolderMarker(clientId, branch.BranchId, branch.Gstin));
+                File.WriteAllText(Path.Combine(path, Marker), metadata, Encoding.UTF8);
+            }
+            if (new DirectoryInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new InvalidOperationException("Branch folder is a filesystem junction: " + path);
+            foreach (var module in Modules)
+                EnsureOrdinaryDirectory(Path.Combine(path, module));
+            if (branch.Gstin.Length == 15)
+            {
+                var gst = EnsureOrdinaryDirectory(Path.Combine(path, "GST", branch.Gstin));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "GSTR-3B"));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "Electronic Credit Ledger"));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "Electronic Cash Ledger"));
+            }
+            if (!seen.Add(Path.GetFileName(path)) && existing is not null)
+                throw new InvalidOperationException("Two branch identities resolve to the same folder.");
+            result.Add(new BranchAutoImportFolder(
+                clientId, branch.BranchId, branch.Name, branch.Gstin, path));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Recognize child folders by a verified marker rather than a filename,
+    /// GSTIN regex, nearby folder, or previous client's matching branch name.
+    /// Returns false for the normal client folder, output folders and escapes.
+    /// </summary>
+    public static bool TryResolve(string registeredClientFolder, string filePath,
+        out BranchAutoImportFolder? match)
+    {
+        match = null;
+        string root, candidate;
+        try
+        {
+            root = Path.GetFullPath(Path.Combine(registeredClientFolder, BranchesDirectory))
+                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            candidate = Path.GetFullPath(filePath);
+            if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+            var remainder = candidate[root.Length..];
+            var first = remainder.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(first)) return false;
+            var directory = Path.Combine(root, first);
+            if (!Directory.Exists(directory) ||
+                new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                return false;
+            if (!TryReadMarker(Path.Combine(directory, Marker), out var marker)) return false;
+            match = new BranchAutoImportFolder(
+                marker!.ClientId, marker.BranchId, first, marker.Gstin, directory);
+            return true;
+        }
+        catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
+    private static string EnsureOrdinaryDirectory(string path)
+    {
+        // Never traverse a preexisting directory link to write module folders
+        // outside the verified Client/FY Auto Import root.
+        var full = Path.GetFullPath(path);
+        var parent = Path.GetDirectoryName(full);
+        if (parent is not null && Directory.Exists(parent) &&
+            new DirectoryInfo(parent).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Branch Auto Import directory parent is a junction: " + parent);
+        if (Directory.Exists(full) &&
+            new DirectoryInfo(full).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Branch Auto Import module is a junction: " + full);
+        Directory.CreateDirectory(full);
+        return full;
+    }
+
+    private static string? FindByMarker(string container, long clientId, string branchId)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(container))
+        {
+            if (new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                continue;
+            if (!TryReadMarker(Path.Combine(directory, Marker), out var marker)) continue;
+            if (marker!.ClientId == clientId &&
+                marker.BranchId.Equals(branchId, StringComparison.OrdinalIgnoreCase))
+                return directory; // Rename does not move already imported source files.
+        }
+        return null;
+    }
+
+    private static bool TryReadMarker(string path, out BranchFolderMarker? marker)
+    {
+        marker = null;
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var value = JsonSerializer.Deserialize<BranchFolderMarker>(File.ReadAllText(path));
+            if (value is null || value.ClientId <= 0 ||
+                value.BranchId.Length == 0 || value.BranchId.Length > 80)
+                return false;
+            marker = value;
+            return true;
+        }
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
+    public static string SafeSegment(string? name)
+    {
+        var trimmed = (name ?? "").Trim().TrimEnd('.', ' ');
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars()
+            .Concat("<>:\"/\\|?*".ToCharArray()));
+        var cleaned = new string(trimmed.Select(c => invalid.Contains(c) || char.IsControl(c) ? '_' : c).ToArray())
+            .Trim().TrimEnd('.', ' ');
+        if (cleaned.Length > 70) cleaned = cleaned[..70].TrimEnd('.', ' ');
+        if (cleaned.Length == 0) throw new InvalidOperationException("Branch name cannot become an empty folder name.");
+        var basename = cleaned.Split('.')[0];
+        if (new[] {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4",
+                   "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+                   "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
+            .Contains(basename, StringComparer.OrdinalIgnoreCase))
+            cleaned = "_" + cleaned;
+        return cleaned;
+    }
+
+    private sealed record BranchFolderMarker(long ClientId, string BranchId, string Gstin);
+}
+public sealed record BranchAutoImportFolder(
+    long ClientId, string BranchId, string Name, string Gstin, string FolderPath);
