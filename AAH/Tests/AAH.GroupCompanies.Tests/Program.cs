@@ -142,6 +142,46 @@ catch (InvalidOperationException ex) when (ex.Message.Contains("must match the i
 Require(unbranched.Id == 90 && unbranched.AdditionalGstins!.Count == 1,
     "workspace creation modified original Client or GST registration.");
 
+
+var verifiedGroup = GroupCompanyAccountingPolicy.Build(catalog, "owner",
+    clients.Where(x => x.Id != 13));
+var readbackRows = new[]
+{
+    new VerifiedMemberLedgerBalance(10, "2026-27", "master-asset", "tally-readback-001", 100m, 0m),
+    new VerifiedMemberLedgerBalance(11, "2026-27", "master-expense", "tally-readback-002", 20m, 0m),
+    new VerifiedMemberLedgerBalance(12, "2026-27", "master-liability", "tally-readback-003", 0m, 120m),
+    new VerifiedMemberLedgerBalance(14, "2025-26", "master-asset", "tally-readback-004", 50m, 0m)
+};
+var consolidated = GroupCompanyConsolidationPolicy.Consolidate(verifiedGroup, readbackRows);
+Require(consolidated.Count == 2, "financial years mixed in owner summary");
+var currentSummary = consolidated.Single(x => x.FinancialYear == "2026-27");
+Require(currentSummary.TotalDebit == 120m && currentSummary.TotalCredit == 120m &&
+        currentSummary.Members.Count == 3,
+    "owner balances not sourced from all verified member books");
+Require(consolidated.Single(x => x.FinancialYear == "2025-26").TotalDebit == 50m,
+    "other-year entry was omitted or merged into current year");
+Require(currentSummary.ConsolidationDisclaimer.Contains("elimination", StringComparison.OrdinalIgnoreCase),
+    "unverified intercompany elimination might be implied");
+try
+{
+    GroupCompanyConsolidationPolicy.Consolidate(snapshot, readbackRows);
+    throw new Exception("Group summary ignored an unresolved PAN.");
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("PAN/GST identity", StringComparison.Ordinal)) { }
+try
+{
+    GroupCompanyConsolidationPolicy.Consolidate(verifiedGroup, readbackRows.Append(readbackRows[0]));
+    throw new Exception("Duplicate Tally read-back was double counted.");
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("Duplicate verified balance", StringComparison.Ordinal)) { }
+try
+{
+    GroupCompanyConsolidationPolicy.Consolidate(verifiedGroup,
+        readbackRows.Append(new VerifiedMemberLedgerBalance(11, "2025-26", "bad", "source", 1m, 0m)));
+    throw new Exception("Wrong financial year was permitted.");
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("exact financial year", StringComparison.Ordinal)) { }
+
 DirectoryInfo? root = new DirectoryInfo(AppContext.BaseDirectory);
 while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "AAH", "src")))
     root = root.Parent;
@@ -159,4 +199,4 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
         autom.Contains("BRANCH-CENTRAL-SOURCE-DEFER", StringComparison.Ordinal),
     "branch files could be posted through the parent importer before scope isolation");
 
-Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts.");
+Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts and read-back-only financial summaries.");
