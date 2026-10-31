@@ -237,7 +237,8 @@ Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewMode
         shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
-Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
+Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
+        mainShellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal) &&
         scopeView.Contains("SafetyNote", StringComparison.Ordinal) &&
         applicationXaml.Contains("viewModels:BranchScopePreviewViewModel", StringComparison.Ordinal) &&
         shellVm.Contains("if (HasBranchWorkspaces && !_isPrivateBranchActive) return;", StringComparison.Ordinal) &&
