@@ -343,6 +343,8 @@ Check(dashboardNative.Contains("UpdateAccountingMetricsIfChanged(cached.Dashboar
       dashboardNative.Contains("UpdateGstr3bTilesIfChanged(tiles);", StringComparison.Ordinal) &&
       dashboardNative.Contains("AccountingSummaryMetrics.Count == updated.Count", StringComparison.Ordinal) &&
       dashboardNative.Contains("Gstr3bMonthTiles.Count == updated.Count", StringComparison.Ordinal) &&
+      dashboardNative.Contains("AutoImportSummaryMetrics.Count == updated.Count", StringComparison.Ordinal) &&
+      dashboardNative.Contains("UpdateAutoImportMetricsIfChanged(newMetrics);", StringComparison.Ordinal) &&
       !dashboardNative.Contains("        AccountingSummaryMetrics.Clear();\n        Gstr3bMonthTiles.Clear();\n\n        if (!_workspaceStateCache.TryPeekReadOnly", StringComparison.Ordinal),
     "Dashboard must not clear/rebuild the same accounting cards and GST tiles on each prepared-cache notification.");
 Console.WriteLine("PASS: shared module framework reuses navigation, active WPF frame and unchanged dashboard projections.");
