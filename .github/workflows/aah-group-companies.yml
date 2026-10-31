@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'AAH/src/AccountingAutomationHub.Desktop/Services/GroupCompanyAccountingPolicy.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/GroupCompanyConsolidationPolicy.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientGroupingCatalog.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientBranchCatalog.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/Services/BranchAccountingWorkspaceCatalog.cs'
