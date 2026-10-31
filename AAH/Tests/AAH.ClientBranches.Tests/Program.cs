@@ -331,7 +331,7 @@ var moduleReadyHandler = shellModel.Split("private void OnWorkspaceModuleReady("
 Check(navigationRebuild.Contains("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) &&
       navigationRebuild.Contains("activeItem.Title.Equals(previousTitle", StringComparison.Ordinal) &&
       navigationRebuild.IndexOf("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) <
-      navigationRebuild.IndexOf("NavigationItems.Clear();", StringComparison.Ordinal) &&
+      navigationRebuild.LastIndexOf("NavigationItems.Clear();", StringComparison.Ordinal) &&
       !navigationRebuild.Contains("activeItem.PageFactory()", StringComparison.Ordinal) &&
       moduleReadyHandler.Contains("QueueHiddenModulePresentationWarm(update.Snapshot, update);", StringComparison.Ordinal) &&
       moduleReadyHandler.Contains("(update.Module is ClientWorkspaceModule.Purchase or", StringComparison.Ordinal) &&
