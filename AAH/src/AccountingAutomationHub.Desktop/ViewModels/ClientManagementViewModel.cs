@@ -3151,7 +3151,14 @@ public sealed partial class ClientManagementViewModel :
             var priorAdditional = EditingId > 0
                 ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
                 : Array.Empty<string>();
-            var branches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var parsedBranches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var existingClient = EditingId > 0 ? _repository.GetById(EditingId) : null;
+            var existingBranches = existingClient is null
+                ? Array.Empty<ClientBranchRecord>()
+                : ClientBranchCatalog.Resolve(existingClient,
+                    _preferenceRepository.Get(ClientBranchCatalog.Key(EditingId))).ToArray();
+            var branches = ClientBranchCatalog.Reconcile(
+                EditingId, parsedBranches, existingBranches);
             var enteredAdditional = ClientBranchCatalog.AdditionalGstins(branches, normalizedGstin, normalizedPan);
             AdditionalGstinsText = string.Join(Environment.NewLine, enteredAdditional);
             var newlyAdded = enteredAdditional
