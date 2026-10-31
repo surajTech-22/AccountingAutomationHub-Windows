@@ -221,7 +221,10 @@ public sealed class DashboardViewModel :
     private bool _canConfirmTallyLink;
     private bool _isPrivateBranchDashboard;
 
-    public bool ShowTallyPanel => !_isPrivateBranchDashboard;
+    // One original Tally panel for both parent and branch. Branch view reads
+    // its parent's existing link; no second Tally company is linked.
+    public bool ShowTallyPanel => true;
+    public bool IsBranchTallyReference => _isPrivateBranchDashboard;
 
     // Real branch Dashboard shares all normal accounting modules, but no
     // branch has verified authority to post to the parent's Tally company.
@@ -231,6 +234,7 @@ public sealed class DashboardViewModel :
         if (_isPrivateBranchDashboard == isPrivate) return;
         _isPrivateBranchDashboard = isPrivate;
         OnPropertyChanged(nameof(ShowTallyPanel));
+        OnPropertyChanged(nameof(IsBranchTallyReference));
         if (isPrivate)
         {
             Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
@@ -2607,8 +2611,16 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(AreSupportingTallyReportsEnabled));
         var client = _clientContext.CurrentClient;
         var selected = _tallyCoordinator.SelectedCompany;
-        var link = _tallyCoordinator.GetCurrentClientLink();
-        var pending = client is not null && _tallyCoordinator.IsCurrentSelectionPending();
+        // Keep the coordinator's actual ClientId authority unchanged: only the
+        // existing parent link is reused for display when inside a private branch.
+        // Do not make this borrowed reference a confirmed child export authority.
+        var ownedLink = _tallyCoordinator.GetCurrentClientLink();
+        var branchOwner = _isPrivateBranchDashboard && client is not null
+            ? new SqliteInternalBranchAccountRepository().FindByChild(client.Id)
+            : null;
+        var link = branchOwner is null
+            ? ownedLink : _tallyRepository.GetLinkForClient(branchOwner.ParentClientId);
+        var pending = !_isPrivateBranchDashboard && client is not null && _tallyCoordinator.IsCurrentSelectionPending();
         var openLinkedCompany = link is null
             ? null
             : _tallyCoordinator.OpenCompanies.FirstOrDefault(company =>
@@ -2620,7 +2632,7 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(TallyReadyVoucherCount));
         OnPropertyChanged(nameof(TallyNewMasterCreateCount));
         HasPendingTallySelection = pending;
-        HasConfirmedTallyLink = link is not null;
+        HasConfirmedTallyLink = !_isPrivateBranchDashboard && ownedLink is not null;
 
         if (client is null)
         {
@@ -2641,10 +2653,14 @@ public sealed class DashboardViewModel :
         else if (link is not null)
         {
             ApplyLinkIdentity(link, openLinkedCompany);
-            TallyLinkStatus = confirmedLinkIsLive
-                ? "Confirmed link • live connection active"
-                : $"Confirmed link • {link.CompanyName} is not currently open in Tally";
-            TallyIdentityMatchText = "This Tally company is exclusively linked to the current client.";
+            TallyLinkStatus = _isPrivateBranchDashboard
+                ? $"Existing consolidated Tally link • {link.CompanyName}"
+                : confirmedLinkIsLive
+                    ? "Confirmed link • live connection active"
+                    : $"Confirmed link • {link.CompanyName} is not currently open in Tally";
+            TallyIdentityMatchText = _isPrivateBranchDashboard
+                ? "Same existing parent-company Tally link. Branch voucher posting stays disabled until branch-ledger ownership is verified."
+                : "This Tally company is exclusively linked to the current client.";
         }
         else if (selected is not null)
         {
@@ -2675,15 +2691,15 @@ public sealed class DashboardViewModel :
         var identityAllowed = selected is not null &&
                               TallyLiveConnectionCoordinator.CanConfirmIdentity(client, selected);
 
-        CanConfirmTallyLink = pending &&
+        CanConfirmTallyLink = !_isPrivateBranchDashboard && pending &&
                               selected is not null &&
                               identityAllowed &&
                               !selectedLinkedElsewhere &&
                               !clientHasDifferentLink &&
                               !_tallyCoordinator.IsBusy;
-        CanCancelTallySelection = pending && !_tallyCoordinator.IsBusy;
-        CanUnlinkTallyLink = link is not null && !_tallyCoordinator.IsBusy;
-        CanImportBankRange = confirmedLinkIsLive &&
+        CanCancelTallySelection = !_isPrivateBranchDashboard && pending && !_tallyCoordinator.IsBusy;
+        CanUnlinkTallyLink = !_isPrivateBranchDashboard && ownedLink is not null && !_tallyCoordinator.IsBusy;
+        CanImportBankRange = !_isPrivateBranchDashboard && confirmedLinkIsLive &&
                              BankTallyFromDate is not null &&
                              BankTallyToDate is not null &&
                              BankTallyFromDate.Value.Date <= BankTallyToDate.Value.Date &&
