@@ -167,6 +167,9 @@ public sealed class MainWindowViewModel :
     private bool _refreshingTopWorkspaceSelectors;
     private BranchAccountingWorkspace? _selectedBranchWorkspace;
     private bool _refreshingBranchWorkspaces;
+    private long _privateBranchParentClientId;
+    private bool _isPrivateBranchActive;
+    private readonly SqliteInternalBranchAccountRepository _privateBranchAccounts = new();
     private string _branchWorkspaceProblem = string.Empty;
 
     public MainWindowViewModel()
@@ -1110,10 +1113,54 @@ public sealed class MainWindowViewModel :
         set
         {
             if (!BranchWorkspaces.Contains(value) || ReferenceEquals(_selectedBranchWorkspace, value)) return;
-            _selectedBranchWorkspace = value;
-            OnPropertyChanged();
-            if (!_refreshingBranchWorkspaces && _clientContext.CurrentClient is not null)
-                RebuildWorkspaceNavigation("Dashboard");
+            if (value is null || _clientContext.CurrentClient is null) return;
+            if (_refreshingBranchWorkspaces) return;
+            try
+            {
+                var client = _clientContext.CurrentClient;
+                var parent = _privateBranchParentClientId > 0
+                    ? _clientRepository.GetById(_privateBranchParentClientId)
+                    : client;
+                if (parent is null || parent.IsArchived ||
+                    !_governanceRepository.HasClientAccess(Environment.UserName, parent.Id, parent.FinancialYear))
+                    throw new InvalidOperationException("The parent Client is not authorised for this user.");
+                if (value.IsConsolidated)
+                {
+                    if (client.Id != parent.Id)
+                    {
+                        _clientRepository.SetCurrent(parent.Id);
+                        _clientContext.SetCurrent(_clientRepository.GetCurrent());
+                    }
+                    else
+                    {
+                        _selectedBranchWorkspace = value;
+                        OnPropertyChanged();
+                        RebuildWorkspaceNavigation("Dashboard");
+                    }
+                    return;
+                }
+                if (value.ScopeId == "REVIEW")
+                    throw new InvalidOperationException("Branch ownership must be corrected before opening its books.");
+                var savedBranches = ClientBranchCatalog.Resolve(parent,
+                    _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
+                var selectedBranch = savedBranches.SingleOrDefault(b =>
+                    b.BranchId.Equals(value.ScopeId, StringComparison.OrdinalIgnoreCase));
+                if (selectedBranch is null)
+                    throw new InvalidOperationException("The selected branch no longer belongs to this parent Client.");
+                var privateClient = _privateBranchAccounts.GetOrCreate(
+                    parent.Id, selectedBranch.BranchId, selectedBranch.Name, selectedBranch.Gstin);
+                // The existing Purchase/Sales/Banking/Journal repositories are
+                // keyed by ClientId + FY. A private saved ClientId isolates the
+                // branch without duplicating the Client Directory entry.
+                _clientRepository.SetCurrent(privateClient.Id);
+                _clientContext.SetCurrent(_clientRepository.GetCurrent());
+            }
+            catch (Exception ex)
+            {
+                _branchWorkspaceProblem = ex.Message;
+                ApplicationState = "Branch scope not changed: " + ex.Message;
+                OnPropertyChanged(nameof(SelectedBranchWorkspace));
+            }
         }
     }
 
@@ -1125,31 +1172,44 @@ public sealed class MainWindowViewModel :
             BranchWorkspaces.Clear();
             _selectedBranchWorkspace = null;
             _branchWorkspaceProblem = string.Empty;
-            var client = _clientContext.CurrentClient;
-            if (client is not null && !NetworkClientRuntime.IsNetworkClient)
+            _privateBranchParentClientId = 0;
+            _isPrivateBranchActive = false;
+            var current = _clientContext.CurrentClient;
+            if (current is not null && !NetworkClientRuntime.IsNetworkClient)
             {
-                var branches = ClientBranchCatalog.Resolve(client,
-                    _applicationPreferences.Get(ClientBranchCatalog.Key(client.Id)));
+                var owner = _privateBranchAccounts.FindByChild(current.Id);
+                _isPrivateBranchActive = owner is not null;
+                var parent = owner is null ? current : _clientRepository.GetById(owner.ParentClientId);
+                if (parent is null)
+                    throw new InvalidOperationException("The private branch parent was not found.");
+                _privateBranchParentClientId = parent.Id;
+                var branches = ClientBranchCatalog.Resolve(parent,
+                    _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
                 try
                 {
-                    foreach (var scope in BranchAccountingWorkspaceCatalog.Build(client, branches))
+                    foreach (var scope in BranchAccountingWorkspaceCatalog.Build(parent, branches))
                         BranchWorkspaces.Add(scope);
+                    if (owner is not null && !BranchWorkspaces.Any(x => x.ScopeId.Equals(owner.BranchId, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException("Private branch no longer belongs to the registered parent.");
+                    _selectedBranchWorkspace = owner is null
+                        ? BranchWorkspaces.FirstOrDefault()
+                        : BranchWorkspaces.First(x => x.ScopeId.Equals(owner.BranchId, StringComparison.OrdinalIgnoreCase));
                 }
                 catch (InvalidOperationException ex)
                 {
-                    // Never fall back to NORMAL on a conflicting PAN/branch
-                    // identity: that would expose legacy parent accounting data.
                     _branchWorkspaceProblem = ex.Message;
+                    _isPrivateBranchActive = false;
+                    BranchWorkspaces.Clear();
                     BranchWorkspaces.Add(new BranchAccountingWorkspace(
-                        client.Id, client.FinancialYear, "CONSOLIDATED",
+                        parent.Id, parent.FinancialYear, "CONSOLIDATED",
                         "Consolidated — review required", "", "", true,
                         ["Dashboard", "Tally Import"], false));
                     BranchWorkspaces.Add(new BranchAccountingWorkspace(
-                        client.Id, client.FinancialYear, "REVIEW",
+                        parent.Id, parent.FinancialYear, "REVIEW",
                         "Branch configuration blocked", "", "", false, ["Branch Overview"], false));
+                    _selectedBranchWorkspace = BranchWorkspaces[0];
                 }
             }
-            _selectedBranchWorkspace = BranchWorkspaces.FirstOrDefault();
             OnPropertyChanged(nameof(SelectedBranchWorkspace));
             OnPropertyChanged(nameof(HasBranchWorkspaces));
         }
@@ -1788,7 +1848,9 @@ public sealed class MainWindowViewModel :
     public bool NavigateFromAccountingActivity(string title)
     {
         var client = _clientContext.CurrentClient;
-        if (client is null || HasBranchWorkspaces) return false;
+        if (client is null || (HasBranchWorkspaces && !_isPrivateBranchActive)) return false;
+        if (_isPrivateBranchActive && title.Equals("Tally", StringComparison.OrdinalIgnoreCase))
+            return false; // branch Tally posting not yet verified
 
         if (title.Equals("GST", StringComparison.OrdinalIgnoreCase) && (!HasValidGstin(client) || !CanViewModule(GovernancePermissions.GstView)))
             return false;
@@ -2141,7 +2203,7 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        if (HasBranchWorkspaces)
+        if (HasBranchWorkspaces && !_isPrivateBranchActive)
         {
             var scope = SelectedBranchWorkspace ?? BranchWorkspaces[0];
             var note = _branchWorkspaceProblem.Length > 0
@@ -2232,7 +2294,21 @@ public sealed class MainWindowViewModel :
 
         var canReadNetworkData = !NetworkClientRuntime.IsNetworkClient || NetworkClientRuntime.HasPermission(GovernancePermissions.ReadData);
         var available = new List<NavigationItem>();
-        if (canReadNetworkData) available.Add(_dashboardNavigationItem);
+        if (canReadNetworkData)
+        {
+            if (_isPrivateBranchActive)
+            {
+                var owner = SelectedBranchWorkspace;
+                var branchDashboard = new BranchScopePreviewViewModel(
+                    "Dashboard", "Separate branch accounting overview",
+                    owner?.DisplayName ?? client.ClientName,
+                    owner?.ScopeId ?? "REVIEW", client.FinancialYear,
+                    "Branch records are held under a separate, durable ClientId. Existing Sales, Purchase, Bank, Cash, Journal and other accounting modules use that ID. Existing parent records were not moved. Tally export is blocked until verified mapping to the existing Tally company is complete.");
+                available.Add(new NavigationItem("Dashboard", "⌂",
+                    "Private branch accounting scope", () => branchDashboard));
+            }
+            else available.Add(_dashboardNavigationItem);
+        }
 
         var hasValidGstin = HasValidGstin(client);
         if (!canReadNetworkData)
@@ -2288,13 +2364,13 @@ public sealed class MainWindowViewModel :
                                   ReferenceEquals(SelectedNavigationItem, _salesNavigationItem);
 
         if (CanViewModule(GovernancePermissions.PurchaseView) &&
-            (HasPurchaseData(client) || holdActivePurchasePage))
+            (HasPurchaseData(client) || holdActivePurchasePage || _isPrivateBranchActive))
         {
             available.Add(_purchaseNavigationItem);
         }
 
         if (CanViewModule(GovernancePermissions.SalesView) &&
-            (HasSalesData(client) || holdActiveSalesPage))
+            (HasSalesData(client) || holdActiveSalesPage || _isPrivateBranchActive))
         {
             available.Add(_salesNavigationItem);
         }
@@ -2303,11 +2379,11 @@ public sealed class MainWindowViewModel :
         // sees the accounting centres it may inspect; a Custom role sees only the
         // modules explicitly granted to it. Mutation remains separately permissioned.
         if (CanViewModule(GovernancePermissions.BankView)) available.Add(_bankingNavigationItem);
-        if (CanViewModule(GovernancePermissions.ReadData) && HasCashData(client)) available.Add(_cashEntryNavigationItem);
+        if (CanViewModule(GovernancePermissions.ReadData) && (HasCashData(client) || _isPrivateBranchActive)) available.Add(_cashEntryNavigationItem);
         if (CanViewModule(GovernancePermissions.MasterView)) available.Add(_ledgerMasterNavigationItem);
-        if (CanViewModule(GovernancePermissions.StockView) && HasStockData(client)) available.Add(_stockMasterNavigationItem);
+        if (CanViewModule(GovernancePermissions.StockView) && (HasStockData(client) || _isPrivateBranchActive)) available.Add(_stockMasterNavigationItem);
         if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.ReadData)) available.Add(_fixedAssetsNavigationItem);
-        if (CanViewModule(GovernancePermissions.JournalView) && HasJournalData(client)) available.Add(_journalNavigationItem);
+        if (CanViewModule(GovernancePermissions.JournalView) && (HasJournalData(client) || _isPrivateBranchActive)) available.Add(_journalNavigationItem);
         if (_showBalanceSheet && CanViewModule(GovernancePermissions.ReadData)) available.Add(_balanceSheetNavigationItem);
         if (_showProfitAndLoss && CanViewModule(GovernancePermissions.ReadData)) available.Add(_profitAndLossNavigationItem);
         if (ReleaseFeatureGates.FinancialStatements && CanViewModule(GovernancePermissions.ReadData))
@@ -2318,7 +2394,7 @@ public sealed class MainWindowViewModel :
         }
         if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.ReadData)) available.Add(_portalLoginsNavigationItem);
         if (CanViewModule(GovernancePermissions.ReadData)) available.Add(_taxCreditNavigationItem);
-        if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView)) available.Add(_tallyNavigationItem);
+        if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView)) available.Add(_tallyNavigationItem);
         // R42 Mobile Link is a Client/FY module on the Main Server Windows app. Android
         // authentication and access checks remain enforced by SecureLanServerService.
         if (!NetworkClientRuntime.IsNetworkClient && _secureLanServerService is not null && CanViewModule(GovernancePermissions.ReadData)) available.Add(_mobileLinkNavigationItem);
@@ -2368,7 +2444,8 @@ public sealed class MainWindowViewModel :
         }
         else
         {
-            SelectedNavigationItem = _dashboardNavigationItem;
+            SelectedNavigationItem = available.FirstOrDefault(x =>
+                x.Title.Equals("Dashboard", StringComparison.OrdinalIgnoreCase)) ?? _dashboardNavigationItem;
         }
 
         ApplicationState = BuildWorkspaceStatus(
@@ -2561,7 +2638,7 @@ public sealed class MainWindowViewModel :
         // startup-prepared/frozen snapshot. Timestamp/reactivation work runs after paint;
         // only a six-month frozen or still-missing stream is rescanned in background.
         RebuildWorkspaceNavigation(_dashboardNavigationItem.Title);
-        if (HasBranchWorkspaces) return; // never warm/display unscoped parent books in branch views.
+        if (HasBranchWorkspaces && !_isPrivateBranchActive) return; // never warm/display parent books as a branch.
         if (_workspaceStateCache.TryPeekReadOnly(openedClient.Id, openedClient.FinancialYear, out var openingSnapshot))
         {
             QueueWarmCurrentWorkspaceAfterPaint(openingSnapshot);
@@ -2872,7 +2949,8 @@ public sealed class MainWindowViewModel :
     }
 
     private bool CanOpenLinkedTally() =>
-        !NetworkClientRuntime.IsNetworkClient && _clientContext.CurrentClient is not null;
+        !_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient &&
+        _clientContext.CurrentClient is not null;
 
     private async Task OpenLinkedTallyAsync()
     {
