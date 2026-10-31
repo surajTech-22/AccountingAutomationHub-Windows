@@ -6,6 +6,8 @@ on:
     paths:
       - 'AAH/Tests/AAH.ClientBranches.Tests/**'
       - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientBranchCatalog.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientBranchAutoImportLayout.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/BackgroundAutomationService.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/ViewModels/ClientManagementViewModel.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/ViewModels/DashboardViewModel.cs'
       - 'AAH/src/AccountingAutomationHub.Desktop/Views/ClientManagementView.xaml'
