@@ -86,7 +86,7 @@ internal static class EntryPoint
         // source authority, but always show the correct local interpretation.
         var sampleUtc = new DateTimeOffset(2026, 10, 31, 6, 51, 47, TimeSpan.Zero);
         var timestamp = Program.FormatTimestamp(sampleUtc);
-        Assert(timestamp.StartsWith("2026-10-31T06:51:47", StringComparison.Ordinal) &&
+        Assert(timestamp.StartsWith("2026-10-31T06:51:47.0000000Z ", StringComparison.Ordinal) &&
                timestamp.Contains("[IST 2026-10-31 12:21:47.000 +05:30]", StringComparison.Ordinal),
             "The update host log shows the wrong India local time or lost its UTC prefix.");
         var hostSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
