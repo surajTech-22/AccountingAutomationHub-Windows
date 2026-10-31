@@ -1,9 +1,10 @@
 <UserControl x:Class="AccountingAutomationHub.Desktop.Views.ConsolidatedBranchDashboardView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- Reuse the established AAH Dashboard's visual sections, cards and spacing.
-         The Consolidated scope is read-only: do not expose the parent legacy
-         Clear/Import/Tally buttons or mislabel parent rows as branch accounts. -->
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views">
+    <!-- Consolidated branch counts are read-only and exclude unverified parent
+         history. The original Dashboard Tally panel below retains its existing
+         parent Client/FY link/export commands without reclassifying branch data. -->
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                   Background="{DynamicResource AppBackgroundBrush}">
         <StackPanel Margin="20,20,20,28">
@@ -134,21 +135,13 @@
                     </StackPanel>
                 </Border>
             </Grid>
-            <!-- Use the application-level TallyClientView DataTemplate. Its
-                 existing connection, linked-company selector, Link/Unlink,
-                 master recovery, report and voucher controls remain the
-                 original implementation shared with the Tally sidebar page. -->
-            <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
-                <StackPanel>
-                    <TextBlock Text="Tally · Existing Client Connection"
-                               Style="{StaticResource SectionTitleStyle}"/>
-                    <TextBlock Text="{Binding TallyConnectionText}"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               TextWrapping="Wrap" Margin="0,6,0,0"/>
-                    <ContentControl Content="{Binding ExistingTallyWorkspace}"
-                                    Height="520" Margin="0,8,0,0"/>
-                </StackPanel>
-            </Border>
+            <!-- The EXACT same Dashboard Tally Link / Export / Auto Sync card.
+                 Never substitute the Tally Import recovery page in its place. -->
+            <TextBlock Margin="2,12,0,0" FontSize="10"
+                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
+                       Text="Consolidated uses its own existing Client/FY Tally link. Voucher export remains blocked until the separate verified group-import XML route is connected; branch export operates normally."/>
+            <views:DashboardView DataContext="{Binding ExistingDashboardWorkspace}"
+                                 TallyOnlyMode="True"/>
             <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
                 <StackPanel>
                     <TextBlock Text="Historical records reconciliation" FontWeight="SemiBold" FontSize="13"/>
@@ -159,7 +152,7 @@
                 </StackPanel>
             </Border>
             <TextBlock Margin="2,9,0,0" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
-                       Text="Only branch-owned saved records are counted. This page never duplicates parent historical records or issues Tally vouchers."/>
+                       Text="Only verified branch-owned saved records count towards consolidated totals. The Tally panel above operates on the existing parent Client/FY authority, not on a merged branch-voucher export."/>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

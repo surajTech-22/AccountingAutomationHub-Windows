@@ -166,7 +166,7 @@
 
     <Grid>
     <ScrollViewer x:Name="DashboardScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Background="{DynamicResource AppBackgroundBrush}" ScrollChanged="DashboardScrollViewer_ScrollChanged">
-        <StackPanel Margin="20,20,20,28">
+        <StackPanel x:Name="DashboardContentSections" Margin="20,20,20,28">
             <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -431,7 +431,7 @@
                 </StackPanel>
             </Border>
 
-            <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}" Visibility="{Binding ShowTallyPanel, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border x:Name="DashboardTallyPanel" Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}" Visibility="{Binding ShowTallyPanel, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>

@@ -4,14 +4,14 @@ using System.Linq;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Domain.Clients;
-using AccountingAutomationHub.Infrastructure.Tally;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
 /// <summary>
-/// Reads database-owned child scopes asynchronously. Never makes a Tally call,
-/// triggers an import, auto-migrates historical records or sums unreviewed
-/// vouchers across private branch and legacy parent scopes.
+/// Reads database-owned child scopes asynchronously without importing or moving
+/// source records. The embedded original Dashboard Tally panel separately owns
+/// its existing link and export commands; this viewmodel never creates a second
+/// Tally link or combines unreviewed parent and private-branch vouchers.
 /// </summary>
 public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
 {
@@ -21,31 +21,21 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
-    public ConsolidatedBranchDashboardViewModel(ClientProfile parent, SqliteTallyRepository existingTally,
-        TallyClientViewModel existingTallyWorkspace)
+    public ConsolidatedBranchDashboardViewModel(ClientProfile parent,
+        DashboardViewModel existingDashboardWorkspace)
         : base("Dashboard", "Detailed consolidated client workspace overview")
     {
         if (parent is null) throw new ArgumentNullException(nameof(parent));
-        // Share the existing Tally client connection viewmodel and its original
-        // link/recovery commands. Consolidated is the real parent context;
-        // this does not create a second Tally coordinator or client link.
-        ExistingTallyWorkspace = existingTallyWorkspace
-            ?? throw new ArgumentNullException(nameof(existingTallyWorkspace));
-        ExistingTallyWorkspace.RefreshLocal();
+        // Reuse the SAME dashboard Tally controls and export authority as a
+        // normal client. The dedicated Tally Import page is not the dashboard.
+        ExistingDashboardWorkspace = existingDashboardWorkspace
+            ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
         _parentClientId = parent.Id;
         _financialYear = parent.FinancialYear;
         ClientName = parent.ClientName;
         Pan = parent.Pan ?? string.Empty;
         PrimaryGstin = parent.Gstin ?? string.Empty;
         State = parent.State ?? string.Empty;
-        // Read the exact confirmed parent link from the EXISTING Tally
-        // repository. Do not create a second consolidated or branch link.
-        var linked = existingTally.GetLinkForClient(parent.Id);
-        TallyCompanyName = linked?.CompanyName ?? "Not linked";
-        TallyConnectionText = linked is null
-            ? "No existing Tally company link for this client."
-            : "Existing linked Tally company · " + linked.CompanyName;
-        TallyCompanyGstin = linked?.Gstin ?? string.Empty;
         _ = RefreshAsync();
     }
 
@@ -53,10 +43,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string Pan { get; }
     public string PrimaryGstin { get; }
     public string State { get; }
-    public string TallyCompanyName { get; }
-    public string TallyCompanyGstin { get; }
-    public string TallyConnectionText { get; }
-    public TallyClientViewModel ExistingTallyWorkspace { get; }
+    public DashboardViewModel ExistingDashboardWorkspace { get; }
     public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
