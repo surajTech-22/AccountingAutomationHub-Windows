@@ -474,10 +474,14 @@ public sealed class DashboardViewModel :
             if (!SetProperty(ref _clientBranches, value)) return;
             OnPropertyChanged(nameof(HasBranches));
             OnPropertyChanged(nameof(BranchCount));
+            OnPropertyChanged(nameof(ShowUnassignedPrimaryGstin));
         }
     }
     public bool HasBranches => ClientBranches.Count > 0;
     public int BranchCount => ClientBranches.Count;
+    public bool ShowUnassignedPrimaryGstin =>
+        HasBranches && Gstin.Length == 15 &&
+        !ClientBranches.Any(x => x.Gstin.Equals(Gstin, StringComparison.OrdinalIgnoreCase));
 
     public string Pan
     {
