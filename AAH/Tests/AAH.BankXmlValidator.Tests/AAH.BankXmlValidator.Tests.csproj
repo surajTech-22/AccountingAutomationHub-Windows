@@ -10,6 +10,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="OwnerGroupSampleExportTests.cs" />
+    <Compile Include="../../src/AccountingAutomationHub.Infrastructure/Tally/TallyErp9ExactBankVoucherXmlBuilder.cs" Link="Production/TallyErp9ExactBankVoucherXmlBuilder.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Infrastructure/Tally/TallyBankXmlContractValidator.cs" Link="Production/TallyBankXmlContractValidator.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Infrastructure/Tally/TallyExcelParityXmlWriter.cs" Link="Production/TallyExcelParityXmlWriter.cs" />
   </ItemGroup>

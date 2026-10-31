@@ -1,0 +1,29 @@
+name: AAH Owner Group Accounting Policy Regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientGroupingCatalog.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/OwnerGroupAccountingPolicy.cs'
+      - 'AAH/Tests/AAH.OwnerGroup.Tests/**'
+      - '.github/workflows/aah-owner-group-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  owner-group-policy:
+    name: Synthetic owner and individual accounting differentiation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test ownership and transfer policy without writing to Tally
+        shell: pwsh
+        run: |
+          dotnet run --project AAH/Tests/AAH.OwnerGroup.Tests/AAH.OwnerGroup.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Owner Group policy regression failed.' }

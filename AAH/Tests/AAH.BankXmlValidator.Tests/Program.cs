@@ -143,6 +143,7 @@ internal static class Program
             Reject("Unexpected voucher attribute", () => Voucher(Change(valid, "<VOUCHER>", "<VOUCHER ACTION=\"Create\">"), voucher), "must not contain attributes");
             Reject("Wrong voucher count", () => TallyBankXmlContractValidator.ValidateVoucherImport(valid, Company, Array.Empty<TallyErp9BankVoucherExpectation>()), "Voucher count mismatch");
             Reject("Missing voucher body", () => Voucher(Change(valid, "<DATA>", "<OTHER>"), voucher), "not well-formed");
+            OwnerGroupSampleExportTests.Run();
             Console.WriteLine("PASS: " + _passed.ToString(CultureInfo.InvariantCulture) + "/" + _passed.ToString(CultureInfo.InvariantCulture) + " Bank XML scenarios.");
             return 0;
         }
