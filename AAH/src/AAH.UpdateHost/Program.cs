@@ -96,9 +96,14 @@ internal static class Program
                 var installedVersion = FileVersionInfo.GetVersionInfo(target).FileVersion;
                 var newVersion = FileVersionInfo.GetVersionInfo(stagedExe).FileVersion;
                 if (!Version.TryParse(installedVersion, out var oldVer) ||
-                    !Version.TryParse(newVersion, out var nextVer) || nextVer <= oldVer ||
-                    nextVer.ToString() != tag.TrimStart('v'))
-                    throw new InvalidDataException("Application binary version does not match an upgrade release.");
+                    !Version.TryParse(newVersion, out var nextVer) ||
+                    !IsUpgradeOrRestartRecovery(oldVer, nextVer, tag))
+                    throw new InvalidDataException("Application binary version does not match an authorized upgrade or same-version restart recovery.");
+                // If a previous update committed new application files but the
+                // old AAH process still holds the in-memory older UI, never retry
+                // copying the same release. Instead finish its stale-process
+                // shutdown and restart the ALREADY INSTALLED verified executable.
+                var restartOnly = nextVer == oldVer;
 
                 // The previously running AAH may have two process instances for the
                 // SAME executable (legacy restart/old owner still alive). Previously
@@ -114,13 +119,20 @@ internal static class Program
                     return 2;
                 }
 
-                // The automatic channel MUST use the exact same source-backed
-                // manual Install-AAHPublish routine as the original Update-App.ps1.
-                // There is no second C# file replacement engine in the live route.
-                var nativeScript = Path.Combine(scratch, "TransactionalPublish.ps1");
-                WriteEmbeddedManualUpdater(nativeScript);
-                await InvokeOriginalManualInstallerAsync(nativeScript, staged, install);
-                Log("Manual Install-AAHPublish replaced AAH application files and removed its completed swap journal.");
+                if (!restartOnly)
+                {
+                    // Preserve the original transactional updater. There must be
+                    // no second live C# file replacement or data migration route.
+                    var nativeScript = Path.Combine(scratch, "TransactionalPublish.ps1");
+                    WriteEmbeddedManualUpdater(nativeScript);
+                    await InvokeOriginalManualInstallerAsync(nativeScript, staged, install);
+                    Log("Manual Install-AAHPublish replaced AAH application files and removed its completed swap journal.");
+                }
+                else
+                {
+                    Log("Repairing earlier partial update: verified " + tag +
+                        " already exists on disk; no files will be overwritten.");
+                }
                 if (!await StartAndVerifyAsync(target, install))
                 {
                     // The original manual updater has already committed verified
@@ -128,7 +140,9 @@ internal static class Program
                     Log("Updated AAH startup readiness was not confirmed. The original manual updater committed installed bytes; intervention may be needed.");
                     throw new InvalidOperationException("AAH updated, but the restart readiness check failed.");
                 }
-                Log("SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
+                Log(restartOnly
+                    ? "SUCCESS: AAH " + tag + " already installed; all stale instances exited and existing executable restarted."
+                    : "SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
                 return 0;
             }
             finally
@@ -523,6 +537,12 @@ internal static class Program
             throw;
         }
     }
+
+    internal static bool IsUpgradeOrRestartRecovery(Version installedOnDisk,
+        Version verifiedReleaseBinary, string stableTag) =>
+        verifiedReleaseBinary >= installedOnDisk &&
+        verifiedReleaseBinary.ToString().Equals(stableTag.TrimStart('v'),
+            StringComparison.Ordinal);
 
     // Older AAH versions do not quiesce repeatable background discovery when
     // a verified update is requested. A single 11-minute wait can therefore
