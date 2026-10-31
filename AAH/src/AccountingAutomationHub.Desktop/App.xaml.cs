@@ -1434,7 +1434,7 @@ public partial class App : System.Windows.Application
         // Keep the UTC ISO prefix, and annotate it for India-based operators.
         var utc = timestamp.ToUniversalTime();
         var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
-        return utc.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
+        return utc.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
             " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz",
                 System.Globalization.CultureInfo.InvariantCulture) + "]";
     }
