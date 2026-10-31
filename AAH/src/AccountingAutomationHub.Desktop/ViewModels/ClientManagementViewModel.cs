@@ -53,6 +53,10 @@ public sealed partial class ClientManagementViewModel :
     private string _validationText = string.Empty;
     private string _lookupStatusText = string.Empty;
     private bool _isGroupManagerOpen;
+    private bool _isGroupCompanyDashboardOpen;
+    private string _groupCompanyDashboardTitle = "Group of Companies";
+    private string _groupCompanyDashboardSummary = "";
+    private string _groupCompanyDashboardWarnings = "";
     private ClientGroupCatalogData _clientGroupData = new();
     private ClientGroupFolderNode? _selectedGroupFolder;
     private ClientProfile? _selectedGroupAvailableClient;
@@ -208,6 +212,9 @@ public sealed partial class ClientManagementViewModel :
         ReloadCommand = new RelayCommand(LoadClients);
         OpenGroupManagerCommand = new RelayCommand(OpenGroupManager, () => !NetworkClientRuntime.IsNetworkClient);
         CloseGroupManagerCommand = new RelayCommand(CloseGroupManager);
+        OpenGroupCompanyDashboardCommand = new RelayCommand(OpenGroupCompanyDashboard,
+            () => !NetworkClientRuntime.IsNetworkClient && IsSelectedGroupCompanyFolder);
+        CloseGroupCompanyDashboardCommand = new RelayCommand(() => IsGroupCompanyDashboardOpen = false);
         AddGroupFolderCommand = new RelayCommand(AddGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is not null);
         RenameGroupFolderCommand = new RelayCommand(RenameGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is { IsRoot: false });
         DeleteGroupFolderCommand = new RelayCommand(DeleteGroupFolder, () => !NetworkClientRuntime.IsNetworkClient && SelectedGroupFolder is { IsRoot: false });
@@ -259,6 +266,7 @@ public sealed partial class ClientManagementViewModel :
 
     public event EventHandler? WorkspaceOpenRequested;
 
+    public ObservableCollection<GroupCompanyMemberRow> GroupCompanyDashboardMembers { get; } = [];
     public ObservableCollection<ClientProfile> Clients { get; } = [];
     public ObservableCollection<ClientGroupFolderNode> GroupFolderRoots { get; } = [];
     public ObservableCollection<ClientProfile> GroupAvailableClients { get; } = [];
@@ -305,6 +313,29 @@ public sealed partial class ClientManagementViewModel :
         private set => SetProperty(ref _isGroupManagerOpen, value);
     }
 
+    public bool IsGroupCompanyDashboardOpen
+    {
+        get => _isGroupCompanyDashboardOpen;
+        private set => SetProperty(ref _isGroupCompanyDashboardOpen, value);
+    }
+    public string GroupCompanyDashboardTitle
+    {
+        get => _groupCompanyDashboardTitle;
+        private set => SetProperty(ref _groupCompanyDashboardTitle, value);
+    }
+    public string GroupCompanyDashboardSummary
+    {
+        get => _groupCompanyDashboardSummary;
+        private set => SetProperty(ref _groupCompanyDashboardSummary, value);
+    }
+    public string GroupCompanyDashboardWarnings
+    {
+        get => _groupCompanyDashboardWarnings;
+        private set => SetProperty(ref _groupCompanyDashboardWarnings, value);
+    }
+    public bool IsSelectedGroupCompanyFolder => SelectedGroupFolder?.Type.Equals(
+        ClientGroupFolderTypes.CompanyGroup, StringComparison.OrdinalIgnoreCase) == true;
+
     public ClientGroupFolderNode? SelectedGroupFolder
     {
         get => _selectedGroupFolder;
@@ -319,6 +350,7 @@ public sealed partial class ClientManagementViewModel :
             RefreshGroupCommands();
             MoveSelectedGroupSourceCommand?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(IsSelectedGroupCaFolder));
+            OnPropertyChanged(nameof(IsSelectedGroupCompanyFolder));
             OnPropertyChanged(nameof(SelectedGroupPath));
         }
     }
@@ -977,9 +1009,12 @@ public sealed partial class ClientManagementViewModel :
     public RelayCommand ReloadCommand { get; }
     public RelayCommand OpenGroupManagerCommand { get; }
     public RelayCommand CloseGroupManagerCommand { get; }
+    public RelayCommand OpenGroupCompanyDashboardCommand { get; }
+    public RelayCommand CloseGroupCompanyDashboardCommand { get; }
 
     public void CloseGroupManager()
     {
+        IsGroupCompanyDashboardOpen = false;
         IsGroupFolderEditorOpen = false;
         IsGroupManagerOpen = false;
     }
@@ -1027,11 +1062,32 @@ public sealed partial class ClientManagementViewModel :
 
     private void OpenGroupManager()
     {
+        IsGroupCompanyDashboardOpen = false;
         IsGroupFolderEditorOpen = false;
         IsGroupClientPickerOpen = false;
         IsGroupMoveFolderOpen = false;
         LoadGroupManager();
         IsGroupManagerOpen = true;
+    }
+
+    private void OpenGroupCompanyDashboard()
+    {
+        if (!IsSelectedGroupCompanyFolder || SelectedGroupFolder is null) return;
+        // The company-group dashboard only reads the current authorized
+        // Client/FY profiles. Never sum different FYs or silently post Tally.
+        var result = GroupCompanyAccountingPolicy.Build(
+            _clientGroupData, SelectedGroupFolder.Id, _allClients);
+        GroupCompanyDashboardMembers.Clear();
+        foreach (var member in result.Members)
+            GroupCompanyDashboardMembers.Add(member);
+        GroupCompanyDashboardTitle = "Group of Companies: " + result.GroupName;
+        GroupCompanyDashboardSummary =
+            $"{result.Members.Count} client records · {result.VerifiedPanCount} verified PAN(s) · " +
+            "same PAN = branch accounts; different PAN = companies under one owner. Financial years remain separate.";
+        GroupCompanyDashboardWarnings = result.Warnings.Count > 0
+            ? "Review before posting: " + string.Join(" | ", result.Warnings)
+            : "PAN classification complete. Tally transfer posting is disabled until ledger and branch-scope read-back passes.";
+        IsGroupCompanyDashboardOpen = true;
     }
 
     private void LoadGroupManager()
@@ -2110,6 +2166,7 @@ public sealed partial class ClientManagementViewModel :
 
     private void RefreshGroupCommands()
     {
+        OpenGroupCompanyDashboardCommand?.RaiseCanExecuteChanged();
         AddGroupFolderCommand?.RaiseCanExecuteChanged();
         RenameGroupFolderCommand?.RaiseCanExecuteChanged();
         DeleteGroupFolderCommand?.RaiseCanExecuteChanged();
