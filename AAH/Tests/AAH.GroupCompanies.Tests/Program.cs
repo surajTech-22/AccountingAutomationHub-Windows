@@ -11,6 +11,13 @@ static ClientProfile Client(long id, string name, string fy, string pan, string 
     FinancialYear = fy, Pan = pan, Gstin = gstin, AdditionalGstins = []
 };
 
+Require(!BranchAccountingModePreference.IsEnabled(null) &&
+        !BranchAccountingModePreference.IsEnabled("") &&
+        !BranchAccountingModePreference.IsEnabled("false") &&
+        BranchAccountingModePreference.IsEnabled("true") &&
+        BranchAccountingModePreference.IsEnabled("1"),
+    "legacy multi-GSTIN clients must stay in their existing merged import flow unless opted in");
+
 var catalog = new ClientGroupCatalogData
 {
     Folders =
@@ -205,6 +212,13 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
 var mainShellView = File.ReadAllText(Path.Combine(app, "MainWindow.xaml"));
 var scopeView = File.ReadAllText(Path.Combine(app, "Views", "BranchScopePreviewView.xaml"));
 var shellVm = File.ReadAllText(Path.Combine(app, "ViewModels", "MainWindowViewModel.cs"));
+Require(view.Contains("EnableSeparateBranchBooks, Mode=TwoWay", StringComparison.Ordinal) &&
+        vm.Contains("BranchAccountingModePreference.Key(saved.Id)", StringComparison.Ordinal) &&
+        vm.Contains("if (EnableSeparateBranchBooks)", StringComparison.Ordinal) &&
+        shellVm.Contains("if (!separateBooksEnabled", StringComparison.Ordinal) &&
+        autom.Contains("BranchAccountingModePreference.IsEnabled(", StringComparison.Ordinal),
+    "legacy GSTIN-only clients were wrongly converted into separate accounting books");
+
 var applicationXaml = File.ReadAllText(Path.Combine(app, "App.xaml"));
 System.Xml.Linq.XDocument.Parse(mainShellView);
 System.Xml.Linq.XDocument.Parse(scopeView);
