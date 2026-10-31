@@ -330,6 +330,8 @@ var moduleReadyHandler = shellModel.Split("private void OnWorkspaceModuleReady("
     .Split("private void QueueAllSafeModulePresentations(", StringSplitOptions.None)[0];
 Check(navigationRebuild.Contains("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) &&
       navigationRebuild.Contains("activeItem.Title.Equals(previousTitle", StringComparison.Ordinal) &&
+      navigationRebuild.Contains("ReferenceEquals(CurrentPage, _selectedNavigationPage)", StringComparison.Ordinal) &&
+      shellModel.Contains("_selectedNavigationPage = nextPage;", StringComparison.Ordinal) &&
       navigationRebuild.IndexOf("NavigationItems.SequenceEqual(available)", StringComparison.Ordinal) <
       navigationRebuild.LastIndexOf("NavigationItems.Clear();", StringComparison.Ordinal) &&
       !navigationRebuild.Contains("activeItem.PageFactory()", StringComparison.Ordinal) &&
