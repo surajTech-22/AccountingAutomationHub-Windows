@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using AccountingAutomationHub.Desktop.Services;
 
 namespace AccountingAutomationHub.Desktop.Views;
 
@@ -33,9 +34,8 @@ public partial class ConsolidatedBranchDashboardView : UserControl
             if (current is ScrollViewer inner)
             {
                 withinNestedScroller = true;
-                var canScrollHere = e.Delta > 0
-                    ? inner.VerticalOffset > 0.5d
-                    : inner.VerticalOffset < inner.ScrollableHeight - 0.5d;
+                var canScrollHere = ConsolidatedDashboardWheelRouting.CanScrollNested(
+                    inner.VerticalOffset, inner.ScrollableHeight, e.Delta);
                 if (canScrollHere) return;
             }
             current = current is Visual or Visual3D
@@ -46,14 +46,9 @@ public partial class ConsolidatedBranchDashboardView : UserControl
         if (!ReferenceEquals(current, outer) || !withinNestedScroller)
             return;
 
-        var wheelLines = SystemParameters.WheelScrollLines;
-        if (wheelLines == 0) return; // Windows setting explicitly disables wheel scrolling.
-        var lineTravel = wheelLines == -1
-            ? outer.ViewportHeight
-            : Math.Max(1, wheelLines) * 16d;
-        var target = Math.Clamp(
-            outer.VerticalOffset - e.Delta / (double)Mouse.MouseWheelDeltaForOneLine * lineTravel,
-            0d, outer.ScrollableHeight);
+        var target = ConsolidatedDashboardWheelRouting.OuterTarget(
+            outer.VerticalOffset, outer.ScrollableHeight, outer.ViewportHeight,
+            e.Delta, SystemParameters.WheelScrollLines);
         if (Math.Abs(target - outer.VerticalOffset) < 0.1d) return;
 
         outer.ScrollToVerticalOffset(target);
