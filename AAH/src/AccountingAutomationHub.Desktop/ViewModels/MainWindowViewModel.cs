@@ -1183,10 +1183,18 @@ public sealed class MainWindowViewModel :
                 if (parent is null)
                     throw new InvalidOperationException("The private branch parent was not found.");
                 _privateBranchParentClientId = parent.Id;
-                var branches = ClientBranchCatalog.Resolve(parent,
-                    _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
+                var separateBooksEnabled = BranchAccountingModePreference.IsEnabled(
+                    _applicationPreferences.Get(BranchAccountingModePreference.Key(parent.Id)));
+                var branches = separateBooksEnabled
+                    ? ClientBranchCatalog.Resolve(parent,
+                        _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)))
+                    : Array.Empty<ClientBranchRecord>();
                 try
                 {
+                    if (!separateBooksEnabled &&
+                        (_isPrivateBranchActive || _privateBranchAccounts.FindByParent(parent.Id).Count > 0))
+                        throw new InvalidOperationException(
+                            "Private branch accounting already exists but the separate-books setting is disabled. Accounting remains locked pending reconciliation.");
                     foreach (var scope in BranchAccountingWorkspaceCatalog.Build(parent, branches))
                         BranchWorkspaces.Add(scope);
                     if (owner is not null && !BranchWorkspaces.Any(x => x.ScopeId.Equals(owner.BranchId, StringComparison.OrdinalIgnoreCase)))
