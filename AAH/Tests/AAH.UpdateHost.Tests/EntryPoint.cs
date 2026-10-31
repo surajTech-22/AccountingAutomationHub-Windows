@@ -82,6 +82,25 @@ internal static class EntryPoint
             "WPF startup readiness still depends solely on ContextIdle and can be starved.");
         Console.WriteLine("PASS: exact-install-only multi-process closure, no unrelated processes, newer/same-version recovery, downgrade rejection and Loaded readiness.");
 
+        // 06:51:47Z on October 31 is 12:21:47 in India. Log UTC as
+        // source authority, but always show the correct local interpretation.
+        var sampleUtc = new DateTimeOffset(2026, 10, 31, 6, 51, 47, TimeSpan.Zero);
+        var timestamp = Program.FormatTimestamp(sampleUtc);
+        Assert(timestamp.StartsWith("2026-10-31T06:51:47.0000000Z ", StringComparison.Ordinal) &&
+               timestamp.Contains("[IST 2026-10-31 12:21:47.000 +05:30]", StringComparison.Ordinal),
+            "The update host log shows the wrong India local time or lost its UTC prefix.");
+        var hostSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AAH.UpdateHost", "Program.cs"));
+        var releaseClientSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "Services", "GitHubAutoUpdateService.cs"));
+        Assert(hostSource.Contains("var restartClock = Stopwatch.StartNew();", StringComparison.Ordinal) &&
+               hostSource.Contains("restartClock.Elapsed < TimeSpan.FromMinutes(3)", StringComparison.Ordinal) &&
+               desktopSource.Contains("var shutdownClock = System.Diagnostics.Stopwatch.StartNew();", StringComparison.Ordinal) &&
+               desktopSource.Contains("shutdownClock.Elapsed < TimeSpan.FromMinutes(10)", StringComparison.Ordinal) &&
+               releaseClientSource.Contains("ToOffset(TimeSpan.FromMinutes(330))", StringComparison.Ordinal),
+            "Updater timeout depends on corrected wall clock or local release logging lacks IST annotation.");
+        Console.WriteLine("PASS: UTC-to-IST log conversion and clock-change-safe elapsed update deadlines.");
+
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
         Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),

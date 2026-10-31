@@ -475,9 +475,14 @@ internal static class GitHubAutoUpdateService
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "AccountingAutomationHub", "AutoUpdateLogs");
             Directory.CreateDirectory(folder);
+            // Preserve the UTC ISO prefix for automation; add readable IST
+            // so local operators do not misread Z timestamps as Windows time.
+            var utc = DateTimeOffset.UtcNow;
+            var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
             File.AppendAllText(Path.Combine(folder, "github-update.log"),
-                DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine,
-                Encoding.UTF8);
+                utc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture) +
+                " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) +
+                "] " + line + Environment.NewLine, Encoding.UTF8);
         }
         catch { /* Update check failures never affect accounting runtime. */ }
     }

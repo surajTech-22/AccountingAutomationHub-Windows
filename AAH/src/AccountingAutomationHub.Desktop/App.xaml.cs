@@ -1153,7 +1153,7 @@ public partial class App : System.Windows.Application
         try
         {
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "AccountingAutomationHub_v4_0_0_startup.log"),
-                $"{DateTime.UtcNow:O} PID {Environment.ProcessId}: {message}{Environment.NewLine}");
+                $"{FormatUpdateDiagnosticTimestamp(DateTimeOffset.UtcNow)} PID {Environment.ProcessId}: {message}{Environment.NewLine}");
         }
         catch { }
     }
@@ -1185,11 +1185,13 @@ public partial class App : System.Windows.Application
             // Quiesce NEW automatic observations before testing for idle. The normal
             // window X, tray visibility and user Auto Import pause remain unchanged.
             AutomationService?.BeginVerifiedUpdateQuiescence();
-            var deadline = DateTime.UtcNow.AddMinutes(10);
+            // A wall-clock correction must not shorten or extend Tally's
+            // graceful drain. Stopwatch measures actual elapsed time.
+            var shutdownClock = System.Diagnostics.Stopwatch.StartNew();
             var quietSamples = 0;
-            var nextBusyDiagnostic = DateTime.UtcNow;
+            var nextBusyDiagnostic = TimeSpan.Zero;
             WriteShutdownDiagnostic("Verified updater requested graceful exit; new automation intake quiesced.");
-            while (DateTime.UtcNow < deadline && !_isExiting)
+            while (shutdownClock.Elapsed < TimeSpan.FromMinutes(10) && !_isExiting)
             {
                 var tallyBusy = _mainViewModel?.IsTallyBusy ?? false;
                 var automationBusy = AutomationService?.HasPendingWorkForUpdate ?? false;
@@ -1197,12 +1199,12 @@ public partial class App : System.Windows.Application
                 if (tallyBusy || automationBusy || distributedBusy)
                 {
                     quietSamples = 0;
-                    if (DateTime.UtcNow >= nextBusyDiagnostic)
+                    if (shutdownClock.Elapsed >= nextBusyDiagnostic)
                     {
                         WriteShutdownDiagnostic(
                             $"Verified updater waiting: tally={tallyBusy} distributed={distributedBusy} " +
                             (AutomationService?.VerifiedUpdateBusySummary ?? "automation=not-started"));
-                        nextBusyDiagnostic = DateTime.UtcNow.AddSeconds(10);
+                        nextBusyDiagnostic = shutdownClock.Elapsed + TimeSpan.FromSeconds(10);
                     }
                 }
                 else if (++quietSamples >= 3)
@@ -1427,12 +1429,22 @@ public partial class App : System.Windows.Application
             try { cancellation.Cancel(); } catch { }
     }
 
+    private static string FormatUpdateDiagnosticTimestamp(DateTimeOffset timestamp)
+    {
+        // Keep the UTC ISO prefix, and annotate it for India-based operators.
+        var utc = timestamp.ToUniversalTime();
+        var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
+        return utc.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
+            " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz",
+                System.Globalization.CultureInfo.InvariantCulture) + "]";
+    }
+
     internal static void WriteShutdownDiagnostic(string message)
     {
         try
         {
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "AccountingAutomationHub_v4_0_0_shutdown.log"),
-                $"{DateTime.UtcNow:O} PID {Environment.ProcessId}: {message}{Environment.NewLine}");
+                $"{FormatUpdateDiagnosticTimestamp(DateTimeOffset.UtcNow)} PID {Environment.ProcessId}: {message}{Environment.NewLine}");
         }
         catch { }
     }
