@@ -3207,19 +3207,10 @@ public sealed class BackgroundAutomationService : IDisposable
         {
         try
         {
-            // Shared Sales/Purchase watchers can overlap linked Auto Import roots.
-            // Suppress branch-folder sources here too: the central source-set
-            // path can otherwise bypass the generic watcher/queue isolation.
+            // Central source discovery may overlap branch watcher roots.
+            // Source identity is resolved below, before any parent write.
             var isBranchCandidate = path.Replace('/', '\\').Contains(
                 "\\Branches\\", StringComparison.OrdinalIgnoreCase);
-            if (isBranchCandidate && _automationRepository.GetFolders().Any(folder =>
-                    IsWithinBranchContainer(folder.FolderPath, path)))
-            {
-                AutomationDiagnosticLog.Write("BRANCH-CENTRAL-SOURCE-DEFER",
-                    "Shared Sales/Purchase observation belongs to a branch folder; parent posting blocked until branch-specific accounting authority is linked.",
-                    path);
-                return;
-            }
             // Fix131: historical startup indexing must not reopen/reclassify/rehash every
             // unchanged Sales/Purchase source on every launch. The saved source cache can
             // prove an exact size+mtime path is already part of a handled source-set. Live
@@ -3290,6 +3281,70 @@ public sealed class BackgroundAutomationService : IDisposable
             var financialYearHint = DetectSourceFinancialYearHint(path, identityText);
             var fileHash = ComputeHash(path);
             var module = kind == AutomationFileKind.Sales ? "Sales" : "Purchase";
+
+            // A file under XYZ/Branches/Karnataka must go to the registered
+            // Karnataka private ClientId, never to XYZ's consolidated books.
+            // The original child folder watcher also uses QueueFile; its
+            // processed-file fingerprint makes this discovery idempotent.
+            if (isBranchCandidate)
+            {
+                var parentRoots = _automationRepository.GetFolders()
+                    .Where(f => IsWithinBranchContainer(f.FolderPath, path))
+                    .ToArray();
+                if (parentRoots.Length > 0)
+                {
+                    var verified = parentRoots
+                        .Select(f => new
+                        {
+                            Parent = f,
+                            Branch = ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var b) ? b : null
+                        })
+                        .Where(x => x.Branch is not null)
+                        .ToArray();
+                    if (verified.Length != 1)
+                    {
+                        AutomationDiagnosticLog.Write("BRANCH-CENTRAL-SOURCE-DEFER",
+                            "Branch file lacks one unique parent/branch marker; import safely deferred.", path);
+                        return;
+                    }
+                    var branchEntry = verified[0].Branch!;
+                    var link = _privateBranchAccounts.FindByParent(verified[0].Parent.ClientId)
+                        .SingleOrDefault(x => x.BranchId.Equals(branchEntry.BranchId, StringComparison.OrdinalIgnoreCase));
+                    var privateFolder = link is null ? null : _automationRepository.GetFolders()
+                        .FirstOrDefault(f => f.ClientId == link.ChildClientId &&
+                            f.FinancialYear.Equals(verified[0].Parent.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+                            !f.IsPaused &&
+                            Path.GetFullPath(f.FolderPath).Equals(Path.GetFullPath(branchEntry.FolderPath),
+                                StringComparison.OrdinalIgnoreCase));
+                    var privateClient = privateFolder is null ? null : _clientRepository.GetById(privateFolder.ClientId);
+                    var ownedGstin = NormalizeGstin(branchEntry.Gstin);
+                    if (privateFolder is null || privateClient is null || privateClient.IsArchived ||
+                        ownedGstin.Length != 15 ||
+                        !NormalizeGstin(privateClient.Gstin).Equals(ownedGstin, StringComparison.OrdinalIgnoreCase) ||
+                        !sourceGstins.Contains(ownedGstin, StringComparer.OrdinalIgnoreCase) ||
+                        (financialYearHint.Length > 0 &&
+                         !financialYearHint.Equals(NormalizeFinancialYearHint(privateFolder.FinancialYear),
+                             StringComparison.OrdinalIgnoreCase)))
+                    {
+                        AutomationDiagnosticLog.Write("BRANCH-CENTRAL-SOURCE-DEFER",
+                            "Branch source GSTIN/FY or registered private owner could not be proven; original retained.", path);
+                        return;
+                    }
+                    if (isSourceSetCandidate)
+                    {
+                        SalesPurchaseSourceCache.Record(path, module, ownedGstin,
+                            privateFolder.FinancialYear, fileHash, info.Length, info.LastWriteTimeUtc);
+                        QueueSalesPurchaseSourceSet(privateFolder.ClientId,
+                            privateFolder.FinancialYear, module, ownedGstin);
+                    }
+                    else
+                    {
+                        QueueFile(privateFolder.FolderId, path, force: true,
+                            forcedKind: kind, precomputedHash: fileHash);
+                    }
+                    return;
+                }
+            }
 
             // Cache source identity first. A blank FY is intentional when the source does not
             // prove its period; GetPaths can still use it as shared read-only source evidence.
@@ -3362,11 +3417,31 @@ public sealed class BackgroundAutomationService : IDisposable
                                 QueueSalesPurchaseSourceSet(ownerClient.Id, ownerClient.FinancialYear, module, linkedGstin);
                         }
                         if (!isSourceSetCandidate && linkedGstins.Length == 1 &&
-                            linkedGstins[0].Equals(ownerGstin, StringComparison.OrdinalIgnoreCase))
+                            BranchAccountingModePreference.IsEnabled(
+                                _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(ownerClient.Id))))
+                        {
+                            // Existing XYZ root source: ownership comes from the
+                            // workbook's single GSTIN, not a guessed folder name.
+                            var branch = ClientBranchCatalog.Resolve(ownerClient,
+                                _branchPreferenceRepository.Get(ClientBranchCatalog.Key(ownerClient.Id)))
+                                .SingleOrDefault(b => b.Gstin.Equals(linkedGstins[0], StringComparison.OrdinalIgnoreCase));
+                            var link = branch is null ? null : _privateBranchAccounts.FindByParent(ownerClient.Id)
+                                .SingleOrDefault(x => x.BranchId.Equals(branch.BranchId, StringComparison.OrdinalIgnoreCase));
+                            var targetFolder = link is null ? null : _automationRepository.GetFolders()
+                                .FirstOrDefault(f => f.ClientId == link.ChildClientId &&
+                                    f.FinancialYear.Equals(ownerClient.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+                                    !f.IsPaused && Directory.Exists(f.FolderPath));
+                            if (targetFolder is null ||
+                                !QueueFile(targetFolder.FolderId, path, force: true, forcedKind: kind, precomputedHash: fileHash))
+                                AutomationDiagnosticLog.Write("BRANCH-SALES-PURCHASE-PENDING",
+                                    "Source was identified but branch Auto Import owner was not ready or source was already processed; no parent posting.", path);
+                        }
+                        else if (!isSourceSetCandidate && linkedGstins.Length == 1 &&
+                                 linkedGstins[0].Equals(ownerGstin, StringComparison.OrdinalIgnoreCase))
                             QueueFile(registeredOwner.FolderId, path, force: true, manualReimport: false, forcedKind: kind, precomputedHash: fileHash);
                         else if (!isSourceSetCandidate && linkedGstins.Length > 0)
                             AutomationDiagnosticLog.Write("SALES-PURCHASE-MULTIGST",
-                                "Secondary registration workbook held for GSTIN-specific review instead of posting under primary GSTIN.", path);
+                                "Ambiguous registration workbook held for GSTIN-specific review rather than posting under the wrong branch.", path);
                     }
                 }
                 return;
@@ -4211,16 +4286,46 @@ public sealed class BackgroundAutomationService : IDisposable
 
     private bool IsPrivateBranchOwnershipVerified(
         AutomationFolderRegistration folder, string path,
-        InternalBranchAccountLink branchLink)
+        InternalBranchAccountLink branchLink, AutomationFileKind? sourceKind = null)
     {
-        return _automationRepository.GetFolders().Any(f =>
-            f.ClientId == branchLink.ParentClientId &&
-            f.FinancialYear.Equals(folder.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+        var parentFolders = _automationRepository.GetFolders()
+            .Where(f => f.ClientId == branchLink.ParentClientId &&
+                f.FinancialYear.Equals(folder.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (parentFolders.Any(f =>
             ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var probe) &&
             probe is not null && probe.ClientId == branchLink.ParentClientId &&
             probe.BranchId.Equals(branchLink.BranchId, StringComparison.OrdinalIgnoreCase) &&
             Path.GetFullPath(probe.FolderPath).Equals(
-                Path.GetFullPath(folder.FolderPath), StringComparison.OrdinalIgnoreCase));
+                Path.GetFullPath(folder.FolderPath), StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // An existing parent Auto Import folder may already contain Sales/Purchase
+        // source files when separate branch accounting is switched on. Only a
+        // source-proven, single-GSTIN workbook may be routed from there to the
+        // corresponding private branch without moving or duplicating source files.
+        // Never extend this exception to Bank, Cash, Journal or unknown files.
+        if (sourceKind is not (AutomationFileKind.Sales or AutomationFileKind.Purchase))
+            return false;
+        var child = _clientRepository.GetById(folder.ClientId);
+        if (child is null || child.IsArchived || NormalizeGstin(child.Gstin).Length != 15)
+            return false;
+        if (!parentFolders.Any(f => Directory.Exists(f.FolderPath) &&
+            IsPathInsideFolder(path, f.FolderPath) &&
+            !IsWithinBranchContainer(f.FolderPath, path)))
+            return false;
+        try
+        {
+            var identity = _fileClassifier.GetIdentitySearchText(path);
+            var owners = ExtractCentralSourceOwnerGstins(path, identity)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var fiscal = DetectSourceFinancialYearHint(path, identity);
+            return owners.Length == 1 &&
+                   owners[0].Equals(NormalizeGstin(child.Gstin), StringComparison.OrdinalIgnoreCase) &&
+                   (fiscal.Length == 0 ||
+                    fiscal.Equals(NormalizeFinancialYearHint(folder.FinancialYear), StringComparison.OrdinalIgnoreCase));
+        }
+        catch { return false; }
     }
 
     private static bool IsWithinBranchContainer(string registeredRoot, string filePath)
@@ -4359,7 +4464,7 @@ public sealed class BackgroundAutomationService : IDisposable
         var branchLink = _privateBranchAccounts.FindByChild(folder.ClientId);
         if (branchLink is not null)
         {
-            if (!IsPrivateBranchOwnershipVerified(folder, path, branchLink))
+            if (!IsPrivateBranchOwnershipVerified(folder, path, branchLink, forcedKind))
             {
                 AutomationDiagnosticLog.Write("BRANCH-IMPORT-OWNER-MISMATCH",
                     "Private branch source has no exact parent/BranchId folder marker. No import attempted.", path);
@@ -5796,7 +5901,7 @@ public sealed class BackgroundAutomationService : IDisposable
                 }
                 var queuedBranch = _privateBranchAccounts.FindByChild(currentFolder.ClientId);
                 if (queuedBranch is not null &&
-                    !IsPrivateBranchOwnershipVerified(currentFolder, item.Path, queuedBranch))
+                    !IsPrivateBranchOwnershipVerified(currentFolder, item.Path, queuedBranch, item.ForcedKind))
                 {
                     AutomationDiagnosticLog.Write("BRANCH-STALE-QUEUE-OWNERSHIP",
                         "Branch marker/parent link changed since enqueue. Import blocked.", item.Path);
