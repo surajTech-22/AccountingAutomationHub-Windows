@@ -297,6 +297,62 @@ try
             banking.GetAccounts(second.Id, "2026-27").Count == 0 &&
             banking.GetAccounts(persistedParent.Id, "2026-27").Count == 0,
         "existing real bank repository mixed parent and sibling branch transactions");
+    var sales = new AccountingAutomationHub.Infrastructure.Sales.SqliteSalesRecordRepository(privateDbPath);
+    sales.Initialize();
+    var salesSource = new AccountingAutomationHub.Domain.Sales.SalesAutoImportResult
+    {
+        CompanyName = "Parent Branch Company",
+        ClientGstin = first.Gstin, FinancialYear = first.FinancialYear,
+        SourceFingerprint = "BRANCH-KA-SALES-2026-27",
+        Records = [new AccountingAutomationHub.Domain.Sales.SalesImportRecord
+        {
+            Destination = "Sales", ClientGstin = first.Gstin,
+            DocumentNumber = "KA-B001", DocumentDate = new DateTime(2026, 5, 1),
+            TaxableValue = 1000m, DocumentValue = 1180m,
+            Igst = 180m, SourceFile = "KA-source.xlsx",
+            SourcePath = "Branches/Karnataka/Sales/KA-source.xlsx",
+            SourceOrigin = "Synthetic isolated regression",
+            SourceHash = "KA-SOURCE-HASH"
+        }]
+    };
+    Require(sales.ReplaceAutomaticImport(first.Id, "2026-27", salesSource) == 1,
+        "existing Sales repository did not save a private branch-owned row");
+    Require(sales.GetRecords(first.Id, "2026-27").Count == 1 &&
+            sales.GetRecords(second.Id, "2026-27").Count == 0 &&
+            sales.GetRecords(persistedParent.Id, "2026-27").Count == 0,
+        "Sales import authority leaked between private branch and parent");
+
+    var purchases = new AccountingAutomationHub.Infrastructure.Purchases.SqlitePurchaseRecordRepository(privateDbPath);
+    purchases.Initialize();
+    var purchaseSource = new AccountingAutomationHub.Domain.Purchases.PurchaseAutoImportResult
+    {
+        CompanyName = "Parent Branch Company",
+        ClientGstin = second.Gstin, FinancialYear = second.FinancialYear,
+        SourceFingerprint = "BRANCH-MH-PURCHASE-2026-27",
+        Records = [new AccountingAutomationHub.Domain.Purchases.PurchaseImportRecord
+        {
+            Destination = "Purchase", ClientGstin = second.Gstin,
+            DocumentNumber = "MH-P001", DocumentDate = new DateTime(2026, 5, 2),
+            TaxableValue = 400m, DocumentValue = 472m,
+            Igst = 72m, SourceFile = "MH-source.xlsx",
+            SourcePath = "Branches/Maharashtra/Purchase/MH-source.xlsx"
+        }],
+        Issues = [], Warnings = [],
+        Summary = new AccountingAutomationHub.Domain.Purchases.PurchaseImportSummary { PurchaseRows = 1 },
+        Verification = new AccountingAutomationHub.Domain.Purchases.PurchaseSourceVerification
+        {
+            TwoA = new AccountingAutomationHub.Domain.Purchases.PurchaseFormVerification(),
+            TwoB = new AccountingAutomationHub.Domain.Purchases.PurchaseFormVerification()
+        },
+        SourceManifest = []
+    };
+    Require(purchases.ReplaceAutomaticImport(second.Id, "2026-27", purchaseSource) == 1,
+        "existing Purchase repository did not save private branch-owned data");
+    Require(purchases.GetRecords(second.Id, "2026-27").Count == 1 &&
+            purchases.GetRecords(first.Id, "2026-27").Count == 0 &&
+            purchases.GetRecords(persistedParent.Id, "2026-27").Count == 0,
+        "Purchase import authority leaked between private branch and parent");
+
 }
 finally
 {
