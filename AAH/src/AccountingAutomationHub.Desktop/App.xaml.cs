@@ -1184,6 +1184,7 @@ public partial class App : System.Windows.Application
         if (Interlocked.Exchange(ref _updateShutdownRequestInProgress, 1) != 0)
             return;
         var exitStarted = false;
+        var quiescenceStarted = false;
         try
         {
             // Listener exists early, but no updater may stop partly initialized
@@ -1202,6 +1203,7 @@ public partial class App : System.Windows.Application
             // Quiesce NEW automatic observations before testing for idle. The normal
             // window X, tray visibility and user Auto Import pause remain unchanged.
             AutomationService?.BeginVerifiedUpdateQuiescence();
+            quiescenceStarted = true;
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var quietSamples = 0;
             var nextBusyDiagnostic = TimeSpan.Zero;
@@ -1239,7 +1241,7 @@ public partial class App : System.Windows.Application
         }
         finally
         {
-            if (!exitStarted && !_isExiting)
+            if (quiescenceStarted && !exitStarted && !_isExiting)
             {
                 try { AutomationService?.EndVerifiedUpdateQuiescence(); }
                 catch (Exception exception) { WriteShutdownDiagnostic("Verified updater resume failed: " + exception); }
