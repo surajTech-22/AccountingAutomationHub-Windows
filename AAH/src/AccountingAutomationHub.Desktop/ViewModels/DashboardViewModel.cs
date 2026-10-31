@@ -221,27 +221,17 @@ public sealed class DashboardViewModel :
     private bool _canConfirmTallyLink;
     private bool _isPrivateBranchDashboard;
 
-    // One original Tally panel for both parent and branch. Branch view reads
-    // its parent's existing link; no second Tally company is linked.
+    // Original dashboard Tally link/export applies to the current Client/FY,
+    // including separate private branch accounts. No parent-link inheritance.
     public bool ShowTallyPanel => true;
-    public bool IsBranchTallyReference => _isPrivateBranchDashboard;
+    public bool IsBranchTallyReference => false;
 
-    // Real branch Dashboard shares all normal accounting modules, but no
-    // branch has verified authority to post to the parent's Tally company.
-    // Keep Tally export/auto sync disabled until explicit branch readback.
     public void SetPrivateBranchDashboard(bool isPrivate)
     {
         if (_isPrivateBranchDashboard == isPrivate) return;
         _isPrivateBranchDashboard = isPrivate;
         OnPropertyChanged(nameof(ShowTallyPanel));
         OnPropertyChanged(nameof(IsBranchTallyReference));
-        if (isPrivate)
-        {
-            Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
-            Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
-            if (_clientContext.CurrentClient is { } current)
-                _tallyCoordinator.SetOutboundAutoSyncEnabled(current, false);
-        }
         RefreshTallySection();
         RefreshTallyCommandStates();
     }
@@ -836,7 +826,6 @@ public sealed class DashboardViewModel :
         {
             var normalized = value.Equals("Full Auto", StringComparison.OrdinalIgnoreCase) ? "Full Auto" :
                 value.Equals("Selected", StringComparison.OrdinalIgnoreCase) ? "Selected" : "Off";
-            if (_isPrivateBranchDashboard) normalized = "Off";
             if (!SetProperty(ref _tallyAutoSyncMode, normalized)) return;
             OnPropertyChanged(nameof(IsTallyAutoSyncOff));
             OnPropertyChanged(nameof(IsTallyAutoSyncEnabled));
@@ -2612,34 +2601,21 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(AreSupportingTallyReportsEnabled));
         var client = _clientContext.CurrentClient;
         var selected = _tallyCoordinator.SelectedCompany;
-        // Keep the coordinator's actual ClientId authority unchanged: only the
-        // existing parent link is reused for display when inside a private branch.
-        // Do not make this borrowed reference a confirmed child export authority.
-        var ownedLink = _tallyCoordinator.GetCurrentClientLink();
-        var branchOwner = _isPrivateBranchDashboard && client is not null
-            ? new SqliteInternalBranchAccountRepository().FindByChild(client.Id)
-            : null;
-        var link = branchOwner is null
-            ? ownedLink : _tallyRepository.GetLinkForClient(branchOwner.ParentClientId);
-        var pending = !_isPrivateBranchDashboard && client is not null && _tallyCoordinator.IsCurrentSelectionPending();
+        // No parent-link borrowing: the coordinator reads the active ClientId.
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        var pending = client is not null && _tallyCoordinator.IsCurrentSelectionPending();
         var openLinkedCompany = link is null
             ? null
             : _tallyCoordinator.OpenCompanies.FirstOrDefault(company =>
                 company.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase));
 
-        TallyConnectionStatus = _isPrivateBranchDashboard && link is not null
-            ? "Existing consolidated Tally company • " + link.CompanyName
-            : _tallyCoordinator.ConnectionStatus;
-        TallyActionStatus = _isPrivateBranchDashboard && link is not null
-            ? "This branch uses the existing Tally link. Voucher posting requires verified branch-ledger ownership."
-            : _tallyCoordinator.LastOperationStatus;
-        TallyLiveXmlStatus = _isPrivateBranchDashboard && link is not null
-            ? "Existing consolidated Tally link: " + link.CompanyName
-            : _tallyCoordinator.LiveXmlStatus;
+        TallyConnectionStatus = _tallyCoordinator.ConnectionStatus;
+        TallyActionStatus = _tallyCoordinator.LastOperationStatus;
+        TallyLiveXmlStatus = _tallyCoordinator.LiveXmlStatus;
         OnPropertyChanged(nameof(TallyReadyVoucherCount));
         OnPropertyChanged(nameof(TallyNewMasterCreateCount));
         HasPendingTallySelection = pending;
-        HasConfirmedTallyLink = !_isPrivateBranchDashboard && ownedLink is not null;
+        HasConfirmedTallyLink = link is not null;
 
         if (client is null)
         {
@@ -2649,8 +2625,7 @@ public sealed class DashboardViewModel :
 
         TallyClientLink? metricLink = link;
         var displayCompany = pending ? selected : openLinkedCompany ?? selected;
-        var confirmedLinkIsLive = !_isPrivateBranchDashboard &&
-            IsConfirmedTallyLinkLive(link, openLinkedCompany);
+        var confirmedLinkIsLive = IsConfirmedTallyLinkLive(link, openLinkedCompany);
 
         if (pending && selected is not null)
         {
@@ -2661,14 +2636,10 @@ public sealed class DashboardViewModel :
         else if (link is not null)
         {
             ApplyLinkIdentity(link, openLinkedCompany);
-            TallyLinkStatus = _isPrivateBranchDashboard
-                ? $"Existing consolidated Tally link • {link.CompanyName}"
-                : confirmedLinkIsLive
-                    ? "Confirmed link • live connection active"
-                    : $"Confirmed link • {link.CompanyName} is not currently open in Tally";
-            TallyIdentityMatchText = _isPrivateBranchDashboard
-                ? "Same existing parent-company Tally link. Branch voucher posting stays disabled until branch-ledger ownership is verified."
-                : "This Tally company is exclusively linked to the current client.";
+            TallyLinkStatus = confirmedLinkIsLive
+                ? "Confirmed link • live connection active"
+                : $"Confirmed link • {link.CompanyName} is not currently open in Tally";
+            TallyIdentityMatchText = "This Tally company is exclusively linked to the active Client/FY.";
         }
         else if (selected is not null)
         {
@@ -2699,15 +2670,15 @@ public sealed class DashboardViewModel :
         var identityAllowed = selected is not null &&
                               TallyLiveConnectionCoordinator.CanConfirmIdentity(client, selected);
 
-        CanConfirmTallyLink = !_isPrivateBranchDashboard && pending &&
+        CanConfirmTallyLink = pending &&
                               selected is not null &&
                               identityAllowed &&
                               !selectedLinkedElsewhere &&
                               !clientHasDifferentLink &&
                               !_tallyCoordinator.IsBusy;
-        CanCancelTallySelection = !_isPrivateBranchDashboard && pending && !_tallyCoordinator.IsBusy;
-        CanUnlinkTallyLink = !_isPrivateBranchDashboard && ownedLink is not null && !_tallyCoordinator.IsBusy;
-        CanImportBankRange = !_isPrivateBranchDashboard && confirmedLinkIsLive &&
+        CanCancelTallySelection = pending && !_tallyCoordinator.IsBusy;
+        CanUnlinkTallyLink = link is not null && !_tallyCoordinator.IsBusy;
+        CanImportBankRange = confirmedLinkIsLive &&
                              BankTallyFromDate is not null &&
                              BankTallyToDate is not null &&
                              BankTallyFromDate.Value.Date <= BankTallyToDate.Value.Date &&
@@ -2959,7 +2930,6 @@ public sealed class DashboardViewModel :
 
     private bool CanExportSelectedToTally()
     {
-        if (_isPrivateBranchDashboard) return false;
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             return false;
@@ -3034,7 +3004,6 @@ public sealed class DashboardViewModel :
 
     private async Task ConfirmTallyLinkAsync()
     {
-        if (_isPrivateBranchDashboard) return;
         try
         {
             TallyActionStatus = "Confirming the selected Tally company link…";
@@ -3743,7 +3712,6 @@ public sealed class DashboardViewModel :
 
     private async Task RunTallyAutoSyncAsync()
     {
-        if (_isPrivateBranchDashboard) return;
         if (_disposed || IsTallyAutoSyncOff || Interlocked.CompareExchange(ref _autoTallySyncInFlight, 1, 0) != 0) return;
         var claimedPending = 0;
         var claimedChanged = 0;
@@ -4117,11 +4085,6 @@ public sealed class DashboardViewModel :
 
     private async Task ExportSelectedToTallyAsync()
     {
-        if (_isPrivateBranchDashboard)
-        {
-            TallyExportStatus = "Branch Tally posting requires a verified branch/company mapping.";
-            return;
-        }
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             TallyExportStatus = "Your role does not have permission to export accounting vouchers to Tally.";
