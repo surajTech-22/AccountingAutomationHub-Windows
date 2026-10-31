@@ -67,7 +67,7 @@ public static class ClientBranchAutoImportLayout
                     throw new InvalidOperationException("Flat branch destination already exists: " + path);
                 Directory.Move(oldPath, path);
             }
-            if (existing is null)
+            if (existing is null && oldPath is null)
             {
                 // Never claim a user-created folder silently. It might contain
                 // data for another company, and a recursive watcher is live.
