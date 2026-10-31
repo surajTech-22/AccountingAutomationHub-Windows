@@ -3884,6 +3884,29 @@ public sealed class MainWindowViewModel :
 
     private void OnAccountingLiveCacheChanged(object? sender, AccountingLiveChange change)
     {
+        // Consolidated readback follows actual committed branch/parent module
+        // changes, never the 5-second Tally link/status notification.
+        var openClient = _clientContext.CurrentClient;
+        if (CurrentPage is ConsolidatedBranchDashboardViewModel consolidated &&
+            openClient is not null && openClient.Id == consolidated.ParentClientId &&
+            openClient.FinancialYear.Equals(change.FinancialYear, StringComparison.OrdinalIgnoreCase))
+        {
+            var isParentSource = change.ClientId == openClient.Id;
+            var isVerifiedBranchSource = !isParentSource &&
+                _privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId == openClient.Id;
+            if (isParentSource || isVerifiedBranchSource)
+            {
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher is not null)
+                    _ = dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (ReferenceEquals(CurrentPage, consolidated) &&
+                            _clientContext.CurrentClient?.Id == openClient.Id)
+                            consolidated.RefreshAfterCommittedAccountingChange();
+                    }), DispatcherPriority.Background);
+            }
+        }
+
         // Fix118: Stock Master edits are live accounting authority. Re-normalize already
         // imported Purchase/Sales inventory rows from their original values; never require
         // the user to reimport a workbook just to apply an Item/Unit/Profile correction.
