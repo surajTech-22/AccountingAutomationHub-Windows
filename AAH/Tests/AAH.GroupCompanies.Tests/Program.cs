@@ -95,6 +95,53 @@ var conflictResult = GroupCompanyAccountingPolicy.Build(catalog, "owner", client
 Require(conflictResult.Members.Single(x => x.ClientId == 22).Pan == "REVIEW",
     "contradictory PAN and GSTIN must be quarantined from owner classification");
 
+
+var unbranched = Client(90, "Normal Client", "2026-27", "ABCDE1234F", "29ABCDE1234F1Z5");
+var normalWorkspace = BranchAccountingWorkspaceCatalog.Build(unbranched, []);
+Require(normalWorkspace.Count == 1 && normalWorkspace[0].ScopeId == "NORMAL" &&
+        normalWorkspace[0].AllowedModules.Contains("Purchase") &&
+        normalWorkspace[0].CanUseExistingClientImporter,
+    "no-branch client must retain existing full accounting workflow");
+normalWorkspace[0].RequireVerifiedImporter();
+
+unbranched.AdditionalGstins = ["27ABCDE1234F1Z5"];
+var registrations = ClientBranchCatalog.Resolve(unbranched, "");
+Require(registrations.Count == 2 &&
+        registrations.Any(x => x.Name == "Karnataka" && x.Gstin == unbranched.Gstin) &&
+        registrations.Any(x => x.Name == "Maharashtra" && x.Gstin == "27ABCDE1234F1Z5"),
+    "unnamed GSTIN branches must use state registration names, including primary GSTIN");
+var workspaces = BranchAccountingWorkspaceCatalog.Build(unbranched, registrations);
+Require(workspaces.Count == 3 && workspaces[0].IsConsolidated &&
+        workspaces[0].AllowedModules.SequenceEqual(["Dashboard", "Tally Import"]) &&
+        workspaces.Skip(1).All(x => !x.IsConsolidated &&
+            x.AllowedModules.Contains("Purchase") && x.AllowedModules.Contains("Journal") &&
+            x.AllowedModules.Contains("Ledger Master") && x.AllowedModules.Contains("GST")),
+    "parent Consolidated must have Dashboard+Tally only; branches need their full independent module menus");
+Require(workspaces.Skip(1).All(x => x.ClientId == unbranched.Id &&
+        x.StorageScopeKey.Contains(x.ScopeId, StringComparison.Ordinal) &&
+        x.ScopeId != "CONSOLIDATED"),
+    "branch workspaces must retain parent Client ID and distinct durable scope IDs");
+Require(workspaces.All(x => !x.CanUseExistingClientImporter),
+    "branched parent or unscoped branches cannot silently route through old Client/FY importer");
+foreach (var workspace in workspaces)
+{
+    try { workspace.RequireVerifiedImporter(); throw new Exception("Unscoped posting allowed."); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("verified scope-specific storage")) { }
+}
+var mismatchedGstin = registrations.Select(x => new ClientBranchRecord
+{
+    BranchId = x.BranchId, Name = x.Name,
+    Gstin = x.Gstin == "27ABCDE1234F1Z5" ? "27PQRST1234A1Z5" : x.Gstin
+}).ToArray();
+try
+{
+    BranchAccountingWorkspaceCatalog.Build(unbranched, mismatchedGstin);
+    throw new Exception("Cross-company branch PAN silently joined parent.");
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("must match the individual Client")) { }
+Require(unbranched.Id == 90 && unbranched.AdditionalGstins!.Count == 1,
+    "workspace creation modified original Client or GST registration.");
+
 DirectoryInfo? root = new DirectoryInfo(AppContext.BaseDirectory);
 while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "AAH", "src")))
     root = root.Parent;
@@ -112,4 +159,4 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
         autom.Contains("BRANCH-CENTRAL-SOURCE-DEFER", StringComparison.Ordinal),
     "branch files could be posted through the parent importer before scope isolation");
 
-Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates.");
+Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts.");
