@@ -154,4 +154,16 @@ Check(automationSource.Contains("EnsureBranchFoldersForClient(saved.Id", StringC
       "Unsafe branch files might be posted through parent generic, bank cache-first or central source import.");
 Check(viewModel.Contains("EnsureBranchFoldersForClient(saved.Id, branches)", StringComparison.Ordinal),
       "Saving a branch did not trigger immediate auto-import folder layout.");
+var shellView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "MainWindow.xaml"));
+var shellModel = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
+Check(shellView.Contains("ItemsSource=\"{Binding SidebarBranchWorkspaces}\"", StringComparison.Ordinal) &&
+      shellView.Contains("SelectedItem=\"{Binding SelectedSidebarBranchWorkspace, Mode=TwoWay}\"", StringComparison.Ordinal) &&
+      shellView.Contains("Visibility=\"{Binding HasConfiguredBranchWorkspaces", StringComparison.Ordinal) &&
+      !shellView.Contains("ComboBox ItemsSource=\"{Binding BranchWorkspaces}\"", StringComparison.Ordinal) &&
+      shellModel.Contains("SidebarBranchWorkspaces.Add(scope)", StringComparison.Ordinal) &&
+      shellModel.Contains("BranchAccountingWorkspaceCatalog.Build(parent, configuredBranches)", StringComparison.Ordinal) &&
+      shellModel.Contains("var branches = separateBooksEnabled", StringComparison.Ordinal) &&
+      shellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal),
+      "Branch hierarchy is not rendered in the left sidebar or posting safety was bypassed.");
+Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, branch module folders, owner markers, path lookup, and no unscoped import.");
