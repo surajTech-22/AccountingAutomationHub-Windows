@@ -3901,7 +3901,7 @@ public sealed class MainWindowViewModel :
                 _privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId == openClient.Id;
             if (isParentSource || isVerifiedBranchSource)
             {
-                var dispatcher = Application.Current?.Dispatcher;
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
                 if (dispatcher is not null)
                     _ = dispatcher.BeginInvoke(new Action(() =>
                     {
