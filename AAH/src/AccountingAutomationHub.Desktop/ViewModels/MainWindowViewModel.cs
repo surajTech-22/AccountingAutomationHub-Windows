@@ -1054,6 +1054,16 @@ public sealed class MainWindowViewModel :
         }
     }
 
+    public string TallyLinkActionLabel =>
+        _isPrivateBranchActive && _privateBranchParentClientId > 0 &&
+        _tallyRepository.GetLinkForClient(_privateBranchParentClientId) is not null
+            ? "Linked" : "Link";
+
+    public string TallyLinkActionTooltip =>
+        _isPrivateBranchActive
+            ? "Uses the existing consolidated Tally company link. No second link is required. Branch voucher posting needs verified branch-ledger mapping."
+            : "Link the selected Tally CompanyKey through the existing AAH client link workflow.";
+
     public string TallyConnectionStatus
     {
         get
@@ -1305,6 +1315,9 @@ public sealed class MainWindowViewModel :
             OnPropertyChanged(nameof(BranchAccountingHint));
             OnPropertyChanged(nameof(WorkspacePageTitle));
             OnPropertyChanged(nameof(WorkspacePageSubtitle));
+            OnPropertyChanged(nameof(TallyConnectionStatus));
+            OnPropertyChanged(nameof(TallyLinkActionLabel));
+            OnPropertyChanged(nameof(TallyLinkActionTooltip));
         }
         finally { _refreshingBranchWorkspaces = false; }
     }
@@ -2305,7 +2318,7 @@ public sealed class MainWindowViewModel :
                     ? "Consolidated reporting is for the saved branch scopes only. Live combined balances and Tally import remain blocked until every member ledger is scope-verified."
                     : "Dedicated branch records and modules require verified scope-aware repositories. Existing parent Client/FY rows cannot be presented as this branch's books.";
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
-                ? new ConsolidatedBranchDashboardViewModel(client, _tallyRepository)
+                ? new ConsolidatedBranchDashboardViewModel(client, _tallyRepository, _tallyClientViewModel)
                 : new BranchScopePreviewViewModel(
                     "Dashboard", "Account scope / import verification", scope.DisplayName,
                     scope.ScopeId, scope.FinancialYear, note);
@@ -3149,6 +3162,7 @@ public sealed class MainWindowViewModel :
         OnPropertyChanged(nameof(TallyCompanies));
         OnPropertyChanged(nameof(SelectedTallyCompany));
         OnPropertyChanged(nameof(TallyConnectionStatus));
+        OnPropertyChanged(nameof(TallyLinkActionLabel));
         OnPropertyChanged(nameof(IsTallyConnected));
         OnPropertyChanged(nameof(IsTallyBusy));
         RefreshTallyCommand.RaiseCanExecuteChanged();

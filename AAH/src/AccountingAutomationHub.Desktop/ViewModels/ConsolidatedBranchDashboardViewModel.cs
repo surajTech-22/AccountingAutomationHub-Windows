@@ -21,10 +21,17 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
-    public ConsolidatedBranchDashboardViewModel(ClientProfile parent, SqliteTallyRepository existingTally)
+    public ConsolidatedBranchDashboardViewModel(ClientProfile parent, SqliteTallyRepository existingTally,
+        TallyClientViewModel existingTallyWorkspace)
         : base("Dashboard", "Detailed consolidated client workspace overview")
     {
         if (parent is null) throw new ArgumentNullException(nameof(parent));
+        // Share the existing Tally client connection viewmodel and its original
+        // link/recovery commands. Consolidated is the real parent context;
+        // this does not create a second Tally coordinator or client link.
+        ExistingTallyWorkspace = existingTallyWorkspace
+            ?? throw new ArgumentNullException(nameof(existingTallyWorkspace));
+        ExistingTallyWorkspace.RefreshLocal();
         _parentClientId = parent.Id;
         _financialYear = parent.FinancialYear;
         ClientName = parent.ClientName;
@@ -49,6 +56,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string TallyCompanyName { get; }
     public string TallyCompanyGstin { get; }
     public string TallyConnectionText { get; }
+    public TallyClientViewModel ExistingTallyWorkspace { get; }
     public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];

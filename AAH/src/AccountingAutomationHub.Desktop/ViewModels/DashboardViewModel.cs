@@ -2627,9 +2627,15 @@ public sealed class DashboardViewModel :
             : _tallyCoordinator.OpenCompanies.FirstOrDefault(company =>
                 company.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase));
 
-        TallyConnectionStatus = _tallyCoordinator.ConnectionStatus;
-        TallyActionStatus = _tallyCoordinator.LastOperationStatus;
-        TallyLiveXmlStatus = _tallyCoordinator.LiveXmlStatus;
+        TallyConnectionStatus = _isPrivateBranchDashboard && link is not null
+            ? "Existing consolidated Tally company • " + link.CompanyName
+            : _tallyCoordinator.ConnectionStatus;
+        TallyActionStatus = _isPrivateBranchDashboard && link is not null
+            ? "This branch uses the existing Tally link. Voucher posting requires verified branch-ledger ownership."
+            : _tallyCoordinator.LastOperationStatus;
+        TallyLiveXmlStatus = _isPrivateBranchDashboard && link is not null
+            ? "Existing consolidated Tally link: " + link.CompanyName
+            : _tallyCoordinator.LiveXmlStatus;
         OnPropertyChanged(nameof(TallyReadyVoucherCount));
         OnPropertyChanged(nameof(TallyNewMasterCreateCount));
         HasPendingTallySelection = pending;
@@ -2643,7 +2649,8 @@ public sealed class DashboardViewModel :
 
         TallyClientLink? metricLink = link;
         var displayCompany = pending ? selected : openLinkedCompany ?? selected;
-        var confirmedLinkIsLive = IsConfirmedTallyLinkLive(link, openLinkedCompany);
+        var confirmedLinkIsLive = !_isPrivateBranchDashboard &&
+            IsConfirmedTallyLinkLive(link, openLinkedCompany);
 
         if (pending && selected is not null)
         {

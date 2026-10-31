@@ -143,12 +143,12 @@
                               ToolTip="Select an open Tally company. It is not authority for this client until Link is confirmed."
                               VerticalContentAlignment="Center" />
                     <Button Grid.Column="3"
-                            Content="Link"
+                            Content="{Binding TallyLinkActionLabel}"
                             Command="{Binding ConfirmTopTallyLinkCommand}"
                             Height="29"
                             Margin="4,0,0,0"
                             Padding="8,0"
-                            ToolTip="Explicitly link the selected Tally CompanyKey to this Accounting client. Any explicitly linked Audit client shares the same CompanyKey." />
+                            ToolTip="{Binding TallyLinkActionTooltip}" />
                     <Button Grid.Column="4"
                             Width="29"
                             Height="29"
