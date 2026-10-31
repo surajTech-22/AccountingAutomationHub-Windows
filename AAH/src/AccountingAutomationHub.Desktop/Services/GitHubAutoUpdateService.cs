@@ -480,7 +480,7 @@ internal static class GitHubAutoUpdateService
             var utc = DateTimeOffset.UtcNow;
             var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
             File.AppendAllText(Path.Combine(folder, "github-update.log"),
-                utc.ToString("O", CultureInfo.InvariantCulture) +
+                utc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture) +
                 " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) +
                 "] " + line + Environment.NewLine, Encoding.UTF8);
         }
