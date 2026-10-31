@@ -71,7 +71,7 @@ try
 }
 catch (InvalidOperationException ex) when (ex.Message.Contains("does not belong", StringComparison.Ordinal)) { }
 
-var sourceRoot = new DirectoryInfo(AppContext.BaseDirectory);
+DirectoryInfo? sourceRoot = new DirectoryInfo(AppContext.BaseDirectory);
 while (sourceRoot != null && !Directory.Exists(Path.Combine(sourceRoot.FullName, "AAH", "src")))
     sourceRoot = sourceRoot.Parent;
 if (sourceRoot is null) throw new InvalidOperationException("Repository root not found.");
