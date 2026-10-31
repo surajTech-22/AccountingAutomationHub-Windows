@@ -470,7 +470,27 @@ public sealed class SqliteGovernanceRepository
         var scopeCount = Convert.ToInt32(countCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
         if (scopeCount == 0) return true; // preserve unrestricted local installations until an Administrator creates explicit user scopes.
 
-        return HasExplicitClientAccess(connection, windowsUserName, clientId, financialYear);
+        if (HasExplicitClientAccess(connection, windowsUserName, clientId, financialYear))
+            return true;
+        // Internal branch accounts are not extra Directory clients. Their
+        // permissions inherit the existing parent's explicit client grant,
+        // never a grant from an unrelated company with the same GSTIN/PAN.
+        // A child-specific explicit DENY always wins.
+        long parentId;
+        using (var resolve = connection.CreateCommand())
+        {
+            resolve.CommandText =
+                "SELECT ParentClientId FROM InternalBranchAccounts WHERE ChildClientId=$ClientId LIMIT 1;";
+            resolve.Parameters.AddWithValue("$ClientId", clientId);
+            object? value;
+            try { value = resolve.ExecuteScalar(); }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { return false; } // older schema
+            if (value is null) return false;
+            parentId = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        if (HasExplicitClientDeny(connection, windowsUserName, clientId, financialYear))
+            return false;
+        return HasExplicitClientAccess(connection, windowsUserName, parentId, financialYear);
     }
 
     public bool HasExplicitClientAccess(string userName, long clientId, string financialYear)
@@ -478,6 +498,27 @@ public sealed class SqliteGovernanceRepository
         if (string.IsNullOrWhiteSpace(userName) || clientId <= 0) return false;
         using var connection = OpenConnection();
         return HasExplicitClientAccess(connection, userName, clientId, financialYear);
+    }
+
+    private static bool HasExplicitClientDeny(SqliteConnection connection, string userName, long clientId, string financialYear)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT IsAllowed FROM UserClientAccess
+            WHERE WindowsUserName=$User COLLATE NOCASE
+              AND ClientId=$ClientId
+              AND (FinancialYear=$Fy COLLATE NOCASE OR FinancialYear='')
+              AND (ExpiresUtc='' OR ExpiresUtc>$Now)
+            ORDER BY CASE WHEN FinancialYear=$Fy COLLATE NOCASE THEN 0 ELSE 1 END
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$User", userName.Trim());
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        command.Parameters.AddWithValue("$Fy", (financialYear ?? string.Empty).Trim());
+        command.Parameters.AddWithValue("$Now", DateTime.UtcNow.ToString("O"));
+        var value = command.ExecuteScalar();
+        return value is not null && value != DBNull.Value &&
+            Convert.ToInt32(value, CultureInfo.InvariantCulture) == 0;
     }
 
     private static bool HasExplicitClientAccess(SqliteConnection connection, string userName, long clientId, string financialYear)
