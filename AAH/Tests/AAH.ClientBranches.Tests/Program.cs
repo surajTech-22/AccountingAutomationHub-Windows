@@ -233,6 +233,12 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
+Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _tallyRepository)", StringComparison.Ordinal) &&
+      shellModel.Contains("Existing consolidated Tally company connection", StringComparison.Ordinal) &&
+      shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
+      automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
+      automationSource.Contains("RelocateOwnedGstEvidence(", StringComparison.Ordinal),
+      "Original Tally link or GSTIN ownership migration was disconnected.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");
