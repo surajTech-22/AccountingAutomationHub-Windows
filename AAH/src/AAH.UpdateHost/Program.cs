@@ -704,7 +704,7 @@ internal static class Program
     {
         var utc = utcTimestamp.ToUniversalTime();
         var ist = utc.ToOffset(TimeSpan.FromMinutes(330));
-        return utc.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
+        return utc.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
             " [IST " + ist.ToString("yyyy-MM-dd HH:mm:ss.fff zzz",
                 System.Globalization.CultureInfo.InvariantCulture) + "]";
     }
