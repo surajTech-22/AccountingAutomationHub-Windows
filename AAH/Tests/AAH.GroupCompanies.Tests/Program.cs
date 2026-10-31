@@ -458,7 +458,7 @@ try
             INSERT INTO GstLedgerPeriods(ClientId,FinancialYear,Gstin,LedgerType,PeriodKey,ImportedUtc)
             VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','Electronic Cash Ledger','2026-05','2026-10-31T00:00:00Z');
             INSERT INTO GstPortalSourceState(ClientId,FinancialYear,Gstin,SourceType,SourcePath)
-            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','GSTR-3B','C:\\GST-OLD\\29\\returns.pdf');
+            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','GSTR-3B','C:\GST-OLD\29\returns.pdf');
             INSERT INTO GstBootstrapState(ClientId,FinancialYear,Gstin)
             VALUES ({persistedParent.Id},'2026-27','{first.Gstin}');
             INSERT INTO GstReconciliation(ClientId,FinancialYear,PeriodKey,RefreshedUtc)
