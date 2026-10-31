@@ -79,27 +79,36 @@ try
     Directory.CreateDirectory(tempBranchesRoot);
     var trees = ClientBranchAutoImportLayout.Ensure(tempBranchesRoot, plain.Id, stableIds);
     Check(trees.Count == 4, "Expected one physical branch tree per durable branch.");
-    Check(trees.All(x => Directory.Exists(Path.Combine(x.FolderPath, "Banking")) &&
-                         Directory.Exists(Path.Combine(x.FolderPath, "Purchase")) &&
-                         Directory.Exists(Path.Combine(x.FolderPath, "Sales")) &&
-                         Directory.Exists(Path.Combine(x.FolderPath, "Journal")) &&
-                         Directory.Exists(Path.Combine(x.FolderPath, "Cash")) &&
-                         Directory.Exists(Path.Combine(x.FolderPath, "GST"))),
-        "Every branch must have Banking/Purchase/Sales/Journal/Cash/GST Auto Import folders.");
-    Check(trees.All(x => x.Gstin.Length != 15 ||
-          Directory.Exists(Path.Combine(x.FolderPath, "GST", x.Gstin, "GSTR-3B"))),
-        "Branch-GSTIN special-folder structure missing.");
-    var statement = Path.Combine(trees[0].FolderPath, "Banking", "test-bank.xlsx");
+    Check(trees.All(x => Directory.Exists(x.FolderPath) &&
+                         File.Exists(Path.Combine(x.FolderPath, ClientBranchAutoImportLayout.Marker)) &&
+                         !Directory.Exists(Path.Combine(x.FolderPath, "Banking")) &&
+                         !Directory.Exists(Path.Combine(x.FolderPath, "Purchase")) &&
+                         !Directory.Exists(Path.Combine(x.FolderPath, "Sales")) &&
+                         !Directory.Exists(Path.Combine(x.FolderPath, "GST"))),
+        "Branch Auto Import must have a flat, marker-owned folder, not ten nested module directories.");
+    var statement = Path.Combine(trees[0].FolderPath, "test-bank.xlsx");
     File.WriteAllText(statement, "Synthetic branch-owned source; never imported");
     Check(ClientBranchAutoImportLayout.TryResolve(tempBranchesRoot, statement, out var found) &&
           found!.ClientId == plain.Id && found.BranchId == stableIds[0].BranchId,
-        "Nested bank file did not resolve to branch ownership.");
+        "Flat branch file did not resolve to its durable owner.");
     Check(!ClientBranchAutoImportLayout.TryResolve(tempBranchesRoot,
           Path.Combine(tempBranchesRoot, "Banking", "unscoped.xlsx"), out _),
         "Legacy client root must remain unscoped.");
+
+    // v537 generated unnecessary directories. Delete empty directories only;
+    // never delete, overwrite or relocate files the user already saved.
+    var oldEmpty = Path.Combine(trees[0].FolderPath, "Cash");
+    Directory.CreateDirectory(oldEmpty);
+    var oldOccupied = Path.Combine(trees[0].FolderPath, "Sales");
+    Directory.CreateDirectory(oldOccupied);
+    var salesEvidence = Path.Combine(oldOccupied, "keep-sales.xlsx");
+    File.WriteAllText(salesEvidence, "MUST KEEP");
+    var oldGst = Path.Combine(trees[0].FolderPath, "GST", trees[0].Gstin, "GSTR-3B");
+    Directory.CreateDirectory(oldGst);
     var rerun = ClientBranchAutoImportLayout.Ensure(tempBranchesRoot, plain.Id, stableIds);
-    Check(rerun.Count == trees.Count && File.Exists(statement),
-        "Restart-folder reconciliation deleted or moved existing branch bank source.");
+    Check(rerun.Count == trees.Count && File.Exists(statement) &&
+          !Directory.Exists(oldEmpty) && File.Exists(salesEvidence) && !Directory.Exists(oldGst),
+        "Restart reconciliation must remove only empty v537 folders and retain all user files.");
     var empty = Path.Combine(Path.GetTempPath(), "AAH-NormalClientTest-" + Guid.NewGuid().ToString("N"));
     Check(ClientBranchAutoImportLayout.Ensure(empty, plain.Id, []).Count == 0 &&
           !Directory.Exists(empty), "Unbranched client must not create a Branches directory.");
@@ -145,6 +154,11 @@ Check(viewModel.Contains("ClientBranchCatalog.Parse(BranchEntriesText)", StringC
       dashboardView.Contains("ItemsSource=\"{Binding ClientBranches}\"", StringComparison.Ordinal) &&
       dashboardView.Contains("Grid.Column=\"0\" Width=\"226\"", StringComparison.Ordinal),
       "Branch model missing editor persistence or dashboard left-side display.");
+Check(automationSource.Contains("BRANCH-SALES-PURCHASE-PENDING", StringComparison.Ordinal) &&
+      automationSource.Contains("QueueFile(targetFolder.FolderId, path", StringComparison.Ordinal) &&
+      automationSource.Contains("QueueFile(privateFolder.FolderId, path", StringComparison.Ordinal) &&
+      automationSource.Contains("sourceKind is not (AutomationFileKind.Sales or AutomationFileKind.Purchase)", StringComparison.Ordinal),
+      "Source-proven Sales/Purchase branch routing or its Bank/Cash ownership safeguard is missing.");
 Check(automationSource.Contains("EnsureBranchFoldersForClient(saved.Id", StringComparison.Ordinal) == false &&
       automationSource.Contains("ClientBranchAutoImportLayout.Ensure(", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(folder.FolderPath, path)", StringComparison.Ordinal) &&
@@ -166,4 +180,4 @@ Check(shellView.Contains("ItemsSource=\"{Binding SidebarBranchWorkspaces}\"", St
       shellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal),
       "Branch hierarchy is not rendered in the left sidebar or posting safety was bypassed.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
-Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, branch module folders, owner markers, path lookup, and no unscoped import.");
+Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");
