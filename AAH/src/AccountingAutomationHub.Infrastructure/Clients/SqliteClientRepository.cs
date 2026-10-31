@@ -506,6 +506,47 @@ public sealed class SqliteClientRepository :
             if (privateChild.ExecuteScalar() is not null)
                 throw new InvalidOperationException(
                     "Branch accounting Client profiles are maintained by the parent Branch workspace.");
+
+            // Dashboard GSTIN quick edits and other background profile updates
+            // bypass the Client Editor. They must still preserve durable branch
+            // registration/FY/PAN identity, or imported branch data becomes orphaned.
+            using var linked = connection.CreateCommand();
+            linked.Transaction = transaction;
+            linked.CommandText = """
+                SELECT c.Gstin, c.Pan, c.FinancialYear
+                FROM InternalBranchAccounts b
+                JOIN Clients c ON c.Id=b.ChildClientId
+                WHERE b.ParentClientId=$Parent;
+                """;
+            linked.Parameters.AddWithValue("$Parent", normalized.Id);
+            var branchGstins = new List<string>();
+            string? originalPan = null;
+            string? originalFy = null;
+            using (var reader = linked.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    branchGstins.Add(reader.GetString(0));
+                    originalPan ??= reader.GetString(1);
+                    originalFy ??= reader.GetString(2);
+                }
+            }
+            if (branchGstins.Count > 0)
+            {
+                if (originalFy is not null && !originalFy.Equals(normalized.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Cannot change the financial year of a Client with private branch books.");
+                if (originalPan is not null && !originalPan.Equals(normalized.Pan, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Cannot change PAN after private branch accounting is linked.");
+                if (additional is not null)
+                {
+                    var retained = new[] { normalized.Gstin }.Concat(additional)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach (var registeredBranchGstin in branchGstins.Where(x => x.Length == 15))
+                        if (!retained.Contains(registeredBranchGstin))
+                            throw new InvalidOperationException(
+                                "Cannot remove a GSTIN linked to a private branch account. Reconcile the branch books before editing registrations.");
+                }
+            }
         }
         // Within a financial year one GSTIN must have exactly one Client Profile
         // owner. Otherwise the shared source watcher would double-import it.
