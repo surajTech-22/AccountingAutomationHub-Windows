@@ -212,9 +212,13 @@ System.Xml.Linq.XDocument.Parse(applicationXaml);
 Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
         scopeView.Contains("SafetyNote", StringComparison.Ordinal) &&
         applicationXaml.Contains("viewModels:BranchScopePreviewViewModel", StringComparison.Ordinal) &&
-        shellVm.Contains("if (HasBranchWorkspaces) return; // never warm/display unscoped", StringComparison.Ordinal) &&
-        shellVm.Contains("if (client is null || HasBranchWorkspaces) return false;", StringComparison.Ordinal) &&
-        shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(client, branches)", StringComparison.Ordinal),
+        shellVm.Contains("if (HasBranchWorkspaces && !_isPrivateBranchActive) return;", StringComparison.Ordinal) &&
+        shellVm.Contains("if (client is null || (HasBranchWorkspaces && !_isPrivateBranchActive)) return false;", StringComparison.Ordinal) &&
+        shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(parent, branches)", StringComparison.Ordinal) &&
+        shellVm.Contains("_privateBranchAccounts.GetOrCreate(", StringComparison.Ordinal) &&
+        shellVm.Contains("_clientRepository.SetCurrent(privateClient.Id);", StringComparison.Ordinal) &&
+        shellVm.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal) &&
+        shellVm.Contains("if (_isPrivateBranchActive)", StringComparison.Ordinal),
     "Consolidated/branch menu did not block the shared parent accounting data page.");
 
 
