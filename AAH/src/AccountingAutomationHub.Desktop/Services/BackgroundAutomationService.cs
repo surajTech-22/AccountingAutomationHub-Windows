@@ -1381,6 +1381,44 @@ public sealed class BackgroundAutomationService : IDisposable
         return registration;
     }
 
+    /// <summary>
+    /// Create per-branch folders under the existing Client/FY Auto Import root.
+    /// No extra Client registration is created. Branch posting stays guarded
+    /// until a separate accounting authority has been linked.
+    /// </summary>
+    public int EnsureBranchFoldersForClient(long clientId)
+    {
+        var client = _clientRepository.GetById(clientId);
+        if (client is null || client.IsArchived) return 0;
+        var branches = ClientBranchCatalog.Resolve(client,
+            _settings.Get(ClientBranchCatalog.Key(client.Id)));
+        if (branches.Count == 0) return 0;
+        var count = 0;
+        foreach (var folder in _automationRepository.GetFolders()
+                     .Where(f => f.ClientId == client.Id &&
+                         f.FinancialYear.Equals(client.FinancialYear,
+                             StringComparison.OrdinalIgnoreCase) &&
+                         Directory.Exists(f.FolderPath)))
+        {
+            try
+            {
+                var entries = ClientBranchAutoImportLayout.Ensure(
+                    folder.FolderPath, client.Id, branches);
+                count += entries.Count;
+                AutomationDiagnosticLog.Write("BRANCH-FOLDER",
+                    $"Prepared {entries.Count} named branch Auto Import folders for client {client.ClientCode}. Branch-scoped imports remain guarded until separate accounting authority is linked.",
+                    folder.FolderPath);
+            }
+            catch (Exception exception) when (exception is IOException or
+                UnauthorizedAccessException or InvalidOperationException)
+            {
+                AutomationDiagnosticLog.Write("BRANCH-FOLDER-ERROR",
+                    $"Branch folder setup failed safely: {exception.Message}", folder.FolderPath);
+            }
+        }
+        return count;
+    }
+
     private static void EnsureClientGstinFolders(
         AutomationFolderRegistration registration, ClientProfile client)
     {
@@ -2800,6 +2838,7 @@ public sealed class BackgroundAutomationService : IDisposable
     private void EnsureWatcher(AutomationFolderRegistration folder)
     {
         if (IsQuiescingForVerifiedUpdate || !Directory.Exists(folder.FolderPath)) return;
+        EnsureBranchFoldersForClient(folder.ClientId);
         PortalCredentialFileService.EnsureFile(folder);
         // Legacy migration only: EnsureFile already migrates/deletes an old plaintext file.
         // Keep this guarded read for read-only folders where deletion may not be possible.
@@ -4087,6 +4126,19 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
+    private static bool IsWithinBranchContainer(string registeredRoot, string filePath)
+    {
+        try
+        {
+            var prefix = Path.GetFullPath(Path.Combine(
+                registeredRoot, ClientBranchAutoImportLayout.BranchesDirectory))
+                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(filePath).StartsWith(prefix,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
     private static bool IsManagedEvidencePath(AutomationFolderRegistration folder, string path)
     {
         try
@@ -4187,6 +4239,22 @@ public sealed class BackgroundAutomationService : IDisposable
         // particular, Force Auto Import must not re-queue GST\GSTR-3B PDFs that were already
         // moved/validated, and Customer Master evidence is handled by the Sales backfill path.
         if (IsManagedEvidencePath(folder, path)) return false;
+
+        // Branch files cannot be posted with the parent ClientId: Bank,
+        // Purchase, Sales and Journal still use ClientId/FY as their ledger
+        // authority. A missing scope must fail closed rather than mix books.
+        if (IsWithinBranchContainer(folder.FolderPath, path))
+        {
+            if (ClientBranchAutoImportLayout.TryResolve(folder.FolderPath, path, out var branch))
+                AutomationDiagnosticLog.Write("BRANCH-IMPORT-SCOPE-PENDING",
+                    $"File retained for branch ID {branch!.BranchId}; branch accounting scope is not yet connected, so no import was attempted.",
+                    path);
+            else
+                AutomationDiagnosticLog.Write("BRANCH-IMPORT-UNOWNED",
+                    "File is within the branch tree but has no verified owner. Import is blocked.",
+                    path);
+            return false;
+        }
 
         // Per-client Auto Import policy is an additional silent gate. Existing clients default ON
         // so this cumulative update never disables a previously working Automation Folder; an
