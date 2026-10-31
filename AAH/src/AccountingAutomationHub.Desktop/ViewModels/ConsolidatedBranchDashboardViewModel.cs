@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Domain.Clients;
+using AccountingAutomationHub.Infrastructure.Tally;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
@@ -20,7 +21,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
-    public ConsolidatedBranchDashboardViewModel(ClientProfile parent)
+    public ConsolidatedBranchDashboardViewModel(ClientProfile parent, SqliteTallyRepository existingTally)
         : base("Dashboard", "Detailed consolidated client workspace overview")
     {
         if (parent is null) throw new ArgumentNullException(nameof(parent));
@@ -30,6 +31,14 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         Pan = parent.Pan ?? string.Empty;
         PrimaryGstin = parent.Gstin ?? string.Empty;
         State = parent.State ?? string.Empty;
+        // Read the exact confirmed parent link from the EXISTING Tally
+        // repository. Do not create a second consolidated or branch link.
+        var linked = existingTally.GetLinkForClient(parent.Id);
+        TallyCompanyName = linked?.CompanyName ?? "Not linked";
+        TallyConnectionText = linked is null
+            ? "No existing Tally company link for this client."
+            : "Existing linked Tally company · " + linked.CompanyName;
+        TallyCompanyGstin = linked?.Gstin ?? string.Empty;
         _ = RefreshAsync();
     }
 
@@ -37,6 +46,9 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string Pan { get; }
     public string PrimaryGstin { get; }
     public string State { get; }
+    public string TallyCompanyName { get; }
+    public string TallyCompanyGstin { get; }
+    public string TallyConnectionText { get; }
     public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
