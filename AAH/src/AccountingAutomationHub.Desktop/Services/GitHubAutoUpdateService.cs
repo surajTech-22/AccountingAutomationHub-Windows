@@ -275,8 +275,7 @@ internal static class GitHubAutoUpdateService
         // Every attempt gets an immutable path. A prior update host can still be
         // running from the same release, so never overwrite or re-open its EXE.
         // The cross-process staging lock is released by the OS on abnormal exit.
-        var root = Path.Combine(GetReleaseCacheDirectory(cacheRoot, tag),
-            "attempt-" + Guid.NewGuid().ToString("N"));
+        var root = GetUpdaterAttemptDirectory(cacheRoot, tag);
         var incoming = Path.Combine(root, UpdateAssetName + ".pending.exe");
         try
         {
@@ -284,6 +283,7 @@ internal static class GitHubAutoUpdateService
             if (stagingLock is null)
             {
                 Log("Another AAH process is staging an updater; skipping duplicate attempt.");
+                Interlocked.Exchange(ref _updateLaunched, 0);
                 return;
             }
             Directory.CreateDirectory(root);
@@ -369,6 +369,10 @@ internal static class GitHubAutoUpdateService
             throw;
         }
     }
+
+    internal static string GetUpdaterAttemptDirectory(string cacheRoot, string releaseTag) =>
+        Path.Combine(GetReleaseCacheDirectory(cacheRoot, releaseTag),
+            "attempt-" + Guid.NewGuid().ToString("N"));
 
     // Prevent simultaneous SSE/replay stages across multiple old and new AAH
     // instances, without relying on an abandoned named semaphore or mutex
