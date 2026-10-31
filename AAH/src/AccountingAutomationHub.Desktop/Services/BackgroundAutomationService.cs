@@ -3178,6 +3178,19 @@ public sealed class BackgroundAutomationService : IDisposable
         {
         try
         {
+            // Shared Sales/Purchase watchers can overlap linked Auto Import roots.
+            // Suppress branch-folder sources here too: the central source-set
+            // path can otherwise bypass the generic watcher/queue isolation.
+            var isBranchCandidate = path.Replace('/', '\\').Contains(
+                "\\Branches\\", StringComparison.OrdinalIgnoreCase);
+            if (isBranchCandidate && _automationRepository.GetFolders().Any(folder =>
+                    IsWithinBranchContainer(folder.FolderPath, path)))
+            {
+                AutomationDiagnosticLog.Write("BRANCH-CENTRAL-SOURCE-DEFER",
+                    "Shared Sales/Purchase observation belongs to a branch folder; parent posting blocked until branch-specific accounting authority is linked.",
+                    path);
+                return;
+            }
             // Fix131: historical startup indexing must not reopen/reclassify/rehash every
             // unchanged Sales/Purchase source on every launch. The saved source cache can
             // prove an exact size+mtime path is already part of a handled source-set. Live
@@ -5638,6 +5651,19 @@ public sealed class BackgroundAutomationService : IDisposable
                 {
                     AutomationDiagnosticLog.Write("UPDATE-QUIESCE",
                         "Deferred paused automatic observation without writing; original source retained.", item.Path);
+                    continue;
+                }
+                // Queue observations can predate branch-folder creation. Revalidate
+                // ownership immediately before cache-first Bank posting as well as
+                // inside the ordinary queue route, so no branch bank row escapes
+                // into the consolidated ClientId via an already queued item.
+                var currentFolder = _automationRepository.GetByFolderId(item.FolderId);
+                if (currentFolder is not null &&
+                    IsWithinBranchContainer(currentFolder.FolderPath, item.Path))
+                {
+                    AutomationDiagnosticLog.Write("BRANCH-IMPORT-SCOPE-PENDING",
+                        "Queued branch source retained: an isolated branch ClientId has not yet been assigned. No Bank/Purchase/Sales/Journal records written.",
+                        item.Path);
                     continue;
                 }
                 PipelineRuntimeDiagnostics.ImportWaiting(item.ClientId, item.FinancialYear, item.Path);
