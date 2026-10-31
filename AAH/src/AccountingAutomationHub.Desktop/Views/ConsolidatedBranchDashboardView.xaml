@@ -139,7 +139,7 @@
                  Never substitute the Tally Import recovery page in its place. -->
             <TextBlock Margin="2,12,0,0" FontSize="10"
                        Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
-                       Text="This Tally panel uses the existing parent Client/FY link and export authority. It does not automatically combine or export unverified branch vouchers."/>
+                       Text="Consolidated uses its own existing Client/FY Tally link. Voucher export remains blocked until the separate verified group-import XML route is connected; branch export operates normally."/>
             <views:DashboardView DataContext="{Binding ExistingDashboardWorkspace}"
                                  TallyOnlyMode="True"/>
             <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
