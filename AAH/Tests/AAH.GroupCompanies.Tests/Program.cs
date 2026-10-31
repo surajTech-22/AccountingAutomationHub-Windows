@@ -212,6 +212,13 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
 var mainShellView = File.ReadAllText(Path.Combine(app, "MainWindow.xaml"));
 var scopeView = File.ReadAllText(Path.Combine(app, "Views", "BranchScopePreviewView.xaml"));
 var shellVm = File.ReadAllText(Path.Combine(app, "ViewModels", "MainWindowViewModel.cs"));
+Require(autom.Contains("var child = _privateBranchAccounts.GetOrCreate(", StringComparison.Ordinal) &&
+        autom.Contains("clientId = child.Id;", StringComparison.Ordinal) &&
+        autom.Contains("BRANCH-IMPORT-OWNER-MISMATCH", StringComparison.Ordinal) &&
+        autom.Contains("BRANCH-CONSOLIDATED-DEFER", StringComparison.Ordinal) &&
+        autom.Contains("ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var probe)", StringComparison.Ordinal) &&
+        autom.Contains("if (entry.Gstin.Length != 15) continue;", StringComparison.Ordinal),
+    "GSTIN branch source-sets or watched files could route into unverified parent or sibling books");
 Require(view.Contains("EnableSeparateBranchBooks, Mode=TwoWay", StringComparison.Ordinal) &&
         vm.Contains("BranchAccountingModePreference.Key(saved.Id)", StringComparison.Ordinal) &&
         vm.Contains("if (EnableSeparateBranchBooks)", StringComparison.Ordinal) &&
