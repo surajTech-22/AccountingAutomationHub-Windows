@@ -3887,7 +3887,12 @@ public sealed class MainWindowViewModel :
         // Consolidated readback follows actual committed branch/parent module
         // changes, never the 5-second Tally link/status notification.
         var openClient = _clientContext.CurrentClient;
-        if (CurrentPage is ConsolidatedBranchDashboardViewModel consolidated &&
+        // Only the five accounting transaction areas appear in this
+        // consolidated totals view. Master/Stock/Settings/Tally authority
+        // notifications must never cause a page readback or visible redraw.
+        if (change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or
+            AccountingLiveArea.Purchase or AccountingLiveArea.Sales or AccountingLiveArea.Journal &&
+            CurrentPage is ConsolidatedBranchDashboardViewModel consolidated &&
             openClient is not null && openClient.Id == consolidated.ParentClientId &&
             openClient.FinancialYear.Equals(change.FinancialYear, StringComparison.OrdinalIgnoreCase))
         {
