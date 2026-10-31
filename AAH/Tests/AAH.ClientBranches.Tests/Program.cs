@@ -290,7 +290,9 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       consolidatedDashboardModel.Contains("public long ParentClientId => _parentClientId;", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public void RefreshAfterCommittedAccountingChange()", StringComparison.Ordinal) &&
       shellModel.Contains("consolidated.RefreshAfterCommittedAccountingChange();", StringComparison.Ordinal) &&
-      shellModel.Contains("_privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId", StringComparison.Ordinal),
+      shellModel.Contains("_privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId", StringComparison.Ordinal) &&
+      shellModel.Contains("if ((change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or", StringComparison.Ordinal) &&
+      !shellModel.Contains("RefreshAfterCommittedAccountingChange();\n        // Fix118", StringComparison.Ordinal),
     "Unchanged Tally pulses must not reconstruct company selection, metric cards or Consolidated Dashboard.");
 Console.WriteLine("PASS: Tally heartbeat UI stability, stable dropdown selection and consolidated dashboard instance.");
 Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
