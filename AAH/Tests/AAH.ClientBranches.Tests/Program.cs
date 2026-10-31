@@ -222,13 +222,20 @@ Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComp
     "Branch must use native Dashboard and Consolidated must keep the original dashboard design.");
 var dashboardNative = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+var tallyCoordinator = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Services", "TallyLiveConnectionCoordinator.cs"));
 Check(dashboardNative.Contains("public bool ShowTallyPanel => true;", StringComparison.Ordinal) &&
-      dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
-      dashboardNative.Contains("HasConfirmedTallyLink = !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
-      dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("var link = _tallyCoordinator.GetCurrentClientLink();", StringComparison.Ordinal) &&
+      dashboardNative.Contains("HasConfirmedTallyLink = link is not null;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("CanConfirmTallyLink = pending &&", StringComparison.Ordinal) &&
+      dashboardNative.Contains("CanUnlinkTallyLink = link is not null", StringComparison.Ordinal) &&
+      !dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
+      !dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
+      !dashboardNative.Contains("if (_isPrivateBranchDashboard) return;", StringComparison.Ordinal) &&
+      !dashboardNative.Contains("if (_isPrivateBranchDashboard) normalized = \"Off\";", StringComparison.Ordinal) &&
       dashboardView.Contains("Visibility=\"{Binding ShowTallyPanel", StringComparison.Ordinal) &&
       shellModel.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
-    "Native branch Dashboard must not enable Tally export/autosync before verified branch-company authority.");
+    "Every private branch must use its own native dashboard Tally link/export/autosync.");
 Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringComparison.Ordinal) &&
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
@@ -254,8 +261,16 @@ Check(consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordin
       !consolidatedView.Contains("ExistingTallyWorkspace", StringComparison.Ordinal) &&
       shellView.Contains("Content=\"{Binding TallyLinkActionLabel}\"", StringComparison.Ordinal) &&
       shellModel.Contains("public string TallyLinkActionLabel", StringComparison.Ordinal) &&
-      dashboardNative.Contains("Existing consolidated Tally company", StringComparison.Ordinal),
-      "The original dashboard Tally Link/Export card must be reused in Consolidated, with original branch header authority.");
+      tallyCoordinator.Contains("_repository.GetLinkForClient(client.Id)", StringComparison.Ordinal) &&
+      tallyCoordinator.Contains("ValidateClientCompanyIdentity(client, company)", StringComparison.Ordinal) &&
+      shellModel.Contains("var linkClient = client;", StringComparison.Ordinal) &&
+      shellModel.Contains("_tallyRepository.GetLinkForClient(current.Id)", StringComparison.Ordinal) &&
+      shellModel.Contains("ConfirmTopTallyLinkAsync", StringComparison.Ordinal) &&
+      !shellModel.Contains("GetLinkForClient(_privateBranchParentClientId)", StringComparison.Ordinal) &&
+      !shellModel.Contains("Branch Tally linking is disabled", StringComparison.Ordinal) &&
+      !shellModel.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal),
+      "Consolidated and each branch must have an independent current-Client/FY Tally link and native export path.");
+Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");
