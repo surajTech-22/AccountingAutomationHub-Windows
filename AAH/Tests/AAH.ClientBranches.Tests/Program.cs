@@ -154,6 +154,9 @@ Check(viewModel.Contains("ClientBranchCatalog.Parse(BranchEntriesText)", StringC
       dashboardView.Contains("ItemsSource=\"{Binding ClientBranches}\"", StringComparison.Ordinal) &&
       dashboardView.Contains("Grid.Column=\"0\" Width=\"226\"", StringComparison.Ordinal),
       "Branch model missing editor persistence or dashboard left-side display.");
+Check(automationSource.Contains("needsBranchReconciliation", StringComparison.Ordinal) &&
+      automationSource.Contains("!needsBranchReconciliation &&", StringComparison.Ordinal),
+      "A legacy parent handled-set marker must not skip the startup branch source scan.");
 Check(automationSource.Contains("BRANCH-SALES-PURCHASE-PENDING", StringComparison.Ordinal) &&
       automationSource.Contains("QueueFile(targetFolder.FolderId, path", StringComparison.Ordinal) &&
       automationSource.Contains("QueueFile(privateFolder.FolderId, path", StringComparison.Ordinal) &&
