@@ -2305,8 +2305,15 @@ public sealed class MainWindowViewModel :
                 : scope.IsConsolidated
                     ? "Consolidated reporting is for the saved branch scopes only. Live combined balances and Tally import remain blocked until every member ledger is scope-verified."
                     : "Dedicated branch records and modules require verified scope-aware repositories. Existing parent Client/FY rows cannot be presented as this branch's books.";
+            // A navigation/cache update is not a change of Tally company.
+            // Preserve the loaded consolidated Dashboard view and its controls
+            // while the real accounting ClientId/FY remains unchanged.
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
-                ? new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)
+                ? CurrentPage is ConsolidatedBranchDashboardViewModel existing &&
+                  existing.ParentClientId == client.Id &&
+                  existing.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase)
+                    ? existing
+                    : new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)
                 : new BranchScopePreviewViewModel(
                     "Dashboard", "Account scope / import verification", scope.DisplayName,
                     scope.ScopeId, scope.FinancialYear, note);
@@ -3877,6 +3884,34 @@ public sealed class MainWindowViewModel :
 
     private void OnAccountingLiveCacheChanged(object? sender, AccountingLiveChange change)
     {
+        // Consolidated readback follows actual committed branch/parent module
+        // changes, never the 5-second Tally link/status notification.
+        var openClient = _clientContext.CurrentClient;
+        // Only the five accounting transaction areas appear in this
+        // consolidated totals view. Master/Stock/Settings/Tally authority
+        // notifications must never cause a page readback or visible redraw.
+        if ((change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or
+             AccountingLiveArea.Purchase or AccountingLiveArea.Sales or AccountingLiveArea.Journal) &&
+            CurrentPage is ConsolidatedBranchDashboardViewModel consolidated &&
+            openClient is not null && openClient.Id == consolidated.ParentClientId &&
+            openClient.FinancialYear.Equals(change.FinancialYear, StringComparison.OrdinalIgnoreCase))
+        {
+            var isParentSource = change.ClientId == openClient.Id;
+            var isVerifiedBranchSource = !isParentSource &&
+                _privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId == openClient.Id;
+            if (isParentSource || isVerifiedBranchSource)
+            {
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher is not null)
+                    _ = dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (ReferenceEquals(CurrentPage, consolidated) &&
+                            _clientContext.CurrentClient?.Id == openClient.Id)
+                            consolidated.RefreshAfterCommittedAccountingChange();
+                    }), DispatcherPriority.Background);
+            }
+        }
+
         // Fix118: Stock Master edits are live accounting authority. Re-normalize already
         // imported Purchase/Sales inventory rows from their original values; never require
         // the user to reimport a workbook just to apply an Item/Unit/Profile correction.

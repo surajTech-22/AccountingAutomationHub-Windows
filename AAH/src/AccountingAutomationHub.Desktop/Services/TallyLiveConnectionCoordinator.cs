@@ -3642,8 +3642,10 @@ Tally-style report availability
         var links = _repository.GetAllLinks()
             .ToDictionary(link => link.CompanyKey, StringComparer.OrdinalIgnoreCase);
 
-        OpenCompanies.Clear();
-        foreach (var company in discovered.OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase))
+        // A passive background Tally pulse must not remove WPF ComboBox items.
+        // A Clear causes SelectedItem=null to flow back through two-way binding.
+        var refreshed = discovered.OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var company in refreshed)
         {
             if (!links.ContainsKey(company.CompanyKey))
             {
@@ -3688,8 +3690,46 @@ Tally-style report availability
                 company.LinkedClientName = link.ClientName;
                 _repository.UpdateCompanySeen(company);
             }
-            OpenCompanies.Add(company);
         }
+
+        // Preserve existing item and selection references on an unchanged
+        // company/linked-label snapshot; only authority count data changes.
+        if (OpenCompanies.Count == refreshed.Length &&
+            OpenCompanies.Select((current, i) =>
+                current.CompanyKey.Equals(refreshed[i].CompanyKey, StringComparison.OrdinalIgnoreCase) &&
+                current.DisplayText.Equals(refreshed[i].DisplayText, StringComparison.Ordinal)).All(equal => equal))
+        {
+            for (var i = 0; i < refreshed.Length; i++)
+            {
+                var current = OpenCompanies[i];
+                var fresh = refreshed[i];
+                current.CompanyNumber = fresh.CompanyNumber;
+                current.Gstin = fresh.Gstin;
+                current.StateName = fresh.StateName;
+                current.BooksFrom = fresh.BooksFrom;
+                current.StartingFrom = fresh.StartingFrom;
+                current.FinancialYear = fresh.FinancialYear;
+                current.Status = fresh.Status;
+                current.Error = fresh.Error;
+                current.GroupCount = fresh.GroupCount;
+                current.LedgerCount = fresh.LedgerCount;
+                current.VoucherTypeCount = fresh.VoucherTypeCount;
+                current.StockItemCount = fresh.StockItemCount;
+                current.UnitCount = fresh.UnitCount;
+                current.GodownCount = fresh.GodownCount;
+                current.VoucherCount = fresh.VoucherCount;
+                current.ChangeToken = fresh.ChangeToken;
+                current.LastSeenUtc = fresh.LastSeenUtc;
+                current.LinkedClientId = fresh.LinkedClientId;
+                current.LinkedClientCode = fresh.LinkedClientCode;
+                current.LinkedClientName = fresh.LinkedClientName;
+            }
+            return;
+        }
+
+        // Only real company / label changes reconcile the UI collection.
+        OpenCompanies.Clear();
+        foreach (var company in refreshed) OpenCompanies.Add(company);
 
         if (!string.IsNullOrWhiteSpace(selectedKey))
         {
@@ -3752,6 +3792,9 @@ Tally-style report availability
 
     private void SetSelectionFromRememberedLink(TallyCompanyInfo? company)
     {
+        // Do not issue a new selection/Live-XML event on every same-key pulse.
+        if (ReferenceEquals(_selectedCompany, company) && !_manualSelectionPending)
+            return;
         _selectedCompany = company;
         _manualSelectionPending = false;
         OnPropertyChanged(nameof(SelectedCompany));

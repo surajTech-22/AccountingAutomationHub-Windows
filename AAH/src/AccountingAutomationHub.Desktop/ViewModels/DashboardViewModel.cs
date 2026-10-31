@@ -2872,83 +2872,95 @@ public sealed class DashboardViewModel :
 
     private void RefreshTallyMetrics(TallyClientLink? link, TallyCompanyInfo? liveCompany)
     {
-        TallyMetrics.Clear();
+        var newMetrics = new List<TallyDashboardMetric>();
         if (!IsLocalTallyReport)
         {
+            ApplyTallyMetricsIfChanged(newMetrics);
             return;
         }
 
         if (link is null)
         {
-            TallyMetrics.Add(new TallyDashboardMetric(
+            newMetrics.Add(new TallyDashboardMetric(
                 "Status",
                 "Not linked",
                 "Choose a company in the top dropdown and confirm it here."));
+            ApplyTallyMetricsIfChanged(newMetrics);
             return;
         }
 
         switch (SelectedTallyReport)
         {
             case "Master Statistics":
-                AddMetric("Total masters", link.MasterCount);
-                AddMetric("Groups", liveCompany?.GroupCount ?? link.GroupCount);
-                AddMetric("Ledgers", liveCompany?.LedgerCount ?? link.LedgerCount);
-                AddMetric("Voucher types", liveCompany?.VoucherTypeCount ?? link.VoucherTypeCount);
-                AddMetric("Stock items", liveCompany?.StockItemCount ?? link.StockItemCount);
-                AddMetric("Units", liveCompany?.UnitCount ?? link.UnitCount);
-                AddMetric("Godowns", liveCompany?.GodownCount ?? link.GodownCount);
-                AddMetric("Duplicate masters", link.DuplicateMasterCount);
-                AddMetric("Master conflicts", link.ConflictingMasterCount);
+                AddMetric(newMetrics, "Total masters", link.MasterCount);
+                AddMetric(newMetrics, "Groups", liveCompany?.GroupCount ?? link.GroupCount);
+                AddMetric(newMetrics, "Ledgers", liveCompany?.LedgerCount ?? link.LedgerCount);
+                AddMetric(newMetrics, "Voucher types", liveCompany?.VoucherTypeCount ?? link.VoucherTypeCount);
+                AddMetric(newMetrics, "Stock items", liveCompany?.StockItemCount ?? link.StockItemCount);
+                AddMetric(newMetrics, "Units", liveCompany?.UnitCount ?? link.UnitCount);
+                AddMetric(newMetrics, "Godowns", liveCompany?.GodownCount ?? link.GodownCount);
+                AddMetric(newMetrics, "Duplicate masters", link.DuplicateMasterCount);
+                AddMetric(newMetrics, "Master conflicts", link.ConflictingMasterCount);
                 break;
 
             case "Voucher Statistics":
-                AddMetric("Indexed vouchers", liveCompany?.VoucherCount ?? link.VoucherCount);
-                AddMetric("Duplicate references", link.DuplicateVoucherCount);
-                AddMetric("Conflicting references", link.ConflictingVoucherCount);
-                TallyMetrics.Add(new TallyDashboardMetric(
+                AddMetric(newMetrics, "Indexed vouchers", liveCompany?.VoucherCount ?? link.VoucherCount);
+                AddMetric(newMetrics, "Duplicate references", link.DuplicateVoucherCount);
+                AddMetric(newMetrics, "Conflicting references", link.ConflictingVoucherCount);
+                newMetrics.Add(new TallyDashboardMetric(
                     "Last report refresh",
                     FormatLocalDate(link.LastReportRefreshUtc),
                     link.LastSyncStatus));
                 break;
 
             case "Duplicate Control":
-                AddMetric("Duplicate masters", link.DuplicateMasterCount,
+                AddMetric(newMetrics, "Duplicate masters", link.DuplicateMasterCount,
                     "Repeated master type and name combinations in the latest Tally response.");
-                AddMetric("Master conflicts", link.ConflictingMasterCount,
+                AddMetric(newMetrics, "Master conflicts", link.ConflictingMasterCount,
                     "Same master identity returned with different parent or company details.");
-                AddMetric("Duplicate vouchers", link.DuplicateVoucherCount,
+                AddMetric(newMetrics, "Duplicate vouchers", link.DuplicateVoucherCount,
                     "Repeated voucher identity/reference in the linked Tally company.");
-                AddMetric("Voucher conflicts", link.ConflictingVoucherCount,
+                AddMetric(newMetrics, "Voucher conflicts", link.ConflictingVoucherCount,
                     "Same voucher identity/reference with different content.");
                 break;
 
             default:
-                TallyMetrics.Add(new TallyDashboardMetric(
+                newMetrics.Add(new TallyDashboardMetric(
                     "Company",
                     EmptyToDash(link.CompanyName),
                     $"Company No. {EmptyToDash(link.CompanyNumber)}"));
-                TallyMetrics.Add(new TallyDashboardMetric(
+                newMetrics.Add(new TallyDashboardMetric(
                     "GSTIN",
                     EmptyToDash(link.Gstin),
                     $"State: {EmptyToDash(link.StateName)}"));
-                TallyMetrics.Add(new TallyDashboardMetric(
+                newMetrics.Add(new TallyDashboardMetric(
                     "Financial year",
                     EmptyToDash(link.FinancialYear),
                     BuildBooksPeriod(link.BooksFrom, link.StartingFrom)));
-                TallyMetrics.Add(new TallyDashboardMetric(
+                newMetrics.Add(new TallyDashboardMetric(
                     "Connection",
                     liveCompany is null ? "Not currently open" : "Live",
                     _tallyCoordinator.ConnectionStatus));
-                TallyMetrics.Add(new TallyDashboardMetric(
+                newMetrics.Add(new TallyDashboardMetric(
                     "Last synchronization",
                     FormatLocalDate(link.LastMasterSyncUtc),
                     link.LastSyncStatus));
                 break;
         }
+        ApplyTallyMetricsIfChanged(newMetrics);
     }
 
-    private void AddMetric(string label, int value, string detail = "") =>
-        TallyMetrics.Add(new TallyDashboardMetric(label, value.ToString("N0"), detail));
+    // Keep the original Dashboard Tally card stable across heartbeat events;
+    // update the metric grid only when the actual values differ.
+    private void ApplyTallyMetricsIfChanged(List<TallyDashboardMetric> updated)
+    {
+        if (TallyMetrics.SequenceEqual(updated)) return;
+        TallyMetrics.Clear();
+        foreach (var metric in updated) TallyMetrics.Add(metric);
+    }
+
+    private static void AddMetric(List<TallyDashboardMetric> metrics, string label, int value, string detail = "") =>
+        metrics.Add(new TallyDashboardMetric(label, value.ToString("N0"), detail));
 
     private bool CanRefreshLiveTallyReport() =>
         IsLiveTallyReport &&

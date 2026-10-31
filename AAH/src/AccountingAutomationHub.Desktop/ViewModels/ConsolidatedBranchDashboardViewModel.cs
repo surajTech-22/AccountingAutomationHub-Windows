@@ -58,6 +58,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
             return $"Historical parent (reconciliation only): Sales {parent.Sales ?? 0}, Purchase {parent.Purchases ?? 0}, Banking {parent.Banking ?? 0}, Cash {parent.Cash ?? 0}, Journal {parent.Journals ?? 0}. These may overlap manually imported branch records; never add them to the branch totals without source-level verification.";
         }
     }
+    public long ParentClientId => _parentClientId;
     public string FinancialYear => _financialYear;
     public int BranchCount => Branches.Count(x => !x.IsLegacyUnassigned);
     public int VerifiedSalesCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Sales ?? 0);
@@ -79,6 +80,10 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         get => _warning;
         private set => SetProperty(ref _warning, value);
     }
+
+    // Only committed module data changes request a branch readback; a
+    // Tally connection status pulse must never call this or reload the page.
+    public void RefreshAfterCommittedAccountingChange() => _ = RefreshAsync();
 
     private async Task RefreshAsync()
     {

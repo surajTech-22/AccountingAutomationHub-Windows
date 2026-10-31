@@ -274,6 +274,27 @@ Check(consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordin
       !shellModel.Contains("Branch Tally linking is disabled", StringComparison.Ordinal) &&
       !shellModel.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal),
       "Consolidated and each branch must have an independent current-Client/FY Tally link and native export path.");
+// A heartbeat must never clear/re-add the same Tally companies, emit
+// a fake selection, requeue Live XML, or reconstruct the same dashboard.
+var tallyApplyMethod = tallyCoordinator.Split("private void ApplyCompanyList(", StringSplitOptions.None)[1]
+    .Split("private void EnrichCompanyLinks(", StringSplitOptions.None)[0];
+var tallySelectionMethod = tallyCoordinator.Split("private void SetSelectionFromRememberedLink(", StringSplitOptions.None)[1]
+    .Split("private void OnAccountingRefreshed(", StringSplitOptions.None)[0];
+Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", StringComparison.Ordinal) &&
+      tallyApplyMethod.Contains("current.DisplayText.Equals(refreshed[i].DisplayText", StringComparison.Ordinal) &&
+      tallyApplyMethod.IndexOf("OpenCompanies.Count == refreshed.Length", StringComparison.Ordinal) <
+      tallyApplyMethod.IndexOf("OpenCompanies.Clear();", StringComparison.Ordinal) &&
+      tallySelectionMethod.Contains("ReferenceEquals(_selectedCompany, company) && !_manualSelectionPending", StringComparison.Ordinal) &&
+      dashboardNative.Contains("if (TallyMetrics.SequenceEqual(updated)) return;", StringComparison.Ordinal) &&
+      shellModel.Contains("CurrentPage is ConsolidatedBranchDashboardViewModel existing", StringComparison.Ordinal) &&
+      consolidatedDashboardModel.Contains("public long ParentClientId => _parentClientId;", StringComparison.Ordinal) &&
+      consolidatedDashboardModel.Contains("public void RefreshAfterCommittedAccountingChange()", StringComparison.Ordinal) &&
+      shellModel.Contains("consolidated.RefreshAfterCommittedAccountingChange();", StringComparison.Ordinal) &&
+      shellModel.Contains("_privateBranchAccounts.FindByChild(change.ClientId)?.ParentClientId", StringComparison.Ordinal) &&
+      shellModel.Contains("if ((change.Area is AccountingLiveArea.Banking or AccountingLiveArea.Cash or", StringComparison.Ordinal) &&
+      !shellModel.Contains("RefreshAfterCommittedAccountingChange();\n        // Fix118", StringComparison.Ordinal),
+    "Unchanged Tally pulses must not reconstruct company selection, metric cards or Consolidated Dashboard.");
+Console.WriteLine("PASS: Tally heartbeat UI stability, stable dropdown selection and consolidated dashboard instance.");
 Console.WriteLine("PASS: independent branch/Consolidated Tally links with native dashboard/export controls.");
 Console.WriteLine("PASS: consolidated link remains usable; ordinary parent voucher export is blocked until group XML routing is verified.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
