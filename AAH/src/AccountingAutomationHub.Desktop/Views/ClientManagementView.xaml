@@ -633,7 +633,12 @@
                                  AcceptsReturn="True" Height="94" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Padding="10,7" Margin="0,5,0,5"
                                  ToolTip="Examples: Head Office | 29ABCDE1234F1Z5; South Branch; 27ABCDE1234F1Z5. GSTINs must have the same PAN as the client." />
-                        <TextBlock Text="Branches are created automatically when you save. A branch GSTIN is added to this client's existing GST-wise imports; a name-only branch does not create a GST registration. Single-GSTIN clients without branches work exactly as before."
+                        <TextBlock Text="Branch names and GSTINs are saved with the parent client. The existing multi-GSTIN/GST-wise import workflow stays unchanged unless separate branch accounting is explicitly enabled."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,7" />
+                        <CheckBox Content="Enable separate branch accounting books and named Auto Import folders"
+                                  IsChecked="{Binding EnableSeparateBranchBooks, Mode=TwoWay}"
+                                  FontWeight="SemiBold" Margin="0,3,0,4" />
+                        <TextBlock Text="When enabled, each branch uses its own protected Client/FY accounting identity. Existing data is preserved without automatic reassignment; unverified Tally imports remain blocked."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,13" />
 
                         <Grid>
