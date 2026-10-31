@@ -96,28 +96,43 @@ internal static class Program
                 var installedVersion = FileVersionInfo.GetVersionInfo(target).FileVersion;
                 var newVersion = FileVersionInfo.GetVersionInfo(stagedExe).FileVersion;
                 if (!Version.TryParse(installedVersion, out var oldVer) ||
-                    !Version.TryParse(newVersion, out var nextVer) || nextVer <= oldVer ||
-                    nextVer.ToString() != tag.TrimStart('v'))
-                    throw new InvalidDataException("Application binary version does not match an upgrade release.");
+                    !Version.TryParse(newVersion, out var nextVer) ||
+                    !IsUpgradeOrRestartRecovery(oldVer, nextVer, tag))
+                    throw new InvalidDataException("Application binary version does not match an authorized upgrade or same-version restart recovery.");
+                // If a previous update committed new application files but the
+                // old AAH process still holds the in-memory older UI, never retry
+                // copying the same release. Instead finish its stale-process
+                // shutdown and restart the ALREADY INSTALLED verified executable.
+                var restartOnly = nextVer == oldVer;
 
-                // The payload is downloaded, authenticated and version-checked.
-                // Ask ONLY the verified running original AAH process to shut down.
-                // Its application handler drains Tally/automation work first.
-                // Never kill the process or overwrite files while AAH is alive.
-                Log("Release " + tag + " verified. Requesting process-targeted graceful AAH shutdown.");
-                if (!await RequestVerifiedUpdateExitWithRetryAsync(parent))
+                // The previously running AAH may have two process instances for the
+                // SAME executable (legacy restart/old owner still alive). Previously
+                // we stopped only the caller PID, copied files and launched a new AAH;
+                // the surviving sibling owned the single-instance mutex, making the
+                // new process exit without publishing readiness. Never repeat that.
+                // All exact-path AAH instances must complete their own graceful
+                // Tally/import drain and exit BEFORE any application file is replaced.
+                Log("Release " + tag + " verified. Requesting graceful shutdown of EVERY AAH process from this installation.");
+                if (!await ShutdownAllVerifiedInstallProcessesAsync(target))
                 {
-                    Log("AAH remained busy after bounded updater-only graceful shutdown attempts. No program files changed or processes killed.");
+                    Log("AAH instances could not all exit safely. No program files changed, processes killed or restart attempted.");
                     return 2;
                 }
 
-                // The automatic channel MUST use the exact same source-backed
-                // manual Install-AAHPublish routine as the original Update-App.ps1.
-                // There is no second C# file replacement engine in the live route.
-                var nativeScript = Path.Combine(scratch, "TransactionalPublish.ps1");
-                WriteEmbeddedManualUpdater(nativeScript);
-                await InvokeOriginalManualInstallerAsync(nativeScript, staged, install);
-                Log("Manual Install-AAHPublish replaced AAH application files and removed its completed swap journal.");
+                if (!restartOnly)
+                {
+                    // Preserve the original transactional updater. There must be
+                    // no second live C# file replacement or data migration route.
+                    var nativeScript = Path.Combine(scratch, "TransactionalPublish.ps1");
+                    WriteEmbeddedManualUpdater(nativeScript);
+                    await InvokeOriginalManualInstallerAsync(nativeScript, staged, install);
+                    Log("Manual Install-AAHPublish replaced AAH application files and removed its completed swap journal.");
+                }
+                else
+                {
+                    Log("Repairing earlier partial update: verified " + tag +
+                        " already exists on disk; no files will be overwritten.");
+                }
                 if (!await StartAndVerifyAsync(target, install))
                 {
                     // The original manual updater has already committed verified
@@ -125,7 +140,9 @@ internal static class Program
                     Log("Updated AAH startup readiness was not confirmed. The original manual updater committed installed bytes; intervention may be needed.");
                     throw new InvalidOperationException("AAH updated, but the restart readiness check failed.");
                 }
-                Log("SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
+                Log(restartOnly
+                    ? "SUCCESS: AAH " + tag + " already installed; all stale instances exited and existing executable restarted."
+                    : "SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
                 return 0;
             }
             finally
@@ -430,6 +447,103 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// A repeated-update race used to leave the original AAH PID or its sibling
+    /// alive, then a new process failed single-instance startup readiness.
+    /// Enumerate and verify the FULL executable path of every AAH process.
+    /// Never signal other installation paths or unknown identities, never kill.
+    /// A process that cannot be inspected causes an explicit safe block.
+    /// </summary>
+    internal static async Task<bool> ShutdownAllVerifiedInstallProcessesAsync(string installedExe)
+    {
+        for (var pass = 1; pass <= 4; pass++)
+        {
+            var processes = GetSameInstallationProcesses(installedExe);
+            try
+            {
+                if (processes.Count == 0)
+                {
+                    Log("All exact-install AAH processes exited; replacement permitted.");
+                    return true;
+                }
+                Log("Update shutdown pass " + pass + ": gracefully closing " +
+                    processes.Count + " exact-install AAH process(es): " +
+                    string.Join(",", processes.Select(x => x.Id)));
+                var results = await Task.WhenAll(processes.Select(async process =>
+                    await RequestVerifiedUpdateExitWithRetryAsync(process)));
+                if (results.Any(x => !x))
+                {
+                    Log("Shutdown deferred: at least one AAH instance remains busy.");
+                    return false;
+                }
+            }
+            finally
+            {
+                foreach (var process in processes) process.Dispose();
+            }
+            // A previous window can briefly spawn another same-path process.
+            // Recheck before entering the manual transaction; never rely on a
+            // prior PID snapshot.
+            await Task.Delay(500);
+        }
+        var remaining = GetSameInstallationProcesses(installedExe);
+        try
+        {
+            if (remaining.Count == 0) return true;
+            Log("Cannot replace files: same-install AAH processes remain: " +
+                string.Join(",", remaining.Select(x => x.Id)));
+            return false;
+        }
+        finally { foreach (var p in remaining) p.Dispose(); }
+    }
+
+    internal static bool IsExactInstallationProcess(string processName, string fullProcessExe, string installedExe) =>
+        processName.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetFullPath(fullProcessExe).Equals(Path.GetFullPath(installedExe),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static List<Process> GetSameInstallationProcesses(string installedExe)
+    {
+        var selected = new List<Process>();
+        try
+        {
+            foreach (var process in Process.GetProcessesByName("AccountingAutomationHub"))
+            {
+                try
+                {
+                    if (process.HasExited) { process.Dispose(); continue; }
+                    var fullPath = process.MainModule?.FileName;
+                    if (string.IsNullOrWhiteSpace(fullPath))
+                        throw new InvalidDataException("Cannot verify path for AAH PID " + process.Id);
+                    if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
+                        selected.Add(process);
+                    else process.Dispose();
+                }
+                catch (InvalidOperationException) when (process.HasExited)
+                {
+                    process.Dispose(); // Raced with a normal process exit.
+                }
+                catch
+                {
+                    process.Dispose();
+                    throw; // Refuse to overwrite an uninspectable AAH process.
+                }
+            }
+            return selected;
+        }
+        catch
+        {
+            foreach (var process in selected) process.Dispose();
+            throw;
+        }
+    }
+
+    internal static bool IsUpgradeOrRestartRecovery(Version installedOnDisk,
+        Version verifiedReleaseBinary, string stableTag) =>
+        verifiedReleaseBinary >= installedOnDisk &&
+        verifiedReleaseBinary.ToString().Equals(stableTag.TrimStart('v'),
+            StringComparison.Ordinal);
+
     // Older AAH versions do not quiesce repeatable background discovery when
     // a verified update is requested. A single 11-minute wait can therefore
     // miss the moment an import finishes. The updater owns one bounded retry;
@@ -497,18 +611,31 @@ internal static class Program
             ArgumentList = { "--update-ready=" + token }
         });
         if (launched is null) return false;
-        var limit = DateTime.UtcNow.AddSeconds(90);
+        var limit = DateTime.UtcNow.AddMinutes(3);
         while (DateTime.UtcNow < limit)
         {
             if (ready.WaitOne(300))
             {
                 // A transient startup signal is not enough; process must remain alive.
                 await Task.Delay(2000);
-                return !launched.HasExited;
+                if (!launched.HasExited)
+                {
+                    Log("Verified restart ready: new AAH PID " + launched.Id +
+                        " signaled loaded UI and remained active.");
+                    return true;
+                }
+                Log("Restart readiness signal arrived but the new AAH process exited.");
+                return false;
             }
-            if (launched.HasExited) return false;
+            if (launched.HasExited)
+            {
+                Log("Restart process exited before sending ready signal (PID " + launched.Id +
+                    "); another stale instance may own the single-instance mutex.");
+                return false;
+            }
             await Task.Delay(100);
         }
+        Log("New AAH did not signal startup readiness within 3 minutes; requesting its own graceful shutdown.");
         // Do not overwrite a still-running binary. Require a safe exit to roll back.
         if (!launched.HasExited)
         {
