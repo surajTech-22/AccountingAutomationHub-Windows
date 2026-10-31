@@ -297,7 +297,7 @@ try
         !editorSource.Contains("var savedProfile = fresh.Clone();", StringComparison.Ordinal) ||
         !editorSource.Contains("savedProfile.AdditionalGstins = additional;", StringComparison.Ordinal) ||
         !editorSource.Contains("_automationService?.ScheduleNewClientGstinSourceDiscovery(", StringComparison.Ordinal) ||
-        !managementXaml.Contains("Text=\"{Binding AdditionalGstinsText, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal) ||
+        !managementXaml.Contains("Text=\"{Binding BranchEntriesText, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal) ||
         !managementCode.Contains("public void FocusClientCodeBox()", StringComparison.Ordinal))
         throw new Exception("Dashboard GSTIN-only panel not linked to existing Client/FY persistence and import rules.");
     Console.WriteLine("PASS: Dashboard displays every saved GSTIN and saves via the compact GSTIN-only panel without navigating.");
