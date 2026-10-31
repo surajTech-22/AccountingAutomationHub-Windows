@@ -626,12 +626,14 @@
                                  Margin="0,5,0,5" />
                         <TextBlock Text="Only Client Name or GSTIN is required. With GSTIN, AAH reads available GST JSON/profile sources and fills the name automatically when found."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,9" />
-                        <TextBlock Text="Additional GSTIN registrations (optional)" FontWeight="SemiBold" />
-                        <TextBox Text="{Binding AdditionalGstinsText, UpdateSourceTrigger=PropertyChanged}"
-                                 AcceptsReturn="True" Height="73" TextWrapping="Wrap"
+                        <TextBlock Text="Branches (optional)" FontWeight="SemiBold" />
+                        <TextBlock Text="A client stays one Client/FY in the Directory. Enter one branch per line: Branch Name, GSTIN, or Branch Name | GSTIN. Names without GSTIN are allowed."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,5,0,5" />
+                        <TextBox Text="{Binding BranchEntriesText, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True" Height="94" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Padding="10,7" Margin="0,5,0,5"
-                                 ToolTip="Enter one extra GSTIN per line. All registrations must belong to the same client PAN." />
-                        <TextBlock Text="One extra GSTIN per line. Same PAN, different State registrations allowed. Existing GST imports, Tally, accounting and portal credentials continue using the primary GSTIN until per-registration GST workflows are enabled."
+                                 ToolTip="Examples: Head Office | 29ABCDE1234F1Z5; South Branch; 27ABCDE1234F1Z5. GSTINs must have the same PAN as the client." />
+                        <TextBlock Text="Branches are created automatically when you save. A branch GSTIN is added to this client's existing GST-wise imports; a name-only branch does not create a GST registration. Single-GSTIN clients without branches work exactly as before."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,13" />
 
                         <Grid>
