@@ -45,9 +45,11 @@ public static class ClientBranchCatalog
             if (autoName) name = StateBranchName(gstin);
             if (name.Length > 100 || name.Contains('|'))
                 throw new InvalidOperationException("Branch names must be at most 100 characters and cannot contain '|'.");
-            if (!seenNames.Add(name)) throw new InvalidOperationException("Duplicate branch name: " + name + ".");
             if (gstin.Length > 0 && !seenGstins.Add(gstin))
                 throw new InvalidOperationException("Duplicate branch GSTIN: " + gstin + ".");
+            if (autoName) name = UniqueDisplayName(name, gstin, seenNames);
+            else if (!seenNames.Add(name))
+                throw new InvalidOperationException("Duplicate branch name: " + name + ".");
             result.Add(new ClientBranchRecord { Name = name, Gstin = gstin, IsAutoNamed = autoName });
         }
         if (result.Count > 100)
