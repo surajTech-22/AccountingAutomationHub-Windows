@@ -67,13 +67,13 @@ public static class ClientBranchAutoImportLayout
             if (new DirectoryInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))
                 throw new InvalidOperationException("Branch folder is a filesystem junction: " + path);
             foreach (var module in Modules)
-                Directory.CreateDirectory(Path.Combine(path, module));
+                EnsureOrdinaryDirectory(Path.Combine(path, module));
             if (branch.Gstin.Length == 15)
             {
-                var gst = Path.Combine(path, "GST", branch.Gstin);
-                Directory.CreateDirectory(Path.Combine(gst, "GSTR-3B"));
-                Directory.CreateDirectory(Path.Combine(gst, "Electronic Credit Ledger"));
-                Directory.CreateDirectory(Path.Combine(gst, "Electronic Cash Ledger"));
+                var gst = EnsureOrdinaryDirectory(Path.Combine(path, "GST", branch.Gstin));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "GSTR-3B"));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "Electronic Credit Ledger"));
+                EnsureOrdinaryDirectory(Path.Combine(gst, "Electronic Cash Ledger"));
             }
             if (!seen.Add(Path.GetFileName(path)) && existing is not null)
                 throw new InvalidOperationException("Two branch identities resolve to the same folder.");
@@ -114,6 +114,22 @@ public static class ClientBranchAutoImportLayout
         }
         catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException)
         { return false; }
+    }
+
+    private static string EnsureOrdinaryDirectory(string path)
+    {
+        // Never traverse a preexisting directory link to write module folders
+        // outside the verified Client/FY Auto Import root.
+        var full = Path.GetFullPath(path);
+        var parent = Path.GetDirectoryName(full);
+        if (parent is not null && Directory.Exists(parent) &&
+            new DirectoryInfo(parent).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Branch Auto Import directory parent is a junction: " + parent);
+        if (Directory.Exists(full) &&
+            new DirectoryInfo(full).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Branch Auto Import module is a junction: " + full);
+        Directory.CreateDirectory(full);
+        return full;
     }
 
     private static string? FindByMarker(string container, long clientId, string branchId)
