@@ -222,7 +222,9 @@ Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComp
     "Branch must use native Dashboard and Consolidated must keep the original dashboard design.");
 var dashboardNative = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
-Check(dashboardNative.Contains("public bool ShowTallyPanel => !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
+Check(dashboardNative.Contains("public bool ShowTallyPanel => true;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
+      dashboardNative.Contains("HasConfirmedTallyLink = !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
       dashboardView.Contains("Visibility=\"{Binding ShowTallyPanel", StringComparison.Ordinal) &&
       shellModel.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
