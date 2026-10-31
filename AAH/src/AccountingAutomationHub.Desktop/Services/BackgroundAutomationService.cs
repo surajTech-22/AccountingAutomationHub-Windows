@@ -1386,12 +1386,16 @@ public sealed class BackgroundAutomationService : IDisposable
     /// No extra Client registration is created. Branch posting stays guarded
     /// until a separate accounting authority has been linked.
     /// </summary>
-    public int EnsureBranchFoldersForClient(long clientId)
+    public int EnsureBranchFoldersForClient(long clientId,
+        IReadOnlyList<ClientBranchRecord>? explicitBranches = null)
     {
         var client = _clientRepository.GetById(clientId);
         if (client is null || client.IsArchived) return 0;
-        var branches = ClientBranchCatalog.Resolve(client,
-            _settings.Get(ClientBranchCatalog.Key(client.Id)));
+        var branches = explicitBranches is null
+            ? ClientBranchCatalog.Resolve(client,
+                _settings.Get(ClientBranchCatalog.Key(client.Id)))
+            : ClientBranchCatalog.Resolve(client,
+                ClientBranchCatalog.Serialize(explicitBranches));
         if (branches.Count == 0) return 0;
         var count = 0;
         foreach (var folder in _automationRepository.GetFolders()
