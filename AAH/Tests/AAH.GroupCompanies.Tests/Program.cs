@@ -211,6 +211,7 @@ Require(autom.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) 
 // legacy unscoped module menu under Consolidated/Branch selection.
 var mainShellView = File.ReadAllText(Path.Combine(app, "MainWindow.xaml"));
 var scopeView = File.ReadAllText(Path.Combine(app, "Views", "BranchScopePreviewView.xaml"));
+var consolidatedView = File.ReadAllText(Path.Combine(app, "Views", "ConsolidatedBranchDashboardView.xaml"));
 var shellVm = File.ReadAllText(Path.Combine(app, "ViewModels", "MainWindowViewModel.cs"));
 Require(autom.Contains("var child = _privateBranchAccounts.GetOrCreate(", StringComparison.Ordinal) &&
         autom.Contains("clientId = child.Id;", StringComparison.Ordinal) &&
@@ -229,6 +230,12 @@ Require(view.Contains("EnableSeparateBranchBooks, Mode=TwoWay", StringComparison
 var applicationXaml = File.ReadAllText(Path.Combine(app, "App.xaml"));
 System.Xml.Linq.XDocument.Parse(mainShellView);
 System.Xml.Linq.XDocument.Parse(scopeView);
+System.Xml.Linq.XDocument.Parse(consolidatedView);
+Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewModel", StringComparison.Ordinal) &&
+        consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
+        consolidatedView.Contains("ItemsSource=\"{Binding Branches}\"", StringComparison.Ordinal) &&
+        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)", StringComparison.Ordinal),
+    "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
 Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
         scopeView.Contains("SafetyNote", StringComparison.Ordinal) &&
@@ -393,6 +400,44 @@ try
             purchases.GetRecords(first.Id, "2026-27").Count == 0 &&
             purchases.GetRecords(persistedParent.Id, "2026-27").Count == 0,
         "Purchase import authority leaked between private branch and parent");
+
+    var readback = new AccountingAutomationHub.Infrastructure.Clients.SqliteConsolidatedBranchReadbackRepository(privateDbPath);
+    var firstSnapshot = readback.Read(persistedParent.Id, "2026-27");
+    Require(firstSnapshot.Branches.Count == 2 &&
+            firstSnapshot.Branches.Single(x => x.ClientId == first.Id).Sales == 1 &&
+            firstSnapshot.Branches.Single(x => x.ClientId == second.Id).Purchases == 1 &&
+            firstSnapshot.Branches.All(x => !x.IsLegacyUnassigned),
+        "Consolidated branch readback mixed Sales/Purchase counts or invented historical parent data.");
+
+    // Previously committed parent data remains unassigned, not duplicated
+    // into Karnataka or Maharashtra when branch accounting is enabled.
+    var parentLegacy = new AccountingAutomationHub.Domain.Sales.SalesAutoImportResult
+    {
+        ClientGstin = persistedParent.Gstin, FinancialYear = persistedParent.FinancialYear,
+        CompanyName = "Parent historical evidence",
+        SourceFingerprint = "LEGACY-PARENT-SOURCE",
+        Records = [new AccountingAutomationHub.Domain.Sales.SalesImportRecord
+        {
+            Destination = "Sales", ClientGstin = persistedParent.Gstin,
+            DocumentNumber = "LEGACY-001", DocumentDate = new DateTime(2025, 5, 12),
+            SourceFile = "existing-before-branches.xlsx",
+            SourcePath = "Existing/Parent/old-sales.xlsx",
+            DocumentValue = 250m, TaxableValue = 250m,
+            SourceOrigin = "Existing parent evidence"
+        }]
+    };
+    Require(sales.ReplaceAutomaticImport(persistedParent.Id, "2026-27", parentLegacy) == 1,
+        "Synthetic historical parent source could not be read back.");
+    var afterLegacy = readback.Read(persistedParent.Id, "2026-27");
+    Require(afterLegacy.Branches.Count == 3 &&
+            afterLegacy.Branches.Single(x => x.ClientId == persistedParent.Id).IsLegacyUnassigned &&
+            afterLegacy.Branches.Single(x => x.ClientId == persistedParent.Id).Sales == 1 &&
+            afterLegacy.Branches.Single(x => x.ClientId == first.Id).Sales == 1 &&
+            afterLegacy.Branches.Single(x => x.ClientId == second.Id).Sales == 0 &&
+            afterLegacy.Warning.Contains("unassigned", StringComparison.OrdinalIgnoreCase),
+        "Existing parent historical postings were silently assigned to a branch.");
+    try { readback.Read(persistedParent.Id, "2025-26"); throw new Exception("Cross-FY consolidation allowed."); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("identity is not valid", StringComparison.Ordinal)) { }
 
 }
 finally
