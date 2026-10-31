@@ -2305,8 +2305,15 @@ public sealed class MainWindowViewModel :
                 : scope.IsConsolidated
                     ? "Consolidated reporting is for the saved branch scopes only. Live combined balances and Tally import remain blocked until every member ledger is scope-verified."
                     : "Dedicated branch records and modules require verified scope-aware repositories. Existing parent Client/FY rows cannot be presented as this branch's books.";
+            // A navigation/cache update is not a change of Tally company.
+            // Preserve the loaded consolidated Dashboard view and its controls
+            // while the real accounting ClientId/FY remains unchanged.
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
-                ? new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)
+                ? CurrentPage is ConsolidatedBranchDashboardViewModel existing &&
+                  existing.ParentClientId == client.Id &&
+                  existing.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase)
+                    ? existing
+                    : new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)
                 : new BranchScopePreviewViewModel(
                     "Dashboard", "Account scope / import verification", scope.DisplayName,
                     scope.ScopeId, scope.FinancialYear, note);
