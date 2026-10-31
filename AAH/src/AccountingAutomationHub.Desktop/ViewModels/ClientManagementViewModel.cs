@@ -88,6 +88,7 @@ public sealed partial class ClientManagementViewModel :
     private string _tradeName = string.Empty;
     private string _gstin = string.Empty;
     private string _additionalGstinsText = string.Empty;
+    private string _branchEntriesText = string.Empty;
     private string _pan = string.Empty;
     private string _state = string.Empty;
     private string _financialYear = string.Empty;
@@ -718,6 +719,14 @@ public sealed partial class ClientManagementViewModel :
     {
         get => _additionalGstinsText;
         set => SetProperty(ref _additionalGstinsText, value ?? string.Empty);
+    }
+
+    // Each line creates a branch INSIDE the current Client/FY. Optional GSTINs
+    // continue through the existing Client.AdditionalGstins import authority.
+    public string BranchEntriesText
+    {
+        get => _branchEntriesText;
+        set => SetProperty(ref _branchEntriesText, value ?? string.Empty);
     }
 
     public string Pan
@@ -2932,6 +2941,7 @@ public sealed partial class ClientManagementViewModel :
             TradeName = string.Empty;
             Gstin = string.Empty;
             AdditionalGstinsText = string.Empty;
+            BranchEntriesText = string.Empty;
             Pan = string.Empty;
             State = string.Empty;
             FinancialYear = GetDefaultFinancialYear();
@@ -2992,6 +3002,8 @@ public sealed partial class ClientManagementViewModel :
                 ? string.Empty : client.TradeName;
             Gstin = client.Gstin;
             AdditionalGstinsText = string.Join(Environment.NewLine, client.AdditionalGstins ?? []);
+            BranchEntriesText = ClientBranchCatalog.Format(ClientBranchCatalog.Resolve(
+                client, _preferenceRepository.Get(ClientBranchCatalog.Key(client.Id))));
             Pan = client.Pan;
             State = client.State;
             FinancialYear = client.FinancialYear;
@@ -3139,7 +3151,9 @@ public sealed partial class ClientManagementViewModel :
             var priorAdditional = EditingId > 0
                 ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
                 : Array.Empty<string>();
-            var enteredAdditional = ParseAdditionalGstins(AdditionalGstinsText);
+            var branches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var enteredAdditional = ClientBranchCatalog.AdditionalGstins(branches, normalizedGstin, normalizedPan);
+            AdditionalGstinsText = string.Join(Environment.NewLine, enteredAdditional);
             var newlyAdded = enteredAdditional
                 .Except(priorAdditional, StringComparer.OrdinalIgnoreCase).ToArray();
             var isNewClientFinancialYear = EditingId == 0;
@@ -3173,6 +3187,10 @@ public sealed partial class ClientManagementViewModel :
                     CreatedUtc = _createdUtc,
                     UpdatedUtc = _updatedUtc
                 });
+
+            // Branches are metadata on this Client, not separate Client/FY records.
+            // Save after the validated profile; existing GST-wise import remains unchanged.
+            _preferenceRepository.Set(ClientBranchCatalog.Key(saved.Id), ClientBranchCatalog.Serialize(branches));
 
             // Fix137 R41: every newly-created Client/FY starts with the canonical Tally
             // chart instead of an empty Master Centre. This includes Previous-FY profile
@@ -3296,6 +3314,8 @@ public sealed partial class ClientManagementViewModel :
             TradeName = source.TradeName;
             Gstin = source.Gstin;
             AdditionalGstinsText = string.Join(Environment.NewLine, source.AdditionalGstins ?? []);
+            BranchEntriesText = ClientBranchCatalog.Format(ClientBranchCatalog.Resolve(
+                source, _preferenceRepository.Get(ClientBranchCatalog.Key(source.Id))));
             Pan = source.Pan;
             State = source.State;
             FinancialYear = NextFinancialYear(source.FinancialYear);
@@ -3486,7 +3506,16 @@ public sealed partial class ClientManagementViewModel :
         }
 
         var normalizedPan = NormalizeTaxNumber(Pan);
-        var additions = ParseAdditionalGstins(AdditionalGstinsText);
+        IReadOnlyList<string> additions;
+        try
+        {
+            var parsedBranches = ClientBranchCatalog.Parse(BranchEntriesText);
+            additions = ClientBranchCatalog.AdditionalGstins(parsedBranches, normalizedGstin, normalizedPan);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception.Message;
+        }
         if (additions.Count > 0 && normalizedGstin.Length != 15)
             return "Enter the primary GSTIN before adding secondary registrations.";
         if (additions.Count > 100)

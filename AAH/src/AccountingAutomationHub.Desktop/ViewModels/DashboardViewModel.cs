@@ -465,6 +465,24 @@ public sealed class DashboardViewModel :
         private set => SetProperty(ref _clientGstinRegistrations, value);
     }
 
+    private IReadOnlyList<ClientBranchRecord> _clientBranches = [];
+    public IReadOnlyList<ClientBranchRecord> ClientBranches
+    {
+        get => _clientBranches;
+        private set
+        {
+            if (!SetProperty(ref _clientBranches, value)) return;
+            OnPropertyChanged(nameof(HasBranches));
+            OnPropertyChanged(nameof(BranchCount));
+            OnPropertyChanged(nameof(ShowUnassignedPrimaryGstin));
+        }
+    }
+    public bool HasBranches => ClientBranches.Count > 0;
+    public int BranchCount => ClientBranches.Count;
+    public bool ShowUnassignedPrimaryGstin =>
+        HasBranches && Gstin.Length == 15 &&
+        !ClientBranches.Any(x => x.Gstin.Equals(Gstin, StringComparison.OrdinalIgnoreCase));
+
     public string Pan
     {
         get => _pan;
@@ -4459,6 +4477,10 @@ public sealed class DashboardViewModel :
         LegalName = EmptyToDash(client.LegalName);
         Gstin = EmptyToDash(client.Gstin);
         ClientGstinRegistrations = BuildClientGstinRegistrations(client);
+        // Display-only branches. The workspace remains the same Client/FY and
+        // all existing bank, GST and Tally import routes remain unchanged.
+        ClientBranches = ClientBranchCatalog.Resolve(client,
+            _applicationPreferences.Get(ClientBranchCatalog.Key(client.Id)));
         OnPropertyChanged(nameof(HasValidGstin));
         Pan = EmptyToDash(client.Pan);
         State = EmptyToDash(client.State);
@@ -5242,6 +5264,7 @@ public sealed class DashboardViewModel :
         LegalName = "—";
         Gstin = "—";
         ClientGstinRegistrations = [];
+        ClientBranches = [];
         OnPropertyChanged(nameof(HasValidGstin));
         Pan = "—";
         State = "—";
