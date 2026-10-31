@@ -220,11 +220,32 @@ public sealed class DashboardViewModel :
     private bool _hasConfirmedTallyLink;
     private bool _canConfirmTallyLink;
     private bool _isPrivateBranchDashboard;
+    private bool _isConsolidatedTallyScope;
 
     // Original dashboard Tally link/export applies to the current Client/FY,
     // including separate private branch accounts. No parent-link inheritance.
     public bool ShowTallyPanel => true;
     public bool IsBranchTallyReference => false;
+    public bool IsConsolidatedTallyScope => _isConsolidatedTallyScope;
+
+    // Consolidated has its own link but cannot post parent legacy rows as
+    // combined branch vouchers; a separate source-owned group XML route is required.
+    public void SetConsolidatedTallyScope(bool active)
+    {
+        if (_isConsolidatedTallyScope == active) return;
+        _isConsolidatedTallyScope = active;
+        OnPropertyChanged(nameof(IsConsolidatedTallyScope));
+        if (active)
+        {
+            Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
+            Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
+            Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
+            if (_clientContext.CurrentClient is { } current)
+                _tallyCoordinator.SetOutboundAutoSyncEnabled(current, false);
+            TallyAutoSyncStatus = "Consolidated Tally linking is available. Consolidated voucher export awaits source-owned group XML routing.";
+        }
+        RefreshTallyCommandStates();
+    }
 
     public void SetPrivateBranchDashboard(bool isPrivate)
     {
@@ -826,6 +847,11 @@ public sealed class DashboardViewModel :
         {
             var normalized = value.Equals("Full Auto", StringComparison.OrdinalIgnoreCase) ? "Full Auto" :
                 value.Equals("Selected", StringComparison.OrdinalIgnoreCase) ? "Selected" : "Off";
+            if (_isConsolidatedTallyScope && normalized != "Off")
+            {
+                TallyAutoSyncStatus = "Consolidated Tally link is active; voucher auto-export requires the separate consolidated import route.";
+                return;
+            }
             if (!SetProperty(ref _tallyAutoSyncMode, normalized)) return;
             OnPropertyChanged(nameof(IsTallyAutoSyncOff));
             OnPropertyChanged(nameof(IsTallyAutoSyncEnabled));
@@ -2930,6 +2956,7 @@ public sealed class DashboardViewModel :
 
     private bool CanExportSelectedToTally()
     {
+        if (_isConsolidatedTallyScope) return false;
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             return false;
@@ -3712,6 +3739,7 @@ public sealed class DashboardViewModel :
 
     private async Task RunTallyAutoSyncAsync()
     {
+        if (_isConsolidatedTallyScope) return;
         if (_disposed || IsTallyAutoSyncOff || Interlocked.CompareExchange(ref _autoTallySyncInFlight, 1, 0) != 0) return;
         var claimedPending = 0;
         var claimedChanged = 0;
@@ -4085,6 +4113,11 @@ public sealed class DashboardViewModel :
 
     private async Task ExportSelectedToTallyAsync()
     {
+        if (_isConsolidatedTallyScope)
+        {
+            TallyExportStatus = "Consolidated Tally link is available; group vouchers require the separate source-owned consolidation route.";
+            return;
+        }
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             TallyExportStatus = "Your role does not have permission to export accounting vouchers to Tally.";
@@ -5126,7 +5159,8 @@ public sealed class DashboardViewModel :
         _autoSyncAlterVouchers = ReadSavedTallyBool(client, "AutoSync", "AlterVouchers", true);
         _autoSyncDelete = ReadSavedTallyBool(client, "AutoSync", "Delete", false);
         _autoSyncRecreate = ReadSavedTallyBool(client, "AutoSync", "Recreate", false);
-        _tallyCoordinator.SetOutboundAutoSyncEnabled(client, !_tallyAutoSyncMode.Equals("Off", StringComparison.OrdinalIgnoreCase));
+        _tallyCoordinator.SetOutboundAutoSyncEnabled(client,
+            !_isConsolidatedTallyScope && !_tallyAutoSyncMode.Equals("Off", StringComparison.OrdinalIgnoreCase));
         Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
         Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
         Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
