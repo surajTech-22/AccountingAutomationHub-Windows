@@ -14,6 +14,7 @@
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/GroupCompanyConsolidationPolicy.cs" Link="Production/GroupCompanyConsolidationPolicy.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ClientBranchCatalog.cs" Link="Production/ClientBranchCatalog.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/BranchAccountingWorkspaceCatalog.cs" Link="Production/BranchAccountingWorkspaceCatalog.cs" />
+    <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/BranchAccountingModePreference.cs" Link="Production/BranchAccountingModePreference.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ClientBranchAutoImportLayout.cs" Link="Production/ClientBranchAutoImportLayout.cs" />
   </ItemGroup>
 </Project>
