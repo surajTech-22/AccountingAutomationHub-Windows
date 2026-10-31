@@ -54,6 +54,34 @@ internal static class EntryPoint
             "Verified update may wait on repeatable scans, interrupt manual jobs or fail to restore watchers.");
         Console.WriteLine("PASS: updater-exclusive graceful shutdown quiesces repeatable work, protects active accounting and restores deferred watchers.");
 
+        // The October 31 failure left two processes from the same installation
+        // alive after the binary had been replaced. These identity and version
+        // contracts must be tested independently of a live Tally installation.
+        var originalExe = Path.GetFullPath(Path.Combine(root, "AAH-Installed",
+            "AccountingAutomationHub.exe"));
+        var secondInstall = Path.GetFullPath(Path.Combine(root, "AAH-Other",
+            "AccountingAutomationHub.exe"));
+        Assert(Program.IsExactInstallationProcess("AccountingAutomationHub", originalExe, originalExe),
+            "Exact-install AAH process not recognized.");
+        Assert(!Program.IsExactInstallationProcess("AccountingAutomationHub", secondInstall, originalExe),
+            "Different-install AAH process was selected for graceful shutdown.");
+        Assert(!Program.IsExactInstallationProcess("explorer", originalExe, originalExe),
+            "Non-AAH application could be targeted for shutdown.");
+        var version533 = new Version(4, 0, 0, 533);
+        var version534 = new Version(4, 0, 0, 534);
+        Assert(Program.IsUpgradeOrRestartRecovery(version533, version534, "v4.0.0.534"),
+            "Normal newer signed/checksummed release rejected.");
+        Assert(Program.IsUpgradeOrRestartRecovery(version534, version534, "v4.0.0.534"),
+            "Already-copied verified release cannot complete its restart.");
+        Assert(!Program.IsUpgradeOrRestartRecovery(version534, version533, "v4.0.0.533"),
+            "Updater accepted a downgrade.");
+        Assert(!Program.IsUpgradeOrRestartRecovery(version533, version534, "v4.0.0.999"),
+            "Updater accepted a binary whose version differs from the stable release.");
+        Assert(desktopSource.Contains("DispatcherPriority.Loaded, new Action(() =>", StringComparison.Ordinal) &&
+               desktopSource.Contains("ConfirmStartupReady();", StringComparison.Ordinal),
+            "WPF startup readiness still depends solely on ContextIdle and can be starved.");
+        Console.WriteLine("PASS: exact-install-only multi-process closure, no unrelated processes, newer/same-version recovery, downgrade rejection and Loaded readiness.");
+
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
         Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),
@@ -172,7 +200,7 @@ internal static class EntryPoint
         try
         {
             Test(temp);
-            Console.WriteLine("PASS: 8/8 AAH UpdateHost transactional safety scenarios.");
+            Console.WriteLine("PASS: AAH UpdateHost transactional, multi-process shutdown and restart-readiness regressions.");
             return 0;
         }
         finally
