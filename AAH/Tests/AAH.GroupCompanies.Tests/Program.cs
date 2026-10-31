@@ -217,4 +217,86 @@ Require(mainShellView.Contains("SelectedBranchWorkspace, Mode=TwoWay", StringCom
         shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(client, branches)", StringComparison.Ordinal),
     "Consolidated/branch menu did not block the shared parent accounting data page.");
 
+
+// End-to-end SQLite ownership regression: the same bank importer still uses
+// ClientId/FY, but branch bank rows never become parent or sibling rows.
+// The hidden rows must not become duplicate top-level Directory/GST owners.
+var privateDbFolder = Path.Combine(Path.GetTempPath(), "aah-private-branch-tests-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(privateDbFolder);
+var privateDbPath = Path.Combine(privateDbFolder, "test.db");
+try
+{
+    var mainClients = new AccountingAutomationHub.Infrastructure.Clients.SqliteClientRepository(privateDbPath);
+    mainClients.Initialize();
+    var persistedParent = mainClients.Save(new ClientProfile
+    {
+        ClientCode = "PARENT27", ClientName = "Parent Branch Company",
+        FinancialYear = "2026-27", Pan = "ABCDE1234F", Gstin = "29ABCDE1234F1Z5",
+        AdditionalGstins = ["27ABCDE1234F1Z5"]
+    });
+    Require(persistedParent.Id > 0 && mainClients.GetAll(false).Count == 1,
+        "a normal parent must remain in Client Directory before branch creation");
+    var scoped = new AccountingAutomationHub.Infrastructure.Clients.SqliteInternalBranchAccountRepository(privateDbPath);
+    var first = scoped.GetOrCreate(persistedParent.Id, "B-KA", "Karnataka", "29ABCDE1234F1Z5");
+    var second = scoped.GetOrCreate(persistedParent.Id, "B-MH", "Maharashtra", "27ABCDE1234F1Z5");
+    Require(first.Id > 0 && second.Id > 0 && first.Id != second.Id &&
+        first.Id != persistedParent.Id && second.Id != persistedParent.Id,
+        "branch books must have their own durable ClientId, not the parent accounting owner");
+    Require(scoped.GetOrCreate(persistedParent.Id, "B-KA", "Karnataka", first.Gstin).Id == first.Id,
+        "repeated branch creation must reuse the same persisted identity without duplicates");
+    Require(mainClients.GetAll(false).Count == 1 && mainClients.GetAll(true).Count == 1,
+        "private branch accounting IDs must not appear in Client Directory or GST source scans");
+    Require(mainClients.GetById(first.Id)?.Gstin == first.Gstin &&
+        mainClients.GetById(second.Id)?.Gstin == second.Gstin,
+        "private branch GST registration must survive a database read-back");
+    Require(scoped.FindByChild(first.Id)?.ParentClientId == persistedParent.Id &&
+        scoped.FindByParent(persistedParent.Id).Count == 2,
+        "parent/branch hierarchy must be durable and reversible by exact ID");
+    var parentAgain = mainClients.GetById(persistedParent.Id)!;
+    parentAgain.ClientName = "Parent Edited";
+    parentAgain.AdditionalGstins = ["27ABCDE1234F1Z5"];
+    mainClients.Save(parentAgain);
+    Require(mainClients.GetAll(false).Count == 1,
+        "editing a parent must not be blocked by its own hidden branch registrations");
+    try { mainClients.Save(first); throw new Exception("Normal client editor changed a branch authority."); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Branch accounting Client profiles", StringComparison.Ordinal)) { }
+    try { scoped.GetOrCreate(persistedParent.Id, "B-KA", "Karnataka", "27ABCDE1234F1Z5");
+          throw new Exception("Existing branch changed GSTIN identity silently."); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("manual reconciliation", StringComparison.Ordinal)) { }
+    try { scoped.GetOrCreate(persistedParent.Id, "B-OTHER", "Other", "29PQRST1234A1Z5");
+          throw new Exception("Different-PAN GSTIN was admitted into branch authority."); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("PAN does not match", StringComparison.Ordinal)) { }
+
+    var banking = new AccountingAutomationHub.Infrastructure.Banking.SqliteBankingRepository(
+        new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = privateDbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate
+        }.ToString());
+    banking.Initialize();
+    using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+        new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = privateDbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate
+        }.ToString()))
+    {
+        conn.Open();
+        using var saveBank = conn.CreateCommand();
+        saveBank.CommandText =
+            "INSERT INTO BankAccounts(ClientId,FinancialYear,BankName,AccountNumber,AccountType,BranchName,CreatedUtc,UpdatedUtc) " +
+            "VALUES($Client,$FY,'Test Bank','12345','Current','Karnataka',$UTC,$UTC);";
+        saveBank.Parameters.AddWithValue("$Client", first.Id);
+        saveBank.Parameters.AddWithValue("$FY", "2026-27");
+        saveBank.Parameters.AddWithValue("$UTC", DateTime.UtcNow.ToString("O"));
+        saveBank.ExecuteNonQuery();
+    }
+    Require(banking.GetAccounts(first.Id, "2026-27").Count == 1 &&
+            banking.GetAccounts(second.Id, "2026-27").Count == 0 &&
+            banking.GetAccounts(persistedParent.Id, "2026-27").Count == 0,
+        "existing real bank repository mixed parent and sibling branch transactions");
+}
+finally
+{
+    try { Directory.Delete(privateDbFolder, true); } catch { }
+}
+
 Console.WriteLine("PASS: explicit company groups, nested assignments, same-PAN branch accounting, different-PAN owner groups, FY separation, missing/conflicting PAN review, cash/interbank contra plans, preserved client records and safe branch-import gates, separate normal/Consolidated/branch module scope contracts and read-back-only financial summaries.");
