@@ -242,6 +242,7 @@ public sealed class DashboardViewModel :
             if (_clientContext.CurrentClient is { } current)
                 _tallyCoordinator.SetOutboundAutoSyncEnabled(current, false);
         }
+        RefreshTallySection();
         RefreshTallyCommandStates();
     }
     private bool _canCancelTallySelection;
