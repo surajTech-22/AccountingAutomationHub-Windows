@@ -233,7 +233,8 @@ System.Xml.Linq.XDocument.Parse(scopeView);
 System.Xml.Linq.XDocument.Parse(consolidatedView);
 Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewModel", StringComparison.Ordinal) &&
         consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
-        consolidatedView.Contains("ItemsSource=\"{Binding Branches}\"", StringComparison.Ordinal) &&
+        consolidatedView.Contains("ItemsSource=\"{Binding VerifiedBranches}\"", StringComparison.Ordinal) &&
+        consolidatedView.Contains("Text=\"{Binding HistoricalParentSummary}\"", StringComparison.Ordinal) &&
         shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
