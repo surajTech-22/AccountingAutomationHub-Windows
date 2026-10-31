@@ -51,6 +51,7 @@ public sealed class BackgroundAutomationService : IDisposable
     private readonly ClientAutoImportPolicyService _clientAutoImportPolicies = new();
     private readonly SqliteAutomationRepository _automationRepository = new();
     private readonly SqliteClientRepository _clientRepository = new();
+    private readonly SqliteInternalBranchAccountRepository _privateBranchAccounts = new();
     private readonly SqliteBankingRepository _bankingRepository = new();
     private readonly SqliteMasterRepository _masterRepository = new();
     private TallyBankStatementReconciliationService? _tallyBankStatementReconciliationService;
@@ -1375,7 +1376,11 @@ public sealed class BackgroundAutomationService : IDisposable
             _settings.GetBool(ApplicationSettingKeys.AutomationAutoImportKnown))
             QueueExistingFiles(registration, force: false);
 
-        ScheduleRegisteredClientGstBootstrap(registration, client.Id);
+        // A branch folder is not another GST owner. Central shared E-returns
+        // remains source-set authority; never start a second GST bootstrap
+        // from each nested branch folder merely because it was linked.
+        if (_privateBranchAccounts.FindByChild(client.Id) is null)
+            ScheduleRegisteredClientGstBootstrap(registration, client.Id);
 
         Notify(
             "Automation Folder linked",
@@ -1417,8 +1422,24 @@ public sealed class BackgroundAutomationService : IDisposable
                 var entries = ClientBranchAutoImportLayout.Ensure(
                     folder.FolderPath, client.Id, branches);
                 count += entries.Count;
+                foreach (var entry in entries)
+                {
+                    // Only a source-registered GSTIN branch can be automatically
+                    // assigned to a private accountant owner. A name-only branch
+                    // needs explicit source-to-branch identification to avoid
+                    // misposting a bank/cash workbook by guesswork.
+                    if (entry.Gstin.Length != 15) continue;
+                    var branchProfile = _privateBranchAccounts.GetOrCreate(
+                        client.Id, entry.BranchId, entry.Name, entry.Gstin);
+                    var owner = _automationRepository.GetByPath(entry.FolderPath);
+                    if (owner is not null && owner.ClientId != branchProfile.Id)
+                        throw new InvalidOperationException(
+                            "Branch folder is already linked to another accounting owner; no automatic relink permitted.");
+                    if (owner is null)
+                        RegisterFolderCore(entry.FolderPath, branchProfile);
+                }
                 AutomationDiagnosticLog.Write("BRANCH-FOLDER",
-                    $"Prepared {entries.Count} named branch Auto Import folders for client {client.ClientCode}. Branch-scoped imports remain guarded until separate accounting authority is linked.",
+                    $"Prepared {entries.Count} named branch Auto Import folders for {client.ClientCode}. Registered GSTIN branches use separate durable ClientId owners; name-only branches remain review-only.",
                     folder.FolderPath);
             }
             catch (Exception exception) when (exception is IOException or
@@ -4278,6 +4299,44 @@ public sealed class BackgroundAutomationService : IDisposable
                 AutomationDiagnosticLog.Write("BRANCH-IMPORT-UNOWNED",
                     "File is within the branch tree but has no verified owner. Import is blocked.",
                     path);
+            return false;
+        }
+
+        // Private child folders use their own ClientId/FY, but must prove
+        // parent-folder ownership and exact immutable BranchId before a
+        // cached/replayed file can enter the old banking/importer pipeline.
+        var branchLink = _privateBranchAccounts.FindByChild(folder.ClientId);
+        if (branchLink is not null)
+        {
+            var parentFolder = _automationRepository.GetFolders().FirstOrDefault(f =>
+                f.ClientId == branchLink.ParentClientId &&
+                f.FinancialYear.Equals(folder.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+                ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var probe) &&
+                probe is not null && probe.ClientId == branchLink.ParentClientId &&
+                probe.BranchId.Equals(branchLink.BranchId, StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFullPath(probe.FolderPath).Equals(
+                    Path.GetFullPath(folder.FolderPath), StringComparison.OrdinalIgnoreCase));
+            if (parentFolder is null)
+            {
+                AutomationDiagnosticLog.Write("BRANCH-IMPORT-OWNER-MISMATCH",
+                    "Private branch source has no exact parent/BranchId folder marker. No import attempted.", path);
+                return false;
+            }
+            if (Path.GetRelativePath(folder.FolderPath, path)
+                .StartsWith("GST" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                // GST return/source-set material must use the dedicated
+                // GSTIN/FY source-set authority, not generic file classification.
+                return false;
+            }
+        }
+        else if (BranchAccountingModePreference.IsEnabled(
+            _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(folder.ClientId))))
+        {
+            // Consolidated's historical files remain evidence; no new generic
+            // imports can be assigned to the wrong branch automatically.
+            AutomationDiagnosticLog.Write("BRANCH-CONSOLIDATED-DEFER",
+                "Separate branch books enabled: place new accounting source in its named branch folder. Parent accounting data preserved.", path);
             return false;
         }
 
