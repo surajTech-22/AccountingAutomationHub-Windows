@@ -19,6 +19,18 @@ Require(GitHubAutoUpdateService.ReleaseApi.StartsWith(
     StringComparison.Ordinal), "release feed not pinned");
 Pass("pinned main AAH GitHub release feed");
 
+// Display time uses the PC's timezone but never loses the actual UTC instant.
+// In India, 06:19:33Z must display as 11:49:33+05:30; CI may use UTC.
+var utcReleaseInstant = new DateTimeOffset(2026, 10, 31, 6, 19, 33, TimeSpan.Zero);
+var localLogText = GitHubAutoUpdateService.FormatLocalLogTimestamp(utcReleaseInstant);
+Require(DateTimeOffset.TryParse(localLogText,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsedLocalLog) &&
+        parsedLocalLog.ToUniversalTime() == utcReleaseInstant &&
+        parsedLocalLog.Offset == TimeZoneInfo.Local.GetUtcOffset(utcReleaseInstant.UtcDateTime),
+    "Desktop auto-update log timestamp is not local offset-aware or changed the release instant.");
+Pass("desktop updater uses offset-aware local timestamps without shifting UTC instants");
+
 // Catch-up is event replay, never an untrusted alternate update feed.
 // Assert that a dead SSE connection cannot block forever, and that replay
 // never accepts arbitrary relay payloads as update authority.
