@@ -45,6 +45,9 @@ internal static class GitHubAutoUpdateService
     private static readonly HttpClient Client = CreateClient();
     private static int _started;
     private static int _updateLaunched;
+    // Serialize checks started by startup, SSE replay and reconnect within one
+    // application instance. Do not run overlapping downloads in the same process.
+    private static readonly SemaphoreSlim CheckGate = new(1, 1);
     private static int _duplicateInstallationNotified;
 
     internal static void Start(bool isLanClient)
@@ -203,6 +206,13 @@ internal static class GitHubAutoUpdateService
 
     private static async Task CheckOnceAsync()
     {
+        if (!await CheckGate.WaitAsync(0).ConfigureAwait(false)) return;
+        try { await CheckOnceCoreAsync().ConfigureAwait(false); }
+        finally { CheckGate.Release(); }
+    }
+
+    private static async Task CheckOnceCoreAsync()
+    {
         // The initial GitHub bootstrap must be installed once; existing legacy
         // installs cannot acquire this checker without replacing the old app.
         var installedExe = Environment.ProcessPath;
@@ -262,12 +272,20 @@ internal static class GitHubAutoUpdateService
         var cacheRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AccountingAutomationHub", "GitHubAutoUpdate");
-        // Keep only one updater per release, rather than accumulating a new
-        // random GUID folder each time the application checks for an update.
-        var root = GetReleaseCacheDirectory(cacheRoot, tag);
+        // Every attempt gets an immutable path. A prior update host can still be
+        // running from the same release, so never overwrite or re-open its EXE.
+        // The cross-process staging lock is released by the OS on abnormal exit.
+        var root = Path.Combine(GetReleaseCacheDirectory(cacheRoot, tag),
+            "attempt-" + Guid.NewGuid().ToString("N"));
         var incoming = Path.Combine(root, UpdateAssetName + ".pending.exe");
         try
         {
+            using var stagingLock = TryAcquireStagingLock(cacheRoot);
+            if (stagingLock is null)
+            {
+                Log("Another AAH process is staging an updater; skipping duplicate attempt.");
+                return;
+            }
             Directory.CreateDirectory(root);
             var path = Path.Combine(root, UpdateAssetName);
             // Download to a separate file, so an interrupted download never
@@ -301,7 +319,7 @@ internal static class GitHubAutoUpdateService
             // As in manual update mode, replace the OLD updater bytes only after
             // verifying the complete incoming file. A running previous updater is
             // left untouched; Windows will refuse overwriting its executable.
-            File.Move(incoming, path, overwrite: true);
+            File.Move(incoming, path);
             CleanupStaleUpdaterFolders(cacheRoot, tag);
             var psi = new ProcessStartInfo(path)
             {
@@ -334,7 +352,13 @@ internal static class GitHubAutoUpdateService
                     {
                         Log("updater exit monitoring failed: " + ex.GetType().Name);
                     }
-                    finally { Interlocked.Exchange(ref _updateLaunched, 0); }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _updateLaunched, 0);
+                        try { Directory.Delete(root, recursive: true); }
+                        catch (IOException) { /* A transient OS lock can defer cache cleanup. */ }
+                        catch (UnauthorizedAccessException) { /* Never force-delete in-use files. */ }
+                    }
                 }
             });
         }
@@ -344,6 +368,21 @@ internal static class GitHubAutoUpdateService
             Interlocked.Exchange(ref _updateLaunched, 0);
             throw;
         }
+    }
+
+    // Prevent simultaneous SSE/replay stages across multiple old and new AAH
+    // instances, without relying on an abandoned named semaphore or mutex
+    // ownership surviving an async continuation.
+    internal static FileStream? TryAcquireStagingLock(string cacheRoot)
+    {
+        Directory.CreateDirectory(cacheRoot);
+        try
+        {
+            return new FileStream(Path.Combine(cacheRoot, ".aah-update-staging.lock"),
+                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     // The same identity guard exists in AAH_GitHubSetup.iss. Two separately
