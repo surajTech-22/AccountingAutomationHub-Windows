@@ -533,6 +533,14 @@ public sealed class SqliteClientRepository :
             }
             if (branchGstins.Count > 0)
             {
+                using var previousPrimary = connection.CreateCommand();
+                previousPrimary.Transaction = transaction;
+                previousPrimary.CommandText = "SELECT Gstin FROM Clients WHERE Id=$Id;";
+                previousPrimary.Parameters.AddWithValue("$Id", normalized.Id);
+                var registeredPrimary = previousPrimary.ExecuteScalar()?.ToString() ?? "";
+                if (!registeredPrimary.Equals(normalized.Gstin, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Cannot change primary GSTIN while private branch accounting exists. Reconcile the affected branch records first.");
                 if (originalFy is not null && !originalFy.Equals(normalized.FinancialYear, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Cannot change the financial year of a Client with private branch books.");
                 if (originalPan is not null && !originalPan.Equals(normalized.Pan, StringComparison.OrdinalIgnoreCase))
