@@ -1805,18 +1805,15 @@ public sealed class DashboardViewModel :
         // Client selection never starts SQLite/module refreshes or recalculates accounting
         // populations on the WPF thread. If a snapshot is not ready yet, the zero/default
         // cards already painted by ApplyImmediateDashboardState remain visible.
-        AccountingSummaryMetrics.Clear();
-        Gstr3bMonthTiles.Clear();
-
         if (!_workspaceStateCache.TryPeekReadOnly(client.Id, client.FinancialYear, out var cached))
         {
-            foreach (var metric in CreateZeroAccountingMetrics()) AccountingSummaryMetrics.Add(metric);
+            UpdateAccountingMetricsIfChanged(CreateZeroAccountingMetrics());
+            UpdateGstr3bTilesIfChanged([]);
             TotalRecords = 0;
             return;
         }
 
-        foreach (var metric in cached.DashboardAccountingMetrics)
-            AccountingSummaryMetrics.Add(metric);
+        UpdateAccountingMetricsIfChanged(cached.DashboardAccountingMetrics);
         TotalRecords = cached.DashboardTotalRecords;
 
         // GST display is derived only from already-prepared GST cache data. No repository,
@@ -1824,9 +1821,50 @@ public sealed class DashboardViewModel :
         PopulateGstr3bTilesFromPreparedSnapshot(client, cached);
     }
 
+    private static bool SameAccountingMetric(DashboardAccountingMetric a, DashboardAccountingMetric b) =>
+        a.Label == b.Label && a.Value == b.Value && a.Detail == b.Detail &&
+        a.TargetPage == b.TargetPage && a.HasActionRequired == b.HasActionRequired &&
+        a.ActionRequiredCount == b.ActionRequiredCount &&
+        a.IsBankStatementMetric == b.IsBankStatementMetric &&
+        a.PendingMappingCount == b.PendingMappingCount &&
+        a.CompletedMappingCount == b.CompletedMappingCount &&
+        a.MappingTransactionCount == b.MappingTransactionCount &&
+        a.MappingCompletionPercent == b.MappingCompletionPercent &&
+        a.StatusState == b.StatusState;
+
+    private void UpdateAccountingMetricsIfChanged(IEnumerable<DashboardAccountingMetric> values)
+    {
+        var updated = values as IReadOnlyList<DashboardAccountingMetric> ?? values.ToArray();
+        if (AccountingSummaryMetrics.Count == updated.Count &&
+            AccountingSummaryMetrics.Select((item, i) => SameAccountingMetric(item, updated[i])).All(same => same))
+            return;
+        AccountingSummaryMetrics.Clear();
+        foreach (var metric in updated) AccountingSummaryMetrics.Add(metric);
+    }
+
+    private static bool SameGstr3bTile(DashboardGstr3bMonthTile a, DashboardGstr3bMonthTile b) =>
+        a.PeriodKey == b.PeriodKey && a.Month == b.Month &&
+        a.MonthLabel == b.MonthLabel && a.StatusText == b.StatusText &&
+        a.StatusState == b.StatusState && a.Detail == b.Detail &&
+        a.TargetPage == b.TargetPage;
+
+    private void UpdateGstr3bTilesIfChanged(IReadOnlyList<DashboardGstr3bMonthTile> updated)
+    {
+        if (Gstr3bMonthTiles.Count == updated.Count &&
+            Gstr3bMonthTiles.Select((item, i) => SameGstr3bTile(item, updated[i])).All(same => same))
+            return;
+        Gstr3bMonthTiles.Clear();
+        foreach (var tile in updated) Gstr3bMonthTiles.Add(tile);
+    }
+
     private void PopulateGstr3bTilesFromPreparedSnapshot(ClientProfile client, ClientWorkspaceSnapshot cached)
     {
-        if (!HasValidGstin) return;
+        if (!HasValidGstin)
+        {
+            UpdateGstr3bTilesIfChanged([]);
+            return;
+        }
+        var tiles = new List<DashboardGstr3bMonthTile>();
         var (fyFrom, _) = TallyLiveConnectionCoordinator.FinancialYearDates(client.FinancialYear);
         var returns = cached.GstReturns;
         var reconciliation = cached.GstReconciliation;
@@ -1858,13 +1896,14 @@ public sealed class DashboardViewModel :
                 var quarterTo = quarterFrom.AddMonths(3).AddDays(-1);
                 var reportingKey = GstJournalGenerationService.PeriodKey(quarterFrom, filingFrequency);
                 var status = BuildGstr3bMonthStatus(reportingKey, filingFrequency, reconciliationByPeriod, returnPeriods);
-                Gstr3bMonthTiles.Add(new DashboardGstr3bMonthTile
+                tiles.Add(new DashboardGstr3bMonthTile
                 {
                     PeriodKey = reportingKey, Month = $"{quarterFrom:MMM}–{quarterTo:MMM}",
                     MonthLabel = $"{quarterFrom:MMMM}–{quarterTo:MMMM yyyy}", StatusText = status.Text,
                     StatusState = status.State, Detail = status.Detail, TargetPage = "GST"
                 });
             }
+            UpdateGstr3bTilesIfChanged(tiles);
             return;
         }
 
@@ -1873,13 +1912,14 @@ public sealed class DashboardViewModel :
             var month = fyFrom.AddMonths(index);
             var reportingKey = GstJournalGenerationService.PeriodKey(month, filingFrequency);
             var status = BuildGstr3bMonthStatus(reportingKey, filingFrequency, reconciliationByPeriod, returnPeriods);
-            Gstr3bMonthTiles.Add(new DashboardGstr3bMonthTile
+            tiles.Add(new DashboardGstr3bMonthTile
             {
                 PeriodKey = reportingKey, Month = month.ToString("MMM", CultureInfo.InvariantCulture),
                 MonthLabel = month.ToString("MMMM yyyy", CultureInfo.InvariantCulture), StatusText = status.Text,
                 StatusState = status.State, Detail = status.Detail, TargetPage = "GST"
             });
         }
+        UpdateGstr3bTilesIfChanged(tiles);
     }
 
     private static bool IsInside(DateTime date, DateTime from, DateTime to) =>
