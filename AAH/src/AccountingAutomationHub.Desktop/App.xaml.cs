@@ -299,6 +299,15 @@ public partial class App : System.Windows.Application
                 // therefore a cache-consumer action only.
                 QueueDeferredRuntimeWarmup();
 
+                // The updater waits for this one-time ready event after a
+                // verified restart. ContextIdle may be starved indefinitely by
+                // active watchers and dispatcher work, causing a FALSE failed
+                // restart despite a visible, healthy AAH window. Signal once
+                // layout has loaded, retaining ContextIdle as a fallback.
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                {
+                    if (host.IsVisible) ConfirmStartupReady();
+                }));
                 _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
                 {
                     if (host.IsVisible) ConfirmStartupReady();
