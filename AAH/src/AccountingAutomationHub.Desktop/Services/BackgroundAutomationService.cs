@@ -4209,6 +4209,20 @@ public sealed class BackgroundAutomationService : IDisposable
         }
     }
 
+    private bool IsPrivateBranchOwnershipVerified(
+        AutomationFolderRegistration folder, string path,
+        InternalBranchAccountLink branchLink)
+    {
+        return _automationRepository.GetFolders().Any(f =>
+            f.ClientId == branchLink.ParentClientId &&
+            f.FinancialYear.Equals(folder.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+            ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var probe) &&
+            probe is not null && probe.ClientId == branchLink.ParentClientId &&
+            probe.BranchId.Equals(branchLink.BranchId, StringComparison.OrdinalIgnoreCase) &&
+            Path.GetFullPath(probe.FolderPath).Equals(
+                Path.GetFullPath(folder.FolderPath), StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool IsWithinBranchContainer(string registeredRoot, string filePath)
     {
         try
@@ -4345,15 +4359,7 @@ public sealed class BackgroundAutomationService : IDisposable
         var branchLink = _privateBranchAccounts.FindByChild(folder.ClientId);
         if (branchLink is not null)
         {
-            var parentFolder = _automationRepository.GetFolders().FirstOrDefault(f =>
-                f.ClientId == branchLink.ParentClientId &&
-                f.FinancialYear.Equals(folder.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
-                ClientBranchAutoImportLayout.TryResolve(f.FolderPath, path, out var probe) &&
-                probe is not null && probe.ClientId == branchLink.ParentClientId &&
-                probe.BranchId.Equals(branchLink.BranchId, StringComparison.OrdinalIgnoreCase) &&
-                Path.GetFullPath(probe.FolderPath).Equals(
-                    Path.GetFullPath(folder.FolderPath), StringComparison.OrdinalIgnoreCase));
-            if (parentFolder is null)
+            if (!IsPrivateBranchOwnershipVerified(folder, path, branchLink))
             {
                 AutomationDiagnosticLog.Write("BRANCH-IMPORT-OWNER-MISMATCH",
                     "Private branch source has no exact parent/BranchId folder marker. No import attempted.", path);
@@ -5766,8 +5772,34 @@ public sealed class BackgroundAutomationService : IDisposable
                     IsWithinBranchContainer(currentFolder.FolderPath, item.Path))
                 {
                     AutomationDiagnosticLog.Write("BRANCH-IMPORT-SCOPE-PENDING",
-                        "Queued branch source retained: an isolated branch ClientId has not yet been assigned. No Bank/Purchase/Sales/Journal records written.",
+                        "Queued parent-owned branch file deferred. The registered child watcher must import under its own ID.",
                         item.Path);
+                    continue;
+                }
+                // Revalidate every queued file at processing time, including the
+                // Bank cache-first path. A queued event may predate branch setup
+                // or folder relinking: never post it to its stale ClientId.
+                if (currentFolder is null ||
+                    currentFolder.ClientId != item.ClientId ||
+                    !currentFolder.FinancialYear.Equals(item.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                {
+                    AutomationDiagnosticLog.Write("BRANCH-STALE-QUEUE-OWNER",
+                        "Folder owner changed after observation. Retained source; no stale-client import.", item.Path);
+                    continue;
+                }
+                if (BranchAccountingModePreference.IsEnabled(
+                    _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(currentFolder.ClientId))))
+                {
+                    AutomationDiagnosticLog.Write("BRANCH-STALE-CONSOLIDATED-QUEUE",
+                        "Separate books enabled since this file was queued; parent generic import blocked.", item.Path);
+                    continue;
+                }
+                var queuedBranch = _privateBranchAccounts.FindByChild(currentFolder.ClientId);
+                if (queuedBranch is not null &&
+                    !IsPrivateBranchOwnershipVerified(currentFolder, item.Path, queuedBranch))
+                {
+                    AutomationDiagnosticLog.Write("BRANCH-STALE-QUEUE-OWNERSHIP",
+                        "Branch marker/parent link changed since enqueue. Import blocked.", item.Path);
                     continue;
                 }
                 PipelineRuntimeDiagnostics.ImportWaiting(item.ClientId, item.FinancialYear, item.Path);
