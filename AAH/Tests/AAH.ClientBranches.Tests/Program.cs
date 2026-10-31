@@ -222,7 +222,9 @@ Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComp
     "Branch must use native Dashboard and Consolidated must keep the original dashboard design.");
 var dashboardNative = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
-Check(dashboardNative.Contains("public bool ShowTallyPanel => !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
+Check(dashboardNative.Contains("public bool ShowTallyPanel => true;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
+      dashboardNative.Contains("HasConfirmedTallyLink = !_isPrivateBranchDashboard", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (_isPrivateBranchDashboard) return false;", StringComparison.Ordinal) &&
       dashboardView.Contains("Visibility=\"{Binding ShowTallyPanel", StringComparison.Ordinal) &&
       shellModel.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
@@ -231,6 +233,12 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
+Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _tallyRepository)", StringComparison.Ordinal) &&
+      shellModel.Contains("Existing consolidated Tally company connection", StringComparison.Ordinal) &&
+      shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
+      automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
+      automationSource.Contains("RelocateOwnedGstEvidence(", StringComparison.Ordinal),
+      "Original Tally link or GSTIN ownership migration was disconnected.");
 Console.WriteLine("PASS: native branch dashboards, original consolidated presentation, and flat branch folder migration.");
 Console.WriteLine("PASS: branch tree in the left sidebar, opt-in private books, no unscoped parent accounting writes.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, flat branch roots, owner markers, path lookup, and no unscoped import.");

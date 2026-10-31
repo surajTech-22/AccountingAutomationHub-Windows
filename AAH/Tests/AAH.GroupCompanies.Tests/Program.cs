@@ -235,7 +235,7 @@ Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewMode
         consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
         consolidatedView.Contains("ItemsSource=\"{Binding VerifiedBranches}\"", StringComparison.Ordinal) &&
         consolidatedView.Contains("Text=\"{Binding HistoricalParentSummary}\"", StringComparison.Ordinal) &&
-        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client)", StringComparison.Ordinal),
+        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client, _tallyRepository)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
 Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
@@ -439,6 +439,58 @@ try
             afterLegacy.Branches.Single(x => x.ClientId == second.Id).Sales == 0 &&
             afterLegacy.Warning.Contains("unassigned", StringComparison.OrdinalIgnoreCase),
         "Existing parent historical postings were silently assigned to a branch.");
+
+    // Historical GST migration is per verified GSTIN, independent from
+    // historical Sales/Purchase and from the existing consolidated Tally link.
+    // One existing manual branch return is intentionally conflicting.
+    var gst = new AccountingAutomationHub.Infrastructure.Gst.SqliteGstRepository(privateDbPath);
+    gst.Initialize();
+    using (var db = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + privateDbPath))
+    {
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = $"""
+            INSERT INTO Gstr3bReturns(ClientId,FinancialYear,Gstin,PeriodKey,ImportedUtc)
+            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','2026-04','2026-10-31T00:00:00Z'),
+                   ({persistedParent.Id},'2026-27','{first.Gstin}','2026-05','2026-10-31T00:00:00Z'),
+                   ({first.Id},'2026-27','{first.Gstin}','2026-04','2026-10-31T00:00:00Z'),
+                   ({persistedParent.Id},'2026-27','{second.Gstin}','2026-06','2026-10-31T00:00:00Z');
+            INSERT INTO GstLedgerPeriods(ClientId,FinancialYear,Gstin,LedgerType,PeriodKey,ImportedUtc)
+            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','Electronic Cash Ledger','2026-05','2026-10-31T00:00:00Z');
+            INSERT INTO GstPortalSourceState(ClientId,FinancialYear,Gstin,SourceType,SourcePath)
+            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}','GSTR-3B','C:\GST-OLD\29\returns.pdf');
+            INSERT INTO GstBootstrapState(ClientId,FinancialYear,Gstin)
+            VALUES ({persistedParent.Id},'2026-27','{first.Gstin}');
+            INSERT INTO GstReconciliation(ClientId,FinancialYear,PeriodKey,RefreshedUtc)
+            VALUES ({persistedParent.Id},'2026-27','2026-05','2026-10-31T00:00:00Z');
+            """;
+        command.ExecuteNonQuery();
+    }
+    var gstMigration = new AccountingAutomationHub.Infrastructure.Gst.SqliteGstBranchOwnershipMigration(privateDbPath);
+    var movedKa = gstMigration.Migrate(persistedParent.Id, first.Id, "2026-27", first.Gstin);
+    var movedMh = gstMigration.Migrate(persistedParent.Id, second.Id, "2026-27", second.Gstin);
+    Require(movedKa.ReturnsMoved == 1 && movedKa.LedgerPeriodsMoved == 1 &&
+            movedKa.PortalSourcesMoved == 1 && movedKa.BootstrapStatesMoved == 1 &&
+            movedKa.UnresolvedConflicts == 1 && movedKa.ParentReconciliationRows == 1 &&
+            movedMh.ReturnsMoved == 1,
+        "GSTIN migration should move unique historical returns/ledger/source state and preserve conflicts.");
+    Require(gst.GetReturns(first.Id, "2026-27").Count == 2 &&
+            gst.GetReturns(second.Id, "2026-27").Count == 1 &&
+            gst.GetReturns(persistedParent.Id, "2026-27").Count == 1 &&
+            gstMigration.Migrate(persistedParent.Id, first.Id, "2026-27", first.Gstin).ReturnsMoved == 0,
+        "Historical GST moved into a sibling, lost parent conflict or duplicated on retry.");
+    var originalFolder = @"C:\GST-OLD\29";
+    var targetFolder = @"C:\GST-NEW\29";
+    Require(gstMigration.RebaseMovedEvidencePaths(persistedParent.Id, first.Id,
+            "2026-27", first.Gstin, originalFolder, targetFolder) == 1,
+        "Moved exact branch GST source path did not rebase");
+    try
+    {
+        gstMigration.Migrate(persistedParent.Id, second.Id, "2026-27", first.Gstin);
+        throw new Exception("Wrong GSTIN branch ownership was accepted.");
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("GST ownership transfer blocked")) { }
+
     try { readback.Read(persistedParent.Id, "2025-26"); throw new Exception("Cross-FY consolidation allowed."); }
     catch (InvalidOperationException ex) when (ex.Message.Contains("identity is not valid", StringComparison.Ordinal)) { }
 

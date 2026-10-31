@@ -134,6 +134,21 @@
                     </StackPanel>
                 </Border>
             </Grid>
+            <!-- Display the existing TallyClientLinks authority. The full
+                 original Tally module is available in the left navigation;
+                 no second Link/Import/Export implementation is introduced. -->
+            <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
+                <StackPanel>
+                    <TextBlock Text="Tally" Style="{StaticResource SectionTitleStyle}"/>
+                    <TextBlock Text="{Binding TallyConnectionText}" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                    <TextBlock Text="{Binding TallyCompanyGstin, StringFormat=GSTIN: {0}}"
+                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"
+                               Margin="0,5,0,0"/>
+                    <TextBlock Text="Use Tally Import in the existing left navigation for the original company link, reports and verified voucher controls. Branch screens reference this same link without creating a second one."
+                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,7,0,0"/>
+                </StackPanel>
+            </Border>
             <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
                 <StackPanel>
                     <TextBlock Text="Historical records reconciliation" FontWeight="SemiBold" FontSize="13"/>
