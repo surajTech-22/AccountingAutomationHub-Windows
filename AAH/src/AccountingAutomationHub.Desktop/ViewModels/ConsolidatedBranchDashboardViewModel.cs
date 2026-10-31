@@ -28,6 +28,17 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     }
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
+    public ObservableCollection<BranchLedgerReadbackRow> VerifiedBranches { get; } = [];
+    public string HistoricalParentSummary
+    {
+        get
+        {
+            var parent = Branches.FirstOrDefault(x => x.IsLegacyUnassigned);
+            if (parent is null || !parent.HasAnyRecords)
+                return "No unassigned historical parent transactions were found.";
+            return $"Historical parent (reconciliation only): Sales {parent.Sales ?? 0}, Purchase {parent.Purchases ?? 0}, Banking {parent.Banking ?? 0}, Cash {parent.Cash ?? 0}, Journal {parent.Journals ?? 0}. These may overlap manually imported branch records; never add them to the branch totals without source-level verification.";
+        }
+    }
     public string FinancialYear => _financialYear;
     public int BranchCount => Branches.Count(x => !x.IsLegacyUnassigned);
     public int VerifiedSalesCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Sales ?? 0);
@@ -55,7 +66,13 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         {
             var snapshot = await Task.Run(() => _readback.Read(_parentClientId, _financialYear));
             Branches.Clear();
-            foreach (var row in snapshot.Branches) Branches.Add(row);
+            VerifiedBranches.Clear();
+            foreach (var row in snapshot.Branches)
+            {
+                Branches.Add(row);
+                if (!row.IsLegacyUnassigned) VerifiedBranches.Add(row);
+            }
+            OnPropertyChanged(nameof(HistoricalParentSummary));
             OnPropertyChanged(nameof(BranchCount));
             OnPropertyChanged(nameof(VerifiedSalesCount));
             OnPropertyChanged(nameof(VerifiedPurchaseCount));
