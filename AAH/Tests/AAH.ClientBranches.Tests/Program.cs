@@ -230,6 +230,7 @@ Check(dashboardNative.Contains("public bool ShowTallyPanel => true;", StringComp
       dashboardNative.Contains("CanConfirmTallyLink = pending &&", StringComparison.Ordinal) &&
       dashboardNative.Contains("CanUnlinkTallyLink = link is not null", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (_isConsolidatedTallyScope) return false;", StringComparison.Ordinal) &&
+      dashboardNative.Contains("_isConsolidatedTallyScope || TallyAutoSyncMode.Equals", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (_isConsolidatedTallyScope) return;", StringComparison.Ordinal) &&
       shellModel.Contains("_dashboardViewModel.SetConsolidatedTallyScope(", StringComparison.Ordinal) &&
       !dashboardNative.Contains("GetLinkForClient(branchOwner.ParentClientId)", StringComparison.Ordinal) &&
