@@ -233,15 +233,25 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
-Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _tallyRepository, _dashboardViewModel)", StringComparison.Ordinal) &&
+Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
       shellModel.Contains("Existing consolidated Tally company connection", StringComparison.Ordinal) &&
       shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
       automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
       automationSource.Contains("RelocateOwnedGstEvidence(", StringComparison.Ordinal),
       "Original Tally link or GSTIN ownership migration was disconnected.");
+var dashboardTallyViewCode = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "Views", "DashboardView.xaml.cs"));
+var consolidatedDashboardModel = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+    "AccountingAutomationHub.Desktop", "ViewModels", "ConsolidatedBranchDashboardViewModel.cs"));
 Check(consolidatedView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
       consolidatedView.Contains("ExistingDashboardWorkspace", StringComparison.Ordinal) &&
       dashboardView.Contains("x:Name=\"DashboardTallyPanel\"", StringComparison.Ordinal) &&
+      dashboardView.Contains("Command=\"{Binding ConfirmTallyLinkCommand}\"", StringComparison.Ordinal) &&
+      dashboardView.Contains("Command=\"{Binding ExportSelectedToTallyCommand}\"", StringComparison.Ordinal) &&
+      dashboardTallyViewCode.Contains("if (TallyOnlyMode)", StringComparison.Ordinal) &&
+      consolidatedDashboardModel.Contains("public DashboardViewModel ExistingDashboardWorkspace", StringComparison.Ordinal) &&
+      !consolidatedDashboardModel.Contains("TallyConnectionText", StringComparison.Ordinal) &&
+      !consolidatedView.Contains("ExistingTallyWorkspace", StringComparison.Ordinal) &&
       shellView.Contains("Content=\"{Binding TallyLinkActionLabel}\"", StringComparison.Ordinal) &&
       shellModel.Contains("public string TallyLinkActionLabel", StringComparison.Ordinal) &&
       dashboardNative.Contains("Existing consolidated Tally company", StringComparison.Ordinal),
