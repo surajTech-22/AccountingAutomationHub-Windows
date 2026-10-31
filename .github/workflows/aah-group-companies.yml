@@ -1,0 +1,30 @@
+name: AAH Group Companies Accounting Policy Regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/GroupCompanyAccountingPolicy.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientGroupingCatalog.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientBranchCatalog.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/ClientBranchAutoImportLayout.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Services/BackgroundAutomationService.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/ViewModels/ClientManagementViewModel.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Views/ClientManagementView.xaml'
+      - 'AAH/Tests/AAH.GroupCompanies.Tests/**'
+      - '.github/workflows/aah-group-companies.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  company-policy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify company ownership and transfer policy without writing accounting data
+        run: dotnet run --project AAH/Tests/AAH.GroupCompanies.Tests/AAH.GroupCompanies.Tests.csproj --configuration Release
