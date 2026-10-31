@@ -1149,6 +1149,13 @@ public sealed class MainWindowViewModel :
                     throw new InvalidOperationException("The selected branch no longer belongs to this parent Client.");
                 var privateClient = _privateBranchAccounts.GetOrCreate(
                     parent.Id, selectedBranch.BranchId, selectedBranch.Name, selectedBranch.Gstin);
+                // Reuse the existing new-Client Master-first chart preparation
+                // under the branch's private ClientId; never clone vouchers or
+                // overwrite a branch chart that has already been edited.
+                if (!_masterRepository.HasRecords(privateClient.Id, privateClient.FinancialYear))
+                    _masterRepository.Upsert(privateClient.Id, privateClient.FinancialYear,
+                        MasterSynchronizationService.StandardStructure(
+                            string.IsNullOrWhiteSpace(parent.LegalName) ? parent.ClientName : parent.LegalName));
                 // The existing Purchase/Sales/Banking/Journal repositories are
                 // keyed by ClientId + FY. A private saved ClientId isolates the
                 // branch without duplicating the Client Directory entry.
