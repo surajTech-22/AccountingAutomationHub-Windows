@@ -274,6 +274,26 @@ try
     parentAgain.ClientName = "Parent Edited";
     parentAgain.AdditionalGstins = ["27ABCDE1234F1Z5"];
     mainClients.Save(parentAgain);
+    try
+    {
+        var invalidRemoval = mainClients.GetById(persistedParent.Id)!;
+        invalidRemoval.AdditionalGstins = [];
+        mainClients.Save(invalidRemoval);
+        throw new Exception("Parent detached GSTIN and orphaned private branch evidence.");
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot remove a GSTIN", StringComparison.Ordinal)) { }
+    Require(mainClients.GetById(persistedParent.Id)!.AdditionalGstins!.Contains("27ABCDE1234F1Z5"),
+        "Rejected GSTIN removal still mutated the actual parent registration set.");
+    try
+    {
+        var wrongPrimary = mainClients.GetById(persistedParent.Id)!;
+        wrongPrimary.Gstin = "24ABCDE1234F1Z5";
+        mainClients.Save(wrongPrimary);
+        throw new Exception("Parent changed primary GSTIN while branch books existed.");
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Cannot change primary GSTIN", StringComparison.Ordinal)) { }
+    Require(mainClients.GetById(persistedParent.Id)!.Gstin == "29ABCDE1234F1Z5",
+        "Rejected primary GSTIN change still modified the database.");
     Require(mainClients.GetAll(false).Count == 1,
         "editing a parent must not be blocked by its own hidden branch registrations");
     try { mainClients.Save(first); throw new Exception("Normal client editor changed a branch authority."); }
