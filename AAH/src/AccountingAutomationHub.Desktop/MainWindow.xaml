@@ -233,12 +233,13 @@
                     Background="{DynamicResource SidebarBrush}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="92" />
+                        <RowDefinition Height="150" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="58" />
                         <RowDefinition Height="72" />
                     </Grid.RowDefinitions>
 
+                    <StackPanel Grid.Row="0">
                     <Button Command="{Binding CloseWorkspaceCommand}"
                             Margin="10,10,10,8"
                             Padding="10,8"
@@ -265,6 +266,17 @@
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </Button>
+                    <StackPanel Margin="12,0,12,5"
+                                Visibility="{Binding HasBranchWorkspaces, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="ACCOUNTING SCOPE" Foreground="#94A3B8" FontSize="10"
+                                   FontWeight="SemiBold" Margin="0,0,0,3"/>
+                        <ComboBox ItemsSource="{Binding BranchWorkspaces}"
+                                  SelectedItem="{Binding SelectedBranchWorkspace, Mode=TwoWay}"
+                                  DisplayMemberPath="DisplayName"
+                                  MinHeight="27"
+                                  ToolTip="Consolidated or named branch scope. Unverified branch imports cannot use the parent books."/>
+                    </StackPanel>
+                    </StackPanel>
 
                     <ListBox Grid.Row="1"
                              ItemsSource="{Binding NavigationItems}"
