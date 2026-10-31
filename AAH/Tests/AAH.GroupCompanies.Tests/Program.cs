@@ -334,8 +334,8 @@ try
             Destination = "Purchase", ClientGstin = second.Gstin,
             DocumentNumber = "MH-P001", DocumentDate = new DateTime(2026, 5, 2),
             TaxableValue = 400m, DocumentValue = 472m,
-            Igst = 72m, SourceFile = "MH-source.xlsx",
-            SourcePath = "Branches/Maharashtra/Purchase/MH-source.xlsx"
+            Igst = 72m, Source2AFile = "MH-source.xlsx",
+            Source2APath = "Branches/Maharashtra/Purchase/MH-source.xlsx"
         }],
         Issues = [], Warnings = [],
         Summary = new AccountingAutomationHub.Domain.Purchases.PurchaseImportSummary { PurchaseRows = 1 },
