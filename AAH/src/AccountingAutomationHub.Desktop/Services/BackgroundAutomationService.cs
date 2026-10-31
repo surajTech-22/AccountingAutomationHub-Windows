@@ -31,6 +31,7 @@ using AccountingAutomationHub.Infrastructure.Persistence;
 using AccountingAutomationHub.Infrastructure.Sales;
 using AccountingAutomationHub.Infrastructure.Spreadsheets;
 using AccountingAutomationHub.Infrastructure.Tally;
+using AccountingAutomationHub.Infrastructure.Settings;
 using AccountingAutomationHub.Infrastructure.Tax;
 
 namespace AccountingAutomationHub.Desktop.Services;
@@ -46,6 +47,7 @@ public sealed class BackgroundAutomationService : IDisposable
     private static readonly TimeSpan FolderRelocationDiscoveryInterval = TimeSpan.FromMinutes(2);
 
     private readonly ApplicationPreferenceService _settings;
+    private readonly SqliteApplicationPreferenceRepository _branchPreferenceRepository = new();
     private readonly ClientAutoImportPolicyService _clientAutoImportPolicies = new();
     private readonly SqliteAutomationRepository _automationRepository = new();
     private readonly SqliteClientRepository _clientRepository = new();
@@ -184,6 +186,7 @@ public sealed class BackgroundAutomationService : IDisposable
     public BackgroundAutomationService(ApplicationPreferenceService settings)
     {
         _settings = settings;
+        _branchPreferenceRepository.Initialize();
         _automationRepository.Initialize();
         _clientRepository.Initialize();
         _bankingRepository.Initialize();
@@ -1393,7 +1396,7 @@ public sealed class BackgroundAutomationService : IDisposable
         if (client is null || client.IsArchived) return 0;
         var branches = explicitBranches is null
             ? ClientBranchCatalog.Resolve(client,
-                _settings.Get(ClientBranchCatalog.Key(client.Id)))
+                _branchPreferenceRepository.Get(ClientBranchCatalog.Key(client.Id)))
             : ClientBranchCatalog.Resolve(client,
                 ClientBranchCatalog.Serialize(explicitBranches));
         if (branches.Count == 0) return 0;
