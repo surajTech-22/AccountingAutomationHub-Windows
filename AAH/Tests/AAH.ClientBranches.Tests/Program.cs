@@ -137,6 +137,7 @@ var viewModel = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
 var clientView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "ClientManagementView.xaml"));
 var dashboard = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
 var dashboardView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "DashboardView.xaml"));
+var automationSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "Services", "BackgroundAutomationService.cs"));
 Check(viewModel.Contains("ClientBranchCatalog.Parse(BranchEntriesText)", StringComparison.Ordinal) &&
       viewModel.Contains("ClientBranchCatalog.Key(saved.Id)", StringComparison.Ordinal) &&
       clientView.Contains("Text=\"{Binding BranchEntriesText, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal) &&
@@ -144,4 +145,13 @@ Check(viewModel.Contains("ClientBranchCatalog.Parse(BranchEntriesText)", StringC
       dashboardView.Contains("ItemsSource=\"{Binding ClientBranches}\"", StringComparison.Ordinal) &&
       dashboardView.Contains("Grid.Column=\"0\" Width=\"226\"", StringComparison.Ordinal),
       "Branch model missing editor persistence or dashboard left-side display.");
+Check(automationSource.Contains("EnsureBranchFoldersForClient(saved.Id", StringComparison.Ordinal) == false &&
+      automationSource.Contains("ClientBranchAutoImportLayout.Ensure(", StringComparison.Ordinal) &&
+      automationSource.Contains("IsWithinBranchContainer(folder.FolderPath, path)", StringComparison.Ordinal) &&
+      automationSource.Contains("BRANCH-IMPORT-SCOPE-PENDING", StringComparison.Ordinal) &&
+      automationSource.Contains("BRANCH-CENTRAL-SOURCE-DEFER", StringComparison.Ordinal) &&
+      automationSource.Contains("TryProcessBankSpreadsheetCacheFirstAsync", StringComparison.Ordinal),
+      "Unsafe branch files might be posted through parent generic, bank cache-first or central source import.");
+Check(viewModel.Contains("EnsureBranchFoldersForClient(saved.Id, branches)", StringComparison.Ordinal),
+      "Saving a branch did not trigger immediate auto-import folder layout.");
 Console.WriteLine("PASS: original Client/FY unchanged; state-derived branch names, durable identities, branch module folders, owner markers, path lookup, and no unscoped import.");
