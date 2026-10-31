@@ -1394,6 +1394,11 @@ public sealed class BackgroundAutomationService : IDisposable
     {
         var client = _clientRepository.GetById(clientId);
         if (client is null || client.IsArchived) return 0;
+        // Do not alter the old merged/GST-wise multi-GSTIN import structure:
+        // only explicitly enabled separate branch books get a branch folder tree.
+        if (!BranchAccountingModePreference.IsEnabled(
+            _branchPreferenceRepository.Get(BranchAccountingModePreference.Key(clientId))))
+            return 0;
         var branches = explicitBranches is null
             ? ClientBranchCatalog.Resolve(client,
                 _branchPreferenceRepository.Get(ClientBranchCatalog.Key(client.Id)))
