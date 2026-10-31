@@ -10,5 +10,6 @@
     <ProjectReference Include="../../src/AccountingAutomationHub.Domain/AccountingAutomationHub.Domain.csproj" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ClientBranchCatalog.cs" Link="Production/ClientBranchCatalog.cs" />
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ClientBranchAutoImportLayout.cs" Link="Production/ClientBranchAutoImportLayout.cs" />
+    <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/ConsolidatedDashboardWheelRouting.cs" Link="Production/ConsolidatedDashboardWheelRouting.cs" />
   </ItemGroup>
 </Project>
