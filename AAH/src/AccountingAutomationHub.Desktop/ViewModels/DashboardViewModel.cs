@@ -219,6 +219,27 @@ public sealed class DashboardViewModel :
     private bool _hasPendingTallySelection;
     private bool _hasConfirmedTallyLink;
     private bool _canConfirmTallyLink;
+    private bool _isPrivateBranchDashboard;
+
+    public bool ShowTallyPanel => !_isPrivateBranchDashboard;
+
+    // Real branch Dashboard shares all normal accounting modules, but no
+    // branch has verified authority to post to the parent's Tally company.
+    // Keep Tally export/auto sync disabled until explicit branch readback.
+    public void SetPrivateBranchDashboard(bool isPrivate)
+    {
+        if (_isPrivateBranchDashboard == isPrivate) return;
+        _isPrivateBranchDashboard = isPrivate;
+        OnPropertyChanged(nameof(ShowTallyPanel));
+        if (isPrivate)
+        {
+            Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
+            Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
+            if (_clientContext.CurrentClient is { } current)
+                _tallyCoordinator.SetOutboundAutoSyncEnabled(current, false);
+        }
+        RefreshTallyCommandStates();
+    }
     private bool _canCancelTallySelection;
     private bool _canUnlinkTallyLink;
     private bool _canImportBankRange;
@@ -810,6 +831,7 @@ public sealed class DashboardViewModel :
         {
             var normalized = value.Equals("Full Auto", StringComparison.OrdinalIgnoreCase) ? "Full Auto" :
                 value.Equals("Selected", StringComparison.OrdinalIgnoreCase) ? "Selected" : "Off";
+            if (_isPrivateBranchDashboard) normalized = "Off";
             if (!SetProperty(ref _tallyAutoSyncMode, normalized)) return;
             OnPropertyChanged(nameof(IsTallyAutoSyncOff));
             OnPropertyChanged(nameof(IsTallyAutoSyncEnabled));
@@ -2913,6 +2935,7 @@ public sealed class DashboardViewModel :
 
     private bool CanExportSelectedToTally()
     {
+        if (_isPrivateBranchDashboard) return false;
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             return false;
@@ -2987,6 +3010,7 @@ public sealed class DashboardViewModel :
 
     private async Task ConfirmTallyLinkAsync()
     {
+        if (_isPrivateBranchDashboard) return;
         try
         {
             TallyActionStatus = "Confirming the selected Tally company link…";
@@ -3695,6 +3719,7 @@ public sealed class DashboardViewModel :
 
     private async Task RunTallyAutoSyncAsync()
     {
+        if (_isPrivateBranchDashboard) return;
         if (_disposed || IsTallyAutoSyncOff || Interlocked.CompareExchange(ref _autoTallySyncInFlight, 1, 0) != 0) return;
         var claimedPending = 0;
         var claimedChanged = 0;
@@ -4068,6 +4093,11 @@ public sealed class DashboardViewModel :
 
     private async Task ExportSelectedToTallyAsync()
     {
+        if (_isPrivateBranchDashboard)
+        {
+            TallyExportStatus = "Branch Tally posting requires a verified branch/company mapping.";
+            return;
+        }
         if (!_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
         {
             TallyExportStatus = "Your role does not have permission to export accounting vouchers to Tally.";

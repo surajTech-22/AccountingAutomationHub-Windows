@@ -8,9 +8,10 @@ using System.Text.Json;
 namespace AccountingAutomationHub.Desktop.Services;
 
 /// <summary>
-/// Safe ownership resolution for ordinary branch Auto Import roots. The legacy registered parent folder remains the only linked
-/// directory; nested Branches folders are not themselves registered as a
-/// second Client or pointed to the parent's ledger-importer by mistake.
+/// Safe ownership resolution for ordinary branch Auto Import roots.
+/// Named branches live directly beneath the existing XYZ client folder.
+/// The old XYZ/Branches hierarchy is accepted only for safe migration.
+/// Neither branch gets a duplicate Client Directory entry.
 ///
 /// A folder marker identifies the branch; child ClientId/FY ownership and
 /// source checks still gate every automatic accounting write.
@@ -36,11 +37,13 @@ public static class ClientBranchAutoImportLayout
         if (!Directory.Exists(root)) return [];
         if (new DirectoryInfo(root).Attributes.HasFlag(FileAttributes.ReparsePoint))
             throw new InvalidOperationException("Cannot create branch folders through a linked filesystem junction.");
-        var container = Path.Combine(root, BranchesDirectory);
-        if (Directory.Exists(container) &&
-            new DirectoryInfo(container).Attributes.HasFlag(FileAttributes.ReparsePoint))
-            throw new InvalidOperationException("Branch container cannot be a filesystem junction.");
-        Directory.CreateDirectory(container);
+        var legacyContainer = Path.Combine(root, BranchesDirectory);
+        if (Directory.Exists(legacyContainer) &&
+            new DirectoryInfo(legacyContainer).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("Legacy branch container cannot be a filesystem junction.");
+        // Do not create XYZ/Branches for new clients. Existing branch folders
+        // are safely moved from that legacy container only when the direct
+        // target is unoccupied and an exact saved branch marker matches.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<BranchAutoImportFolder>();
@@ -48,12 +51,23 @@ public static class ClientBranchAutoImportLayout
         {
             if (string.IsNullOrWhiteSpace(branch.BranchId) || !assigned.Add(branch.BranchId))
                 throw new InvalidOperationException("Every branch must have a unique durable identity.");
-            var existing = FindByMarker(container, clientId, branch.BranchId);
-            var segment = existing is null ? SafeSegment(branch.Name) : Path.GetFileName(existing);
-            if (existing is null && !seen.Add(segment))
-                segment = SafeSegment(branch.Name) + "-" + branch.BranchId[..Math.Min(8, branch.BranchId.Length)];
-            var path = existing ?? Path.Combine(container, segment);
-            if (existing is null)
+            var existing = FindByMarker(root, clientId, branch.BranchId);
+            var oldPath = Directory.Exists(legacyContainer)
+                ? FindByMarker(legacyContainer, clientId, branch.BranchId) : null;
+            var segment = existing is not null ? Path.GetFileName(existing)
+                : oldPath is not null ? Path.GetFileName(oldPath) : SafeSegment(branch.Name);
+            if (!seen.Add(segment))
+                throw new InvalidOperationException("Two branch identities resolve to the same folder name.");
+            var path = existing ?? Path.Combine(root, segment);
+            if (existing is null && oldPath is not null)
+            {
+                // No overwrite, merge, delete or cross-volume copy. Preserve
+                // files, marker, history and exact original folder name.
+                if (Directory.Exists(path) || File.Exists(path))
+                    throw new InvalidOperationException("Flat branch destination already exists: " + path);
+                Directory.Move(oldPath, path);
+            }
+            if (existing is null && oldPath is null)
             {
                 // Never claim a user-created folder silently. It might contain
                 // data for another company, and a recursive watcher is live.
@@ -72,8 +86,11 @@ public static class ClientBranchAutoImportLayout
             // v537 created these folders; remove ONLY proven empty directories.
             // User content in any former module folder stays untouched.
             CleanupEmptyLegacyModuleDirectories(path, branch.Gstin);
-            if (!seen.Add(Path.GetFileName(path)) && existing is not null)
-                throw new InvalidOperationException("Two branch identities resolve to the same folder.");
+            // The legacy container may still hold unrelated user data;
+            // only remove it when it is proven completely empty.
+            if (Directory.Exists(legacyContainer) &&
+                !Directory.EnumerateFileSystemEntries(legacyContainer).Any())
+                Directory.Delete(legacyContainer, recursive: false);
             result.Add(new BranchAutoImportFolder(
                 clientId, branch.BranchId, branch.Name, branch.Gstin, path));
         }
@@ -89,28 +106,58 @@ public static class ClientBranchAutoImportLayout
         out BranchAutoImportFolder? match)
     {
         match = null;
-        string root, candidate;
         try
         {
-            root = Path.GetFullPath(Path.Combine(registeredClientFolder, BranchesDirectory))
-                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            candidate = Path.GetFullPath(filePath);
-            if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
-            var remainder = candidate[root.Length..];
-            var first = remainder.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(first)) return false;
-            var directory = Path.Combine(root, first);
-            if (!Directory.Exists(directory) ||
-                new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
-                return false;
-            if (!TryReadMarker(Path.Combine(directory, Marker), out var marker)) return false;
-            match = new BranchAutoImportFolder(
-                marker!.ClientId, marker.BranchId, first, marker.Gstin, directory);
-            return true;
+            var root = Path.GetFullPath(registeredClientFolder);
+            var candidate = Path.GetFullPath(filePath);
+            // Direct branch path: XYZ/Karnataka/source.xlsx
+            if (TryResolveUnder(root, candidate, out match)) return true;
+            // Backward compatibility for v536-v538 source files not yet moved.
+            return TryResolveUnder(Path.Combine(root, BranchesDirectory), candidate, out match);
         }
         catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException)
         { return false; }
+    }
+
+    public static bool IsWithinBranchPath(string registeredClientFolder, string filePath)
+    {
+        try
+        {
+            var root = Path.GetFullPath(registeredClientFolder);
+            var candidate = Path.GetFullPath(filePath);
+            // Fail closed for any historical XYZ/Branches path, including
+            // an unmarked folder: never route it to parent accounting.
+            var legacy = Path.GetFullPath(Path.Combine(root, BranchesDirectory))
+                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (candidate.StartsWith(legacy, StringComparison.OrdinalIgnoreCase)) return true;
+            return TryResolveUnder(root, candidate, out _);
+        }
+        catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
+    private static bool TryResolveUnder(string container, string candidate, out BranchAutoImportFolder? match)
+    {
+        match = null;
+        if (!Directory.Exists(container) ||
+            new DirectoryInfo(container).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            return false;
+        var prefix = Path.GetFullPath(container)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var relative = candidate[prefix.Length..];
+        var segment = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(segment) ||
+            relative.Length <= segment.Length) return false;
+        var directory = Path.Combine(container, segment);
+        if (!Directory.Exists(directory) ||
+            new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            return false;
+        if (!TryReadMarker(Path.Combine(directory, Marker), out var marker)) return false;
+        match = new BranchAutoImportFolder(
+            marker!.ClientId, marker.BranchId, segment, marker.Gstin, directory);
+        return true;
     }
 
     private static void CleanupEmptyLegacyModuleDirectories(string branchFolder, string gstin)

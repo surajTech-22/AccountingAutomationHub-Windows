@@ -235,7 +235,7 @@ Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewMode
         consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
         consolidatedView.Contains("ItemsSource=\"{Binding VerifiedBranches}\"", StringComparison.Ordinal) &&
         consolidatedView.Contains("Text=\"{Binding HistoricalParentSummary}\"", StringComparison.Ordinal) &&
-        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client.Id, client.FinancialYear)", StringComparison.Ordinal),
+        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
 Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
@@ -248,7 +248,8 @@ Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", St
         shellVm.Contains("_privateBranchAccounts.GetOrCreate(", StringComparison.Ordinal) &&
         shellVm.Contains("_clientRepository.SetCurrent(privateClient.Id);", StringComparison.Ordinal) &&
         shellVm.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal) &&
-        shellVm.Contains("if (_isPrivateBranchActive)", StringComparison.Ordinal),
+        shellVm.Contains("available.Add(_dashboardNavigationItem);", StringComparison.Ordinal) &&
+        shellVm.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
     "Consolidated/branch menu did not block the shared parent accounting data page.");
 
 

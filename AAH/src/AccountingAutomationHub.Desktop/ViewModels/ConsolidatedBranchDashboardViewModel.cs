@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Infrastructure.Clients;
+using AccountingAutomationHub.Domain.Clients;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
@@ -19,13 +20,24 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
-    public ConsolidatedBranchDashboardViewModel(long parentClientId, string financialYear)
-        : base("Dashboard", "Consolidated / source-verified branch accounting")
+    public ConsolidatedBranchDashboardViewModel(ClientProfile parent)
+        : base("Dashboard", "Detailed consolidated client workspace overview")
     {
-        _parentClientId = parentClientId;
-        _financialYear = financialYear;
+        if (parent is null) throw new ArgumentNullException(nameof(parent));
+        _parentClientId = parent.Id;
+        _financialYear = parent.FinancialYear;
+        ClientName = parent.ClientName;
+        Pan = parent.Pan ?? string.Empty;
+        PrimaryGstin = parent.Gstin ?? string.Empty;
+        State = parent.State ?? string.Empty;
         _ = RefreshAsync();
     }
+
+    public string ClientName { get; }
+    public string Pan { get; }
+    public string PrimaryGstin { get; }
+    public string State { get; }
+    public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
     public ObservableCollection<BranchLedgerReadbackRow> VerifiedBranches { get; } = [];
@@ -45,6 +57,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public int VerifiedPurchaseCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Purchases ?? 0);
     public int VerifiedBankingCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Banking ?? 0);
     public int VerifiedJournalCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Journals ?? 0);
+    public int VerifiedCashCount => Branches.Where(x => !x.IsLegacyUnassigned).Sum(x => x.Cash ?? 0);
     public bool HasUnassignedHistory => Branches.Any(x => x.IsLegacyUnassigned && x.HasAnyRecords);
     public string ConsolidationNotice => HasUnassignedHistory
         ? "Historical parent records have not been allocated to branches. These figures deliberately exclude that unverified bucket to avoid double counting."
@@ -78,6 +91,8 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
             OnPropertyChanged(nameof(VerifiedPurchaseCount));
             OnPropertyChanged(nameof(VerifiedBankingCount));
             OnPropertyChanged(nameof(VerifiedJournalCount));
+            OnPropertyChanged(nameof(VerifiedCashCount));
+            OnPropertyChanged(nameof(BranchSummary));
             OnPropertyChanged(nameof(HasUnassignedHistory));
             OnPropertyChanged(nameof(ConsolidationNotice));
             Status = $"{BranchCount} verified branch book(s) · FY {_financialYear}";
