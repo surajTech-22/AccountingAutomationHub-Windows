@@ -3151,7 +3151,14 @@ public sealed partial class ClientManagementViewModel :
             var priorAdditional = EditingId > 0
                 ? _repository.GetById(EditingId)?.AdditionalGstins ?? Array.Empty<string>()
                 : Array.Empty<string>();
-            var branches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var parsedBranches = ClientBranchCatalog.Parse(BranchEntriesText);
+            var existingClient = EditingId > 0 ? _repository.GetById(EditingId) : null;
+            var existingBranches = existingClient is null
+                ? Array.Empty<ClientBranchRecord>()
+                : ClientBranchCatalog.Resolve(existingClient,
+                    _preferenceRepository.Get(ClientBranchCatalog.Key(EditingId))).ToArray();
+            var branches = ClientBranchCatalog.Reconcile(
+                EditingId, parsedBranches, existingBranches);
             var enteredAdditional = ClientBranchCatalog.AdditionalGstins(branches, normalizedGstin, normalizedPan);
             AdditionalGstinsText = string.Join(Environment.NewLine, enteredAdditional);
             var newlyAdded = enteredAdditional
@@ -3191,6 +3198,9 @@ public sealed partial class ClientManagementViewModel :
             // Branches are metadata on this Client, not separate Client/FY records.
             // Save after the validated profile; existing GST-wise import remains unchanged.
             _preferenceRepository.Set(ClientBranchCatalog.Key(saved.Id), ClientBranchCatalog.Serialize(branches));
+            // Also set up every branch's module folders immediately on Save,
+            // without waiting for the background watcher to refresh its cache.
+            _automationService?.EnsureBranchFoldersForClient(saved.Id, branches);
 
             // Fix137 R41: every newly-created Client/FY starts with the canonical Tally
             // chart instead of an empty Master Centre. This includes Previous-FY profile
