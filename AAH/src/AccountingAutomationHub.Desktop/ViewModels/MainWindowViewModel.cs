@@ -2351,7 +2351,7 @@ public sealed class MainWindowViewModel :
                 FinancialYear = financialYear
             };
             var savedXml = await Task.Run(() =>
-                _tallyAccountingExportService.GenerateLiveXml(profile, previewCompany, start, end));
+                _tallyAccountingExportService.GenerateLiveXml(profile, previewCompany, start, end, sourceOnlyForConsolidation: true));
             var savedMasters = _masterRepository.Get(profile.Id, financialYear, false);
             // Private branch profiles may inherit the parent State. For GST
             // vouchers, registration state is determined by this branch's
