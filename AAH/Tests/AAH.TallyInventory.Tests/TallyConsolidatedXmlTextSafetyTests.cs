@@ -39,7 +39,7 @@ internal static class TallyConsolidatedXmlTextSafetyTests
         // The reported real-company failure occurs in the LIVE master readback,
         // not necessarily in the already-repaired branch voucher XML. Reuse the
         // repair on that independent path too and keep protected MASTERID strict.
-        var liveMasterXml = "<ENVELOPE><TALLYMESSAGE><LEDGER NAME=\\"Bank\\" ACTION=\\"Create\\">" +
+        var liveMasterXml = "<ENVELOPE><TALLYMESSAGE><LEDGER NAME=\"Bank\" ACTION=\"Create\">" +
             "<NAME>Bank</NAME><PARENT>Bank Accounts</PARENT><MASTERID>42</MASTERID>" +
             "<DESCRIPTION>Account" + '\u0004' + " description</DESCRIPTION>" +
             "</LEDGER></TALLYMESSAGE></ENVELOPE>";
@@ -63,12 +63,12 @@ internal static class TallyConsolidatedXmlTextSafetyTests
         var groupView = File.ReadAllText(Path.Combine(viewsDir, "ConsolidatedTallyImportView.xaml"));
         var dashboardView = File.ReadAllText(Path.Combine(viewsDir, "DashboardView.xaml"));
         Check(groupView.Contains("ConsolidatedImportWorkspace=", StringComparison.Ordinal) &&
-              groupView.Contains("TallyOnlyMode=\\"True\\"", StringComparison.Ordinal) &&
+              groupView.Contains("TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
               !groupView.Contains("Branch master import", StringComparison.Ordinal) &&
               dashboardView.IndexOf("ConsolidatedImportWorkspace, ElementName=DashboardRoot", StringComparison.Ordinal) >
               dashboardView.IndexOf("Tally Export / Auto Sync", StringComparison.Ordinal) &&
-              dashboardView.Contains("Command=\\"{Binding ImportConsolidatedVouchersCommand}\\"", StringComparison.Ordinal) &&
-              dashboardView.Contains("Command=\\"{Binding ExportSelectedToTallyCommand}\\"", StringComparison.Ordinal),
+              dashboardView.Contains("Command=\"{Binding ImportConsolidatedVouchersCommand}\"", StringComparison.Ordinal) &&
+              dashboardView.Contains("Command=\"{Binding ExportSelectedToTallyCommand}\"", StringComparison.Ordinal),
               "Consolidated import displaced the original Tally Export card or altered the normal exporter.");
         Console.WriteLine("PASS: original Tally card reused; consolidated import stays in manual Export location.");
 
