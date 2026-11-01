@@ -1,18 +1,27 @@
 using System;
+using System.Threading.Tasks;
+using AccountingAutomationHub.Desktop.Commands;
+using AccountingAutomationHub.Infrastructure.Tally;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
 /// <summary>
-/// Dedicated Consolidated Tally Import navigation surface. Reuses the original
-/// Dashboard's Tally link/export/settings presenter and its coordinator without
-/// creating a second Tally session, sync loop, or XML exporter.
-/// The guarded consolidated voucher route remains unavailable until real
-/// branch master-first/voucher readback is proved.
+/// Dedicated consolidated import surface. The embedded Dashboard retains the
+/// SAME original Tally link/settings panel. Only the branch master-first
+/// action is added here; unverified voucher consolidation is never posted.
 /// </summary>
 public sealed class ConsolidatedTallyImportViewModel : PageViewModel
 {
-    public ConsolidatedTallyImportViewModel(long parentClientId, string financialYear,
-        DashboardViewModel existingDashboardWorkspace)
+    private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
+    private bool _separateVoucherTypes;
+    private bool _separateCashLedgers;
+    private string _masterImportStatus =
+        "Prepare branch groups in the linked consolidated Tally company. " +
+        "Separate voucher types and cash ledgers are optional. No vouchers will be posted.";
+    public ConsolidatedTallyImportViewModel(
+        long parentClientId, string financialYear,
+        DashboardViewModel existingDashboardWorkspace,
+        Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
         if (parentClientId <= 0 || string.IsNullOrWhiteSpace(financialYear))
@@ -21,9 +30,44 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         FinancialYear = financialYear;
         ExistingDashboardWorkspace = existingDashboardWorkspace
             ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
+        _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
+        ImportBranchMastersCommand = new AsyncRelayCommand(ImportMastersAsync);
     }
 
     public long ParentClientId { get; }
     public string FinancialYear { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
+    public AsyncRelayCommand ImportBranchMastersCommand { get; }
+    public bool SeparateVoucherTypes
+    {
+        get => _separateVoucherTypes;
+        set => SetProperty(ref _separateVoucherTypes, value);
+    }
+    public bool SeparateCashLedgers
+    {
+        get => _separateCashLedgers;
+        set => SetProperty(ref _separateCashLedgers, value);
+    }
+    public string MasterImportStatus
+    {
+        get => _masterImportStatus;
+        private set => SetProperty(ref _masterImportStatus, value);
+    }
+
+    private async Task ImportMastersAsync()
+    {
+        MasterImportStatus = "Verifying the existing Tally link and live destination masters...";
+        try
+        {
+            var result = await _importMasters(SeparateVoucherTypes, SeparateCashLedgers);
+            MasterImportStatus =
+                $"{result.RequiredGroups} compulsory groups verified; " +
+                $"{result.CreatedGroups} groups, {result.CreatedCashLedgers} cash ledgers, " +
+                $"{result.CreatedVoucherTypes} voucher types created. " + result.Status;
+        }
+        catch (Exception ex)
+        {
+            MasterImportStatus = "Master import stopped. Verify before retrying: " + ex.Message;
+        }
+    }
 }
