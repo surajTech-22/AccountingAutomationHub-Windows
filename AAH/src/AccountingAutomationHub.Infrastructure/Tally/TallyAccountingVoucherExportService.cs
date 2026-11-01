@@ -909,7 +909,8 @@ public sealed class TallyAccountingVoucherExportService
         ClientProfile client,
         TallyCompanyInfo company,
         DateTime fromDate,
-        DateTime toDate)
+        DateTime toDate,
+        bool sourceOnlyForConsolidation = false)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(company);
@@ -942,11 +943,18 @@ public sealed class TallyAccountingVoucherExportService
         var prepared = new List<PreparedVoucher>();
         var settings = _journalRepository.GetSettings(client.Id, client.FinancialYear);
 
-        AddPurchaseVouchers(client, company, ranges, settings, prepared, result);
-        AddSalesVouchers(client, company, ranges, prepared, result);
-        AddCashEntryVouchers(client, company, ranges, ledgerParents, prepared, result);
-        AddManualJournals(client, company, ranges, prepared, result);
-        AddAutomaticGstJournals(client, company, ranges, prepared, result);
+        // Source-only consolidation NEVER stages Tally CREATE/ALTER bindings.
+        // Existing dashboard live previews keep their original behavior.
+        AddPurchaseVouchers(client, company, ranges, settings, prepared, result,
+            skipTallyDuplicateChecks: sourceOnlyForConsolidation);
+        AddSalesVouchers(client, company, ranges, prepared, result,
+            skipTallyDuplicateChecks: sourceOnlyForConsolidation);
+        AddCashEntryVouchers(client, company, ranges, ledgerParents, prepared, result,
+            skipTallyDuplicateChecks: sourceOnlyForConsolidation);
+        AddManualJournals(client, company, ranges, prepared, result,
+            skipTallyDuplicateChecks: sourceOnlyForConsolidation);
+        AddAutomaticGstJournals(client, company, ranges, prepared, result,
+            skipTallyDuplicateChecks: sourceOnlyForConsolidation);
         result.Ready = prepared.Count;
 
         var stockItems = _stockMasterRepository.GetStockItems(client.Id, client.FinancialYear);
