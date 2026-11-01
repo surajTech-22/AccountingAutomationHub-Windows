@@ -2421,7 +2421,10 @@ public sealed class MainWindowViewModel :
                 throw new InvalidOperationException(
                     "Expected one verified prepared Tally XML file for branch '" + branch.Name +
                     "'; found " + existing.Length + ". Open the branch and complete its normal XML preparation first.");
-            var xml = File.ReadAllText(existing[0]);
+            // Legacy OCR / imported narration may contain forbidden XML C0
+            // controls. Repair only presentation text; protected accounting
+            // amounts, identities and XML attributes must fail closed.
+            var xml = TallyConsolidatedXmlTextSafety.Repair(File.ReadAllText(existing[0])).Xml;
             // The original branch's prepared accounting is owned by its AAH
             // private ClientId/FY, not by a separate Tally company. A source
             // Tally link is OPTIONAL. Only the consolidated destination must

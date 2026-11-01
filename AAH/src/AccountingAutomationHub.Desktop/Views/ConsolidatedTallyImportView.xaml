@@ -11,7 +11,7 @@
         </Grid.RowDefinitions>
         <StackPanel Margin="0,0,0,8">
             <TextBlock Text="Consolidated · Tally Import" FontSize="20" FontWeight="SemiBold"/>
-            <TextBlock Text="Uses the existing Dashboard Tally Link and Export settings. The separate branch-master stage below never imports unverified consolidated vouchers."
+            <TextBlock Text="Uses the original Dashboard Tally Link. Prepare consolidated XML from branch vouchers above. Normal client Export Selected is intentionally unavailable in this workspace."
                        Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
                        FontSize="11" Margin="0,5,0,0"/>
         </StackPanel>

@@ -874,7 +874,31 @@
                                 </Border>
 
                                 <WrapPanel Margin="0,13,0,0">
-                                    <Button Content="Export Selected to Tally" Command="{Binding ExportSelectedToTallyCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
+                                    <Button Content="Export Selected to Tally" Command="{Binding ExportSelectedToTallyCommand}" Margin="0,0,8,0">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsConsolidatedTallyScope}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                    <TextBlock Text="Consolidated vouchers: use Generate consolidated XML above. Normal client Export Selected cannot safely import combined branch vouchers."
+                                               Width="590" TextWrapping="Wrap" FontSize="11"
+                                               Foreground="{DynamicResource TextSecondaryBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsConsolidatedTallyScope}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                     <Button Content="Open Last Export Diagnostics" Command="{Binding OpenTallyDiagnosticFolderCommand}" Style="{StaticResource DashboardSecondaryButtonStyle}" Visibility="{Binding HasTallyDiagnosticReport, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 </WrapPanel>
                                 <TextBlock Text="{Binding TallyExportStatus}" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding TallyExportStatus}" FontSize="10" Margin="0,8,0,0"/>
