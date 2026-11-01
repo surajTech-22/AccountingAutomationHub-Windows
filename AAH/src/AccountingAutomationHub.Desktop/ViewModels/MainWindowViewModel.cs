@@ -2532,7 +2532,8 @@ public sealed class MainWindowViewModel :
                 FinancialYear = financialYear
             };
             var snapshot = _branchXmlPreparationService.GenerateLiveXml(
-                branchClient, sourceCompany, from, to);
+                branchClient, sourceCompany, from, to,
+                offlineConsolidatedBranchSource: true);
             if (snapshot.Ready == 0)
                 throw new InvalidOperationException(
                     "Branch '" + branchName + "' has no original, ready voucher entries in its saved FY books. " +
