@@ -2409,9 +2409,11 @@ public sealed class MainWindowViewModel :
             "This is NOT an authorized live import package. DO NOT import these files into production Tally." + Environment.NewLine +
             "The final workflow must import masters first, read back MASTERIDs, check source-specific destination duplicate/ALTER authority," + Environment.NewLine +
             "validate installed-version GST registration and inventory mappings, reconcile bank transfers and read back every accepted voucher." + Environment.NewLine +
+            "Only the original accounting voucher-preview path (Sales, Purchase, Cash and saved Journal) is included." + Environment.NewLine +
+            "Standalone Bank Statement reconciliation, stock/inventory master rebinding and live Tally voucher import are not implemented by this preview." + Environment.NewLine +
             "No GST journal was regenerated. Existing branch accounting records were only read." + Environment.NewLine,
             new System.Text.UTF8Encoding(false));
-        return $"Prepared {prepared.VoucherCount:N0} source-owned vouchers from {sourceIdentities.Count:N0} branches in {folder}. Preview only; consolidated live posting stays disabled.";
+        return $"Prepared {prepared.VoucherCount:N0} source-owned accounting vouchers from {sourceIdentities.Count:N0} branches in {folder}. Preview only: bank-transfer pairing, stock masters and consolidated live posting are not enabled.";
     }
 
     private void RebuildWorkspaceNavigation(
