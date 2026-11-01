@@ -11,7 +11,7 @@
         </Grid.RowDefinitions>
         <StackPanel Margin="0,0,0,8">
             <TextBlock Text="Consolidated · Tally Import" FontSize="20" FontWeight="SemiBold"/>
-            <TextBlock Text="Uses the original Dashboard Tally Link. Prepare consolidated XML from branch vouchers above. Normal client Export Selected is intentionally unavailable in this workspace."
+            <TextBlock Text="Uses the original Dashboard Tally Link. Consolidated Export uses the branch-prepared XML and verifies live master and voucher readback. The normal parent-client voucher exporter remains unavailable."
                        Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
                        FontSize="11" Margin="0,5,0,0"/>
         </StackPanel>
@@ -38,6 +38,11 @@
                         Command="{Binding PrepareConsolidatedXmlCommand}"
                         HorizontalAlignment="Left" Padding="12,7" Margin="0,12,0,0"/>
                 <TextBlock Text="{Binding PreparedXmlStatus}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+                <Button Content="Export verified consolidated vouchers to Tally"
+                        Command="{Binding ImportConsolidatedVouchersCommand}"
+                        HorizontalAlignment="Left" Padding="12,7" Margin="0,12,0,0"/>
+                <TextBlock Text="{Binding VoucherImportStatus}" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
             </StackPanel>
         </Border>
