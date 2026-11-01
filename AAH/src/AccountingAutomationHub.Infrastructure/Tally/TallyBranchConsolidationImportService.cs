@@ -13,6 +13,28 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 public sealed class TallyBranchConsolidationImportService(TallyHttpService tally)
 {
+    /// <summary>
+    /// The saved Client/FY Tally Link is authoritative for the selected
+    /// accounting period. Tally itself may return no FinancialYear metadata
+    /// for an otherwise uniquely open linked company. Reject an explicit
+    /// contradictory year, not a missing optional metadata field.
+    /// </summary>
+    public static string RequireConfirmedDestination(TallyClientLink link, TallyCompanyInfo destination)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (link.ClientId <= 0 ||
+            string.IsNullOrWhiteSpace(link.FinancialYear) ||
+            string.IsNullOrWhiteSpace(link.CompanyKey) ||
+            string.IsNullOrWhiteSpace(destination.CompanyKey) ||
+            !link.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+            !link.CompanyName.Equals(destination.Name, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(destination.FinancialYear) &&
+             !link.FinancialYear.Equals(destination.FinancialYear, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Confirm the exact linked consolidated Client/FY company; name, company key or reported FY differs.");
+        return link.FinancialYear;
+    }
+
     public async Task<TallyBranchMasterImportResult> ImportMastersAsync(
         TallyClientLink confirmedLink,
         TallyCompanyInfo destination,
@@ -24,13 +46,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         ArgumentNullException.ThrowIfNull(confirmedLink);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(branches);
-        if (confirmedLink.ClientId <= 0 ||
-            !confirmedLink.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-            !confirmedLink.CompanyName.Equals(destination.Name, StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(destination.CompanyKey) ||
-            string.IsNullOrWhiteSpace(destination.FinancialYear) ||
-            !confirmedLink.FinancialYear.Equals(destination.FinancialYear, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Confirm the exact writable consolidated Client/FY Tally link before master import.");
+        var financialYear = RequireConfirmedDestination(confirmedLink, destination);
 
         // Check Tally itself, not a remembered dropdown item or branch company.
         var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
@@ -47,7 +63,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase))) // exclude already-generated branch types only
             .ToArray();
         var plan = TallyBranchConsolidationMasterPlanner.Build(
-            destination.Name, destination.CompanyKey, destination.FinancialYear,
+            destination.Name, destination.CompanyKey, financialYear,
             branches, before, true, separateVoucherTypes, separateCashLedgers,
             separateVoucherTypes ? allVoucherTypes : null);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
@@ -121,11 +137,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
     {
         ArgumentNullException.ThrowIfNull(confirmedLink);
         ArgumentNullException.ThrowIfNull(destination);
-        if (confirmedLink.ClientId <= 0 ||
-            !confirmedLink.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-            !confirmedLink.CompanyName.Equals(destination.Name, StringComparison.OrdinalIgnoreCase) ||
-            !confirmedLink.FinancialYear.Equals(destination.FinancialYear, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Confirmed consolidated Tally link does not match selected company/FY.");
+        var financialYear = RequireConfirmedDestination(confirmedLink, destination);
         var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
         if (live.Count(x => x.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
                             x.Name.Equals(destination.Name, StringComparison.OrdinalIgnoreCase)) != 1)
@@ -137,7 +149,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         var plan = TallyBranchConsolidationMasterPlanner.Build(
-            destination.Name, destination.CompanyKey, destination.FinancialYear,
+            destination.Name, destination.CompanyKey, financialYear,
             branches, fresh, true, separateVoucherTypes, separateCashLedgers,
             separateVoucherTypes ? baseTypes : null);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);

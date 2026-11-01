@@ -1,4 +1,5 @@
 using AccountingAutomationHub.Infrastructure.Tally;
+using AccountingAutomationHub.Domain.Tally;
 
 internal static class TallyBranchMasterImportContractTests
 {
@@ -16,6 +17,35 @@ internal static class TallyBranchMasterImportContractTests
 
     public static void Run()
     {
+        // A linked Tally company often reports FY as blank (shown as — in
+        // Dashboard). Its saved Client/FY link still supplies the accounting
+        // period, but a contradictory reported FY must never be ignored.
+        var link = new TallyClientLink
+        {
+            ClientId = 123,
+            CompanyKey = "KEY-ACME",
+            CompanyName = "Acme Consolidated",
+            FinancialYear = "2025-26"
+        };
+        var destination = new TallyCompanyInfo
+        {
+            CompanyKey = "KEY-ACME",
+            Name = "Acme Consolidated",
+            FinancialYear = "",
+            BooksFrom = "01-04-2025"
+        };
+        Check(TallyBranchConsolidationImportService.RequireConfirmedDestination(link, destination) == "2025-26",
+            "Missing live FY metadata prevented already-linked Tally Client/FY import.");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(link,
+            new TallyCompanyInfo { CompanyKey = "WRONG", Name = destination.Name }),
+            "different Tally company key was accepted");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(link,
+            new TallyCompanyInfo { CompanyKey = destination.CompanyKey, Name = destination.Name, FinancialYear = "2024-25" }),
+            "contradictory Tally FY was accepted");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            new TallyClientLink { ClientId = link.ClientId, CompanyKey = link.CompanyKey, CompanyName = link.CompanyName },
+            destination), "blank authoritative Client/FY accepted");
+
         // Tally can repeat masters in multiple exported Collection snapshots.
         // Repeated identical identities must not trigger an overwrite.
         const string xml = """
