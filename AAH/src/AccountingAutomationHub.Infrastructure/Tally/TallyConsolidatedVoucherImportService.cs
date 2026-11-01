@@ -285,6 +285,13 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
             throw new InvalidOperationException("Master-first Tally readback missing " +
                 source.Name.LocalName + " '" + name + "'.");
         RequireCompatible(live, source);
+        if (source.Name.LocalName is "LEDGER" or "GROUP" or "VOUCHERTYPE" or "STOCKITEM")
+        {
+            var masterId = Value(live, "MASTERID");
+            if (masterId.Length == 0)
+                throw new InvalidOperationException("Live Tally did not return an authoritative MASTERID for " +
+                    source.Name.LocalName + " '" + name + "'. No voucher posting allowed.");
+        }
     }
     private sealed record ExpectedVoucher(
         DateTime Date, string Type, string Number,
