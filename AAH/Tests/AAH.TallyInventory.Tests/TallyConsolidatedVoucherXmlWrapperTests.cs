@@ -39,7 +39,14 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
         TallyBranchConsolidationMasterPlanner.Build(
             "Group Writable Company", "DESTINATION-ID", Fy, [Ka, Tn],
             Array.Empty<MasterRecord>(), true, types, false,
-            types ? ["Sales", "Purchase", "Journal", "Contra", "Payment", "Receipt"] : null);
+            types ? ["Sales", "Purchase", "Journal", "Contra", "Payment", "Receipt"] : null) with
+        {
+            VerifiedTaxUnits =
+            [
+                new("Karnataka GST", "29ABCDE1234F1Z5", "Karnataka", "MID-KA"),
+                new("Tamil Nadu GST", "33ABCDE1234F1Z7", "Tamil Nadu", "MID-TN")
+            ]
+        };
 
     private static TallyConsolidatedBranchXmlInput Input(
         TallyBranchMasterIdentity branch, string voucher, string unit,
@@ -105,6 +112,51 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
         Check(XDocument.Parse(optional.VouchersXml).Descendants("VOUCHERTYPENAME")
             .Select(x => x.Value).SequenceEqual(["Sales - Karnataka", "Sales - Tamil Nadu"]),
             "optional all-type voucher configuration must apply to each branch");
+        var renamedDestinationTaxUnit = groups with
+        {
+            VerifiedTaxUnits =
+            [
+                new("KA Consolidated Registration", Ka.Gstin, "Karnataka", "MID-KA"),
+                new("TN Consolidated Registration", Tn.Gstin, "Tamil Nadu", "MID-TN")
+            ]
+        };
+        var renamed = TallyConsolidatedVoucherXmlWrapper.Prepare(renamedDestinationTaxUnit,
+            [first, second], [], true);
+        Check(XDocument.Parse(renamed.VouchersXml).Descendants("TAXUNITNAME")
+                  .Select(x => x.Value)
+                  .SequenceEqual(["KA Consolidated Registration", "TN Consolidated Registration"]),
+            "Target Tally Tax Unit must be chosen by exact GSTIN/MASTERID, not identical source display name.");
+        Reject(() => TallyConsolidatedVoucherXmlWrapper.Prepare(groups with
+        { VerifiedTaxUnits = [new("KA", Ka.Gstin, "Karnataka", "MID-KA")] },
+            [first, second], [], true), "missing destination Tax Unit GSTIN");
+        Reject(() => TallyConsolidatedVoucherXmlWrapper.Prepare(groups with
+        { VerifiedTaxUnits = [new("KA", Ka.Gstin, "Karnataka", ""),
+                               new("TN", Tn.Gstin, "Tamil Nadu", "MID-TN")] },
+            [first, second], [], true), "destination Tax Unit missing MASTERID");
+        Reject(() => TallyConsolidatedVoucherXmlWrapper.Prepare(groups with
+        { VerifiedTaxUnits = [new("KA1", Ka.Gstin, "Karnataka", "MID1"),
+                               new("KA2", Ka.Gstin, "Karnataka", "MID2"),
+                               new("TN", Tn.Gstin, "Tamil Nadu", "MID3")] },
+            [first, second], [], true), "duplicate destination Tax Unit GSTIN");
+        var nativeXml = """
+            <AAHMASTEREXPORT>
+              <TAXUNIT NAME="KA Registered">
+                <GSTREGNUMBER>29ABCDE1234F1Z5</GSTREGNUMBER>
+                <STATENAME>Karnataka</STATENAME>
+                <MASTERID>4001</MASTERID>
+              </TAXUNIT>
+              <TAXUNIT NAME="TN Registered">
+                <GSTREGNUMBER>33ABCDE1234F1Z7</GSTREGNUMBER>
+                <STATENAME>Tamil Nadu</STATENAME>
+                <MASTERID>4002</MASTERID>
+              </TAXUNIT>
+            </AAHMASTEREXPORT>
+            """;
+        var parsedUnits = TallyConsolidatedTaxUnitAuthorityReader.Parse(nativeXml);
+        Check(parsedUnits.Count == 2 && parsedUnits[0].Gstin == Ka.Gstin &&
+              parsedUnits[1].MasterId == "4002",
+            "Native Tally Tax Unit GSTRegNumber/MASTERID parsing failed.");
+        Console.WriteLine("PASS: live destination GST Tax Units resolved by exact registration GSTIN and MASTERID.");
         Console.WriteLine("PASS: optional branch-specific voucher types preserve original type hierarchy.");
 
         Reject(() => TallyConsolidatedVoucherXmlWrapper.Prepare(groups,
