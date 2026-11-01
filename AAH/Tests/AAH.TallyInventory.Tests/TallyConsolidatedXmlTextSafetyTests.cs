@@ -24,6 +24,30 @@ internal static class TallyConsolidatedXmlTextSafetyTests
               doc.Descendants("AMOUNT").Single().Value == "-100.25" &&
               doc.Descendants("NARRATION").Single().Value == "NEFT paid",
               "0x04 narration character repair changed accounting or failed.");
+        // Raw control bytes and XML numeric references are both seen in
+        // actual branch/Tally XML. The latter bypassed VerifyXmlChars because
+        // it is decoded only when XDocument parses the markup.
+        foreach (var reference in new[] { "&#4;", "&#x04;", "&#X0004;", "&#0004;" })
+        {
+            var raw = xml.Replace("NEFT" + '\u0004' + " paid", "NEFT" + reference + " paid");
+            var fixedXml = TallyConsolidatedXmlTextSafety.ParseDocument(
+                raw, "branch test with " + reference);
+            Check(fixedXml.Descendants("NARRATION").Single().Value == "NEFT paid",
+                "Invalid XML 0x04 numeric reference was not repaired: " + reference);
+        }
+        Reject(() => TallyConsolidatedXmlTextSafety.ParseDocument(
+            xml.Replace("NEFT" + '\u0004' + " paid", "NEFT&#xD800; paid"),
+            "invalid non-C0 Unicode"), "invalid high-surrogate reference was accepted");
+        Reject(() => TallyConsolidatedXmlTextSafety.Repair(xml.Replace(
+            "<AMOUNT>-100.25</AMOUNT>", "<AMOUNT>-100&#x04;.25</AMOUNT>")),
+            "numeric reference changed the DR/CR amount");
+        Reject(() => TallyConsolidatedXmlTextSafety.Repair(xml.Replace(
+            "Karnataka Bank", "Karnataka&#4; Bank")),
+            "numeric reference changed a ledger name");
+        Reject(() => TallyConsolidatedXmlTextSafety.Repair(xml.Replace(
+            "<VOUCHER>", "<VOUCHER ATTR=\"bad&#x04;name\">")),
+            "numeric reference changed an attribute");
+
         var again = TallyConsolidatedXmlTextSafety.Repair(repaired.Xml);
         Check(again.RemovedControlCharacters == 0 && again.Xml == repaired.Xml,
             "Valid source XML was modified.");
@@ -44,6 +68,10 @@ internal static class TallyConsolidatedXmlTextSafetyTests
             "<DESCRIPTION>Account" + '\u0004' + " description</DESCRIPTION>" +
             "</LEDGER></TALLYMESSAGE></ENVELOPE>";
         var liveMasters = TallyBranchConsolidationImportService.ReadLiveMasters(liveMasterXml);
+        var referenceMasters = TallyBranchConsolidationImportService.ReadLiveMasters(
+            liveMasterXml.Replace("Account" + '\u0004' + " description", "Account&#x04; description"));
+        Check(referenceMasters.Count == 1 && referenceMasters[0].TallyMasterId == "42",
+            "numeric 0x04 reference blocked live master description parsing.");
         Check(liveMasters.Count == 1 && liveMasters[0].Name == "Bank" &&
               liveMasters[0].Parent == "Bank Accounts" && liveMasters[0].TallyMasterId == "42",
               "live Tally master readback lost authoritative master identity or could not repair description.");

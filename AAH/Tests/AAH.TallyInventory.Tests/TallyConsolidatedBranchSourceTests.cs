@@ -38,6 +38,15 @@ internal static class TallyConsolidatedBranchSourceTests
         var name = TallyConsolidatedBranchSourcePolicy.Validate(
             PreparedXml, SourceStatus, "CL-KA", "2025-26", Destination, null);
         Check(name == "Working Company", "Unlinked branch must still permit owned prepared XML.");
+        Check(TallyConsolidatedBranchSourcePolicy.Validate(
+            PreparedXml.Replace("<DATE>20250501</DATE>",
+                "<NARRATION>Payment&#x04; memo</NARRATION><DATE>20250501</DATE>"),
+            SourceStatus, "CL-KA", "2025-26", Destination, null) == "Working Company",
+            "Source-branch validator failed to repair 0x04 in free-text narration.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            PreparedXml.Replace("<DATE>20250501</DATE>", "<DATE>2025&#x04;0501</DATE>"),
+            SourceStatus, "CL-KA", "2025-26", Destination, null),
+            "Source-branch validator altered protected voucher date.");
 
         Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
             PreparedXml, "Client: CL-GJ | FY 2025-26", "CL-KA", "2025-26", Destination, null),

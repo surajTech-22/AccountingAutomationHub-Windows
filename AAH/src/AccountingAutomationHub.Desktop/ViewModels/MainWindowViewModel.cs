@@ -2467,8 +2467,10 @@ public sealed class MainWindowViewModel :
         var mastersPath = Path.Combine(destination, "AAH_CONSOLIDATED_MASTERS.xml");
         var vouchersPath = Path.Combine(destination, "AAH_CONSOLIDATED_VOUCHERS.xml");
         // Both XML documents are built and validated in memory before anything is written.
-        System.Xml.Linq.XDocument.Parse(result.MastersXml);
-        System.Xml.Linq.XDocument.Parse(result.VouchersXml);
+        TallyConsolidatedXmlTextSafety.ParseDocument(
+            result.MastersXml, "generated consolidated master XML preview");
+        TallyConsolidatedXmlTextSafety.ParseDocument(
+            result.VouchersXml, "generated consolidated voucher XML preview");
         File.WriteAllText(mastersPath, result.MastersXml, System.Text.Encoding.UTF8);
         File.WriteAllText(vouchersPath, result.VouchersXml, System.Text.Encoding.UTF8);
         return result with

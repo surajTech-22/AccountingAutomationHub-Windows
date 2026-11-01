@@ -202,8 +202,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             throw new InvalidOperationException("No Tally master XML was returned.");
         // Fresh Tally master exports can contain legacy 0x04 bytes in free-text
         // descriptions. Repair only text, never protected names, IDs or attributes.
-        var safe = TallyConsolidatedXmlTextSafety.Repair(xml);
-        var doc = XDocument.Parse(safe.Xml, LoadOptions.None);
+        var doc = TallyConsolidatedXmlTextSafety.ParseDocument(xml, "live Tally master readback");
         var masters = new List<MasterRecord>();
         foreach (var element in doc.Descendants().Where(x =>
                      x.Name.LocalName is "GROUP" or "LEDGER" or "VOUCHERTYPE"))
