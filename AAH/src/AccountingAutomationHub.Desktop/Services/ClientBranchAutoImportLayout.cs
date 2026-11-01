@@ -79,6 +79,11 @@ public static class ClientBranchAutoImportLayout
             }
             if (new DirectoryInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))
                 throw new InvalidOperationException("Branch folder is a filesystem junction: " + path);
+            // The durable branch-ownership JSON is an AAH implementation detail,
+            // not a user-facing import file. Hide both new and existing markers
+            // without deleting their identity, rewriting their content, or
+            // invalidating the safe root-to-branch routing contract.
+            ConcealMarker(Path.Combine(path, Marker));
             // A named branch is another NORMAL linked Auto Import root:
             // drop Sales, Purchase, Bank and other supported files directly
             // here; the existing classifier decides their module. Never
@@ -206,6 +211,27 @@ public static class ClientBranchAutoImportLayout
                 return directory; // Rename does not move already imported source files.
         }
         return null;
+    }
+
+    private static void ConcealMarker(string path)
+    {
+        // A leading dot is not hidden by Windows Explorer. Hidden + System
+        // makes the internal ownership marker invisible in the normal folder
+        // view while retaining exact durable IDs for Auto Import and migration.
+        // On Unix the dot-prefixed name is already hidden by file managers.
+        if (!OperatingSystem.IsWindows() || !File.Exists(path)) return;
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            var protectedAttributes = attributes | FileAttributes.Hidden | FileAttributes.System;
+            if (attributes != protectedAttributes)
+                File.SetAttributes(path, protectedAttributes);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Never break accounting import because the folder denies a cosmetic
+            // attribute update. Keep the marker and original owner unchanged.
+        }
     }
 
     private static bool TryReadMarker(string path, out BranchFolderMarker? marker)
