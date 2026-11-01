@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/SingleInstanceOwnership.cs" Link="SingleInstanceOwnership.cs" />
+    <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/AppExitPolicy.cs" Link="AppExitPolicy.cs" />
     <ProjectReference Include="../../src/AccountingAutomationHub.Infrastructure/AccountingAutomationHub.Infrastructure.csproj" />
     <ProjectReference Include="../../src/AccountingAutomationHub.Application/AccountingAutomationHub.Application.csproj" />
   </ItemGroup>
