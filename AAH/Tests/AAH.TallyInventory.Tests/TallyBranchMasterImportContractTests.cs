@@ -1,5 +1,6 @@
 using AccountingAutomationHub.Infrastructure.Tally;
 using AccountingAutomationHub.Domain.Tally;
+using AccountingAutomationHub.Domain.Masters;
 
 internal static class TallyBranchMasterImportContractTests
 {
@@ -95,6 +96,55 @@ internal static class TallyBranchMasterImportContractTests
         Reject(() => TallyBranchConsolidationImportService.RequireOneCreate(
             TallyHttpService.ParseImportResponse("<RESPONSE>Unknown Request</RESPONSE>"),
             "Karnataka Banks"), "protocol rejection");
+        // Real 01-Nov Gujarat screenshot: no branch Tally company exists, so
+        // offline XML was incorrectly blocked trying to CREATE Current Assets.
+        // Source-only previews can use EXACT AAH standard Tally groups. They
+        // must never create built-ins or treat foreign/imported/custom groups
+        // as live. The linked consolidated target still verifies its own masters.
+        Check(TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(
+            new MasterRecord { Type = "Group", Name = "Current Assets",
+                Parent = "Primary", Source = "Standard hierarchy" }),
+            "Offline Gujarat source could not recognize built-in Current Assets.");
+        Check(TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(
+            new MasterRecord { Type = "Group", Name = "Sundry Debtors",
+                Parent = "Current Assets", Source = "Standard hierarchy" }),
+            "Offline source could not recognize nested predefined Tally groups.");
+        Check(!TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(
+            new MasterRecord { Type = "Group", Name = "Current Assets",
+                Parent = "Loans (Liability)", Source = "Standard hierarchy" }),
+            "Changed built-in group parent passed an offline preview.");
+        Check(!TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(
+            new MasterRecord { Type = "Group", Name = "Current Assets",
+                Parent = "Primary", Source = "Tally imported" }),
+            "Foreign Tally-sourced master was incorrectly authorized as a builtin.");
+        Check(!TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(
+            new MasterRecord { Type = "Group", Name = "Custom Assets",
+                Parent = "Primary", Source = "Standard hierarchy" }),
+            "Arbitrary unverified custom group was accepted as Tally prebuilt.");
+        Check(TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInLedger(
+            new MasterRecord { Type = "Ledger", Name = "Cash",
+                Parent = "Cash-in-Hand", Source = "Standard hierarchy" }),
+            "Offline Cash ledger source template was lost.");
+        Check(!TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInLedger(
+            new MasterRecord { Type = "Ledger", Name = "Party Ledger",
+                Parent = "Sundry Debtors", Source = "Standard hierarchy" }),
+            "Offline party or GST master was invented from a standard label.");
+        // Guard against accidentally enabling this exception for normal live
+        // Tally export; it is explicitly opted into only from the private
+        // saved branch's XML preparation path.
+        DirectoryInfo? root = new(Environment.CurrentDirectory);
+        while (root is not null &&
+               !File.Exists(Path.Combine(root.FullName, "AAH", "src",
+                   "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs")))
+            root = root.Parent;
+        Check(root is not null, "Missing AAH desktop source for offline branch regression.");
+        var source = File.ReadAllText(Path.Combine(root!.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
+        Check(source.Contains("offlineConsolidatedBranchSource: true", StringComparison.Ordinal) &&
+              source.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal),
+            "Offline-only exception not restricted to private branch source preparation.");
+
+        Console.WriteLine("PASS: canonical offline Tally groups, source Cash template and protected real export.");
         Console.WriteLine("PASS: consolidated import live MASTERID, parent, duplicate and Tally-ack contracts.");
     }
 }
