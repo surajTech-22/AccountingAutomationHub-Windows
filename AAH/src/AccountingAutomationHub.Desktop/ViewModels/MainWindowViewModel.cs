@@ -77,6 +77,7 @@ public sealed class MainWindowViewModel :
     private readonly AccountingRefreshCoordinator _refreshCoordinator;
     private readonly AccountingLiveChangeHub _liveChangeHub;
     private readonly SqliteTallyRepository _tallyRepository;
+    private readonly TallyBranchConsolidationImportService _consolidatedMasterImporter;
     private readonly TallyLiveConnectionCoordinator _tallyCoordinator;
     private readonly TallyApplicationLaunchService _tallyApplicationLaunchService = new();
     private readonly ApplicationPreferenceService _applicationPreferences;
@@ -428,6 +429,7 @@ public sealed class MainWindowViewModel :
         var tallyHttpService = new TallyHttpService(
             _applicationPreferences.Get(ApplicationSettingKeys.TallyHost),
             _applicationPreferences.GetInt(ApplicationSettingKeys.TallyPort, 9000));
+        _consolidatedMasterImporter = new TallyBranchConsolidationImportService(tallyHttpService);
         var tallyMasterImportService = new TallyMasterImportService();
         var tallyLiveMasterSyncService =
             new TallyLiveMasterSynchronizationService(
@@ -2283,6 +2285,62 @@ public sealed class MainWindowViewModel :
         }
     }
 
+    /// <summary>
+    /// Consolidated master stage only. Always reuse the current Dashboard
+    /// Tally link and the already constructed Tally HTTP transport.
+    /// Never select a branch's own Tally link for the consolidated destination.
+    /// </summary>
+    private async Task<TallyBranchMasterImportResult> ImportConsolidatedMastersAsync(
+        long parentClientId, string financialYear, bool separateVoucherTypes, bool separateCashLedgers)
+    {
+        var current = _clientContext.CurrentClient;
+        if (current is null || current.Id != parentClientId ||
+            !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            !HasBranchWorkspaces || _isPrivateBranchActive ||
+            SelectedBranchWorkspace?.IsConsolidated != true)
+            throw new InvalidOperationException("Select the original consolidated Client/FY workspace before importing.");
+        if (NetworkClientRuntime.IsNetworkClient ||
+            !_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
+            throw new InvalidOperationException("Tally export permission on the host computer is required.");
+        if (_tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected)
+            throw new InvalidOperationException("The existing Tally link is not ready.");
+        if (!BranchAccountingModePreference.IsEnabled(
+                _applicationPreferences.Get(BranchAccountingModePreference.Key(current.Id))))
+            throw new InvalidOperationException("Separate branch books are not enabled for this client.");
+
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        var destination = _tallyCoordinator.SelectedCompany;
+        if (link is null || destination is null || link.ClientId != parentClientId ||
+            !link.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Confirm the consolidated Tally company in the existing Dashboard Tally Link first.");
+
+        var parent = _clientRepository.GetById(parentClientId);
+        if (parent is null || parent.IsArchived || parent.FinancialYear != financialYear)
+            throw new InvalidOperationException("The saved parent Client/FY is not available.");
+        var configured = ClientBranchCatalog.Resolve(parent,
+            _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
+        if (configured.Count < 2)
+            throw new InvalidOperationException("At least two saved, same-PAN branches are required.");
+        if (configured.Any(x => x.Name.Length > 80))
+            throw new InvalidOperationException("Tally branch names must not exceed 80 characters.");
+        var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
+        if (pan.Length == 0 && (parent.Gstin ?? "").Trim().Length == 15)
+            pan = parent.Gstin.Trim().Substring(2, 10).ToUpperInvariant();
+
+        // The private ClientId is the existing branch accounting scope, not a
+        // duplicate Directory client. No parent voucher is moved by this stage.
+        var identities = configured.Select(branch =>
+        {
+            var scope = _privateBranchAccounts.GetOrCreate(
+                parent.Id, branch.BranchId, branch.Name, branch.Gstin);
+            return new TallyBranchMasterIdentity(
+                scope.Id, branch.BranchId, branch.Name, pan,
+                branch.Gstin, parent.FinancialYear);
+        }).ToArray();
+        return await _consolidatedMasterImporter.ImportMastersAsync(
+            link, destination, identities, separateVoucherTypes, separateCashLedgers);
+    }
+
     private void RebuildWorkspaceNavigation(
         string? preferredTitle = null)
     {
@@ -2321,7 +2379,9 @@ public sealed class MainWindowViewModel :
                 if (_consolidatedTallyImportPage is null ||
                     _consolidatedTallyImportPage.ParentClientId != client.Id ||
                     !_consolidatedTallyImportPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
-                    _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel);
+                    _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(
+                        client.Id, client.FinancialYear, _dashboardViewModel,
+                        (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash));
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
