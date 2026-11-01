@@ -105,9 +105,8 @@ public partial class App : System.Windows.Application
                 await Dispatcher.Yield(DispatcherPriority.Background);
             }
 
-            OverflowToolTipManager.Enable();
-            StartPerformanceHeartbeat();
-
+            // Do not create UI timers, hooks or accounting workers in a losing
+            // secondary instance. Only the process holding the named mutex owns runtime.
             if (networkClientMode)
             {
                 // Show visible feedback before any install/migration work. Older builds performed disk
@@ -142,9 +141,17 @@ public partial class App : System.Windows.Application
             if (!AcquireSingleInstance())
             {
                 if (networkClientMode) NetworkClientStartupLog.Write("Another AAH instance owns the single-instance mutex; activation was signaled and this process will exit.");
+                // A secondary has neither accounting ownership nor a tray icon.
+                // WPF Shutdown alone can leave residual foreground workers/threads
+                // and a listener-less ghost process that blocks future updates.
+                // It is safe to terminate THIS losing process, never the owner.
+                WriteStartupDiagnostic("Secondary instance rejected; terminating before any accounting runtime starts.");
                 Shutdown();
+                Environment.Exit(0);
                 return;
             }
+            OverflowToolTipManager.Enable();
+            StartPerformanceHeartbeat();
             // Publish the PID-specific shutdown listener as soon as single-instance
             // ownership is known. Slow startup must not look like a legacy process
             // with no graceful-update protocol.
@@ -782,6 +789,49 @@ public partial class App : System.Windows.Application
             Forms.ToolTipIcon.Info);
     }
 
+    // The tray command and the permanent window Exit button share one
+    // accounting-safe path. A close-to-tray action remains separate.
+    public void RequestExitCompletely()
+    {
+        if (_isExiting) return;
+        var quiesced = AutomationService is not null;
+        try
+        {
+            // Stop NEW passive auto-discovery, but preserve manual jobs and active work.
+            AutomationService?.BeginVerifiedUpdateQuiescence();
+            var tallyBusy = _mainViewModel?.IsTallyBusy == true;
+            var automationBusy = AutomationService?.HasPendingWorkForUpdate == true;
+            var distributedBusy = !_distributedImportCancellations.IsEmpty;
+            if (!AppExitPolicy.CanExitCompletely(tallyBusy, automationBusy, distributedBusy))
+            {
+                const string message = "AAH is completing an accounting/Tally operation. Exit was not started. Finish the active import/export, then select Exit Completely again.";
+                WriteShutdownDiagnostic("User exit deferred: tally=" + tallyBusy +
+                    " automation=" + automationBusy + " distributed=" + distributedBusy);
+                ShowTrayBalloon("AAH cannot exit while work is active", message, Forms.ToolTipIcon.Warning);
+                if (_mainWindow?.IsVisible == true)
+                    MessageBox.Show(_mainWindow, message, "AAH Exit Deferred", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            WriteShutdownDiagnostic("User requested Exit Completely: no in-flight accounting/Tally work.");
+            ExitApplication();
+        }
+        catch (Exception exception)
+        {
+            WriteShutdownDiagnostic("Exit Completely validation failed; preserving current app: " + exception);
+            if (_mainWindow?.IsVisible == true)
+                MessageBox.Show(_mainWindow, "Could not safely stop AAH. " + exception.Message,
+                    "AAH Exit", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (quiesced && !_isExiting)
+            {
+                try { AutomationService?.EndVerifiedUpdateQuiescence(); }
+                catch (Exception exception) { WriteShutdownDiagnostic("Exit cancellation watcher resume failed: " + exception); }
+            }
+        }
+    }
+
     public void ExitApplication()
     {
         if (_isExiting) return;
@@ -845,7 +895,7 @@ public partial class App : System.Windows.Application
             RefreshTrayMenuText(createHereItem);
         };
         var exitItem = new Forms.ToolStripMenuItem("Exit Completely");
-        exitItem.Click += (_, _) => Dispatcher.BeginInvoke(new Action(ExitApplication));
+        exitItem.Click += (_, _) => Dispatcher.BeginInvoke(new Action(RequestExitCompletely));
         menu.Items.Add(openItem);
         menu.Items.Add(openAccountingItem);
         menu.Items.Add(openAuditItem);
@@ -1579,7 +1629,13 @@ public partial class App : System.Windows.Application
             base.OnExit(e);
             return;
         }
-        CleanupRuntime();
+        // An unsuccessful second launch never owns the accounting database.
+        // Skipping its cleanup prevents an orphan/loser process from checkpointing
+        // the active owner's SQLite WAL or holding the updater hostage.
+        if (AppExitPolicy.ShouldCleanupRuntime(_ownsSingleInstanceMutex))
+            CleanupRuntime();
+        else
+            WriteShutdownDiagnostic("Non-owner instance exiting without touching shared accounting runtime.");
         _updateShutdownWait?.Unregister(null);
         _updateShutdownWait = null;
         _updateShutdownEvent?.Dispose();

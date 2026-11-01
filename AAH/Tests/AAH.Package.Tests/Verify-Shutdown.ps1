@@ -91,7 +91,10 @@ public static class AahShutdownFixture {
     Assert-Shutdown ($vm.Contains('Interlocked.Exchange(ref _shutdownStarted, 1)')) 'Workspace disposal must be idempotent.'
     $dispose = $vm.Substring($vm.IndexOf('    public void Dispose()'))
     Assert-Shutdown ($dispose.IndexOf('_tallyCoordinator.Dispose()') -lt $dispose.IndexOf('_workspaceStateCache.Dispose()')) 'Tally must stop before cache drainage.'
-    Assert-Shutdown ($app.Contains('StartUpdateShutdownListener();') -and $app.Contains('Dispatcher.BeginInvoke(new Action(ExitApplication))')) 'Explicit update shutdown listener is missing.'
+    Assert-Shutdown ($app.Contains('StartUpdateShutdownListener();') -and
+        $app.Contains('Dispatcher.BeginInvoke(new Action(() => _ = ExitForVerifiedUpdateWhenIdleAsync()))') -and
+        $app.Contains('exitItem.Click += (_, _) => Dispatcher.BeginInvoke(new Action(RequestExitCompletely));') -and
+        $app.Contains('AppExitPolicy.ShouldCleanupRuntime(_ownsSingleInstanceMutex)')) 'Verified update shutdown or safe tray Exit/owner-only cleanup is missing.'
     Write-Diagnostic 'R9 FIXED16 R6 native shutdown regression PASS.'
     Write-Host 'PASS: verified Win32/MainModule exact-path identity, Restart Manager owner isolation, graceful exit, legacy fallback, retained exited handle, single termination and unrelated-process isolation.' -ForegroundColor Green
 } catch {
