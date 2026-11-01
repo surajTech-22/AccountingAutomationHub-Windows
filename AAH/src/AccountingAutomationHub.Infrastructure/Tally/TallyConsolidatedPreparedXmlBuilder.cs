@@ -51,9 +51,17 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 .Where(m => m.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Name))
                 .GroupBy(m => m.Name.Trim(), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+            // Branch-prepared XML deliberately omits Ledgers already live in
+            // that branch's Tally company. Fill those master definitions only
+            // from the original branch's freshly exported Tally masters, never
+            // by guessing GSTIN, banking or party settings.
+            var liveSource = string.IsNullOrWhiteSpace(branch.SourceLiveMastersXml)
+                ? null : XDocument.Parse(branch.SourceLiveMastersXml, LoadOptions.PreserveWhitespace);
             var originalLedgerXml = source.Descendants().Where(x => Is(x, "LEDGER") &&
-                x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
-                .GroupBy(x => Field(x, "NAME"), StringComparer.OrdinalIgnoreCase)
+                    x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
+                .Concat(liveSource?.Descendants().Where(x => Is(x, "LEDGER")) ?? [])
+                .GroupBy(x => Field(x, "NAME").Length > 0 ? Field(x, "NAME") : Value(x, "NAME"),
+                    StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
             // Inventory masters and units are reused, never regenerated from an
             // assumed VAT/GST rate. Shared units/groups are accepted only when
@@ -231,18 +239,37 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 var parent = AccountingParent(original);
                 if (!mappedLedgerMasters.Add(destinationLedger))
                     throw new InvalidOperationException("Two branch ledgers map to one consolidated ledger: " + destinationLedger);
-                if (!originalLedgerXml.TryGetValue(original, out var sourceDeclarations) || sourceDeclarations.Length != 1)
-                    throw new InvalidOperationException("Prepared branch XML does not contain full master details for '" +
-                        original + "'. Cannot reconstruct a GST/party/bank ledger from its name.");
-                var ledger = new XElement(sourceDeclarations[0]);
-                if (Field(ledger, "ACTION").Equals("Alter", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("A source Ledger ALTER cannot be replayed in consolidated Tally.");
+                if (!originalLedgerXml.TryGetValue(original, out var sourceDeclarations) ||
+                    sourceDeclarations.Length == 0)
+                    throw new InvalidOperationException("Neither prepared branch XML nor fresh original-company Tally export " +
+                        "contains full master details for '" + original + "'. Cannot guess party/GST/bank metadata.");
+                // Prefer original prepared CREATE over live exporter duplicates.
+                var preparedDeclaration = sourceDeclarations.FirstOrDefault(x =>
+                    x.Parent is not null && Is(x.Parent, "TALLYMESSAGE") &&
+                    Field(x, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase));
+                var sourceLedger = preparedDeclaration ?? sourceDeclarations[0];
+                var liveParent = Value(sourceLedger, "PARENT");
+                if (!liveParent.Equals(ledgerAuthority[original][0].Parent, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Branch Ledger parent differs from source Master authority: " + original);
+                var ledger = new XElement(sourceLedger);
+                // Foreign branch MASTERID / GUID / ALTERID are never applied to
+                // the new consolidated Tally company.
+                foreach (var item in ledger.Elements().Where(x =>
+                    Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID")).ToArray())
+                    item.Remove();
+                foreach (var attribute in ledger.Attributes().Where(x =>
+                    x.Name.LocalName is "MASTERID" or "GUID" or "ALTERID" or "TAGNAME" or "TAGVALUE").ToArray())
+                    attribute.Remove();
+                if (ledger.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")))
+                    throw new InvalidOperationException("Nested foreign identity in Ledger master needs manual review.");
                 ledger.SetAttributeValue("NAME", destinationLedger);
                 ledger.SetAttributeValue("ACTION", "Create");
                 Set(ledger, "NAME", destinationLedger);
                 Set(ledger, "PARENT", parent);
-                if (ledger.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")))
-                    throw new InvalidOperationException("Source Ledger has Tally identity fields; cannot reuse foreign MASTERIDs.");
+                foreach (var nameTag in ledger.Descendants().Where(x =>
+                    Is(x, "NAME") && x.Parent is not null && Is(x.Parent, "NAME.LIST") &&
+                    x.Value.Trim().Equals(original, StringComparison.OrdinalIgnoreCase)))
+                    nameTag.Value = destinationLedger;
                 masterMessages.Add(new XElement("TALLYMESSAGE", ledger));
             }
         }
@@ -384,7 +411,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
 }
 
 public sealed record TallyPreparedBranchXml(
-    TallyBranchMasterIdentity Branch, string Xml, IReadOnlyCollection<MasterRecord> Masters);
+    TallyBranchMasterIdentity Branch, string Xml, IReadOnlyCollection<MasterRecord> Masters,
+    string SourceLiveMastersXml = "");
 
 public sealed record TallyConsolidatedPreparedXmlResult(
     string MastersXml, string VouchersXml, int BranchCount,
