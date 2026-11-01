@@ -34,6 +34,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
         var explicitlyMatched = new Dictionary<string, List<(TallyPreparedBranchXml Branch, XElement Voucher)>>(StringComparer.OrdinalIgnoreCase);
         var seenVoucherAnchors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var mappedLedgerMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var mappedStockMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var commonInventoryMasters = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
         var sourceVoucherCount = 0;
 
         foreach (var branch in prepared.OrderBy(x => x.Branch.BranchId, StringComparer.OrdinalIgnoreCase))
@@ -52,6 +54,54 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
                 .GroupBy(x => Field(x, "NAME"), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+            // Inventory masters and units are reused, never regenerated from an
+            // assumed VAT/GST rate. Shared units/groups are accepted only when
+            // their source definitions are identical between branches.
+            foreach (var rawMaster in source.Descendants().Where(x =>
+                x.Parent is not null && Is(x.Parent, "TALLYMESSAGE") &&
+                (Is(x, "UNIT") || Is(x, "STOCKGROUP") || Is(x, "STOCKCATEGORY") ||
+                 Is(x, "GODOWN") || Is(x, "COSTCENTRE"))))
+            {
+                var kind = rawMaster.Name.LocalName.ToUpperInvariant();
+                var name = Field(rawMaster, "NAME");
+                if (name.Length == 0) name = Value(rawMaster, "NAME");
+                if (name.Length == 0 || Field(rawMaster, "ACTION").Equals("Alter", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Unverified inventory master or foreign ALTER: " + kind);
+                var key = kind + "|" + name;
+                var copy = new XElement(rawMaster);
+                if (commonInventoryMasters.TryGetValue(key, out var existing))
+                {
+                    if (!XNode.DeepEquals(existing, copy))
+                        throw new InvalidOperationException("Different branches use conflicting stock master definitions: " + key);
+                }
+                else commonInventoryMasters[key] = copy;
+            }
+            var originalStockXml = source.Descendants().Where(x => Is(x, "STOCKITEM") &&
+                    x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
+                .GroupBy(x => Field(x, "NAME").Length > 0 ? Field(x, "NAME") : Value(x, "NAME"),
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+            foreach (var stockName in source.Descendants().Where(x => Is(x, "VOUCHER") &&
+                         x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
+                         .SelectMany(x => x.Descendants().Where(y => Is(y, "STOCKITEMNAME")))
+                         .Select(x => x.Value.Trim()).Where(x => x.Length > 0)
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!originalStockXml.TryGetValue(stockName, out var definitions) || definitions.Length != 1)
+                    throw new InvalidOperationException("Source stock item details missing for '" + stockName +
+                        "'. Inventory amounts will not be recalculated or stock masters guessed.");
+                var newName = stockName + " - " + branch.Branch.DisplayName.Trim();
+                if (!mappedStockMasters.Add(newName))
+                    throw new InvalidOperationException("Duplicate branch stock master destination: " + newName);
+                var stock = new XElement(definitions[0]);
+                if (Field(stock, "ACTION").Equals("Alter", StringComparison.OrdinalIgnoreCase) ||
+                    stock.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")))
+                    throw new InvalidOperationException("Foreign stock MASTERID/ALTER cannot be imported into consolidated Tally.");
+                stock.SetAttributeValue("NAME", newName);
+                stock.SetAttributeValue("ACTION", "Create");
+                Set(stock, "NAME", newName);
+                masterMessages.Add(new XElement("TALLYMESSAGE", stock));
+            }
             var customGroups = branch.Masters.Where(x => x.Type.Equals("Group", StringComparison.OrdinalIgnoreCase))
                 .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.OrdinalIgnoreCase);
@@ -96,8 +146,6 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     v.Attributes().Any(x => x.Name.LocalName.Equals("GUID", StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidOperationException("A prepared branch ALTER or Tally-bound voucher cannot be replayed as CREATE. " +
                         "Reconcile its original identity in the existing export gate first.");
-                if (v.Descendants().Any(x => Is(x, "ALLINVENTORYENTRIES.LIST") || Is(x, "INVENTORYENTRIES.LIST")))
-                    throw new InvalidOperationException("Inventory invoice master/stock identity requires source-preserving mapping before consolidated XML can be released.");
                 var originalNumber = Value(v, "VOUCHERNUMBER");
                 var date = Value(v, "DATE");
                 var type = Value(v, "VOUCHERTYPENAME");
@@ -205,6 +253,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
         var groupSource = XDocument.Parse(plan.GroupXml);
         foreach (var m in groupSource.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
             masterBuilder.AppendLine(m.ToString(SaveOptions.DisableFormatting));
+        foreach (var m in commonInventoryMasters.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            masterBuilder.AppendLine(new XElement("TALLYMESSAGE", m.Value).ToString(SaveOptions.DisableFormatting));
         foreach (var m in masterMessages)
             masterBuilder.AppendLine(m.ToString(SaveOptions.DisableFormatting));
         TallyExcelParityXmlWriter.EndAllMastersImport(masterBuilder);
@@ -232,6 +282,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
             if (string.IsNullOrWhiteSpace(item.Value)) continue;
             item.Value = ledger(item.Value);
         }
+        foreach (var item in voucher.Descendants().Where(x => Is(x, "STOCKITEMNAME")))
+            if (!string.IsNullOrWhiteSpace(item.Value))
+                item.Value = item.Value.Trim() + " - " + branch.DisplayName.Trim();
         var original = Value(voucher, "VOUCHERNUMBER");
         Set(voucher, "VOUCHERNUMBER", branch.BranchId + "-" + original);
         var baseType = Value(voucher, "VOUCHERTYPENAME");
