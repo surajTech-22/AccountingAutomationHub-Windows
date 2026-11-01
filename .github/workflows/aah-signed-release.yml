@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.551)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.552)"
         required: true
-        default: "v4.0.0.551"
+        default: "v4.0.0.552"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.551: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.552: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.551]')) }}
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.552]')) }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.551' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.552' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release. Initial consolidated Tally voucher import trial: first test with a backed-up / duplicate Tally company; do not blindly retry a partial import. Automated builds passed but live Tally acceptance has not yet been reported by the owner."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release. Fix: Exit Completely in the titlebar and tray now shares accounting-safe shutdown; secondary ghost AAH processes cannot persist and cannot touch the owner's accounting cleanup. Initial consolidated Tally voucher import trial: first test with a backed-up / duplicate Tally company; do not blindly retry a partial import. Automated builds passed but live Tally acceptance has not yet been reported by the owner."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
