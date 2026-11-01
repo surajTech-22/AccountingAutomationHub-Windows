@@ -222,7 +222,7 @@ Check(shellView.Contains("ItemsSource=\"{Binding SidebarBranchWorkspaces}\"", St
       shellModel.Contains("var branches = separateBooksEnabled", StringComparison.Ordinal) &&
       shellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal),
       "Branch hierarchy is not rendered in the left sidebar or posting safety was bypassed.");
-Check(shellView.Contains("<Setter Property=\\"ToolTip\\" Value=\\"{Binding DisplayName}\\"/>", StringComparison.Ordinal),
+Check(shellView.Contains("""<Setter Property="ToolTip" Value="{Binding DisplayName}"/>""", StringComparison.Ordinal),
     "Branch hover must display the friendly branch name, not the internal workspace record.");
 var consolidatedView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "Views", "ConsolidatedBranchDashboardView.xaml"));
