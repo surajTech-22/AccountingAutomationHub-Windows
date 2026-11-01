@@ -106,24 +106,36 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.OrdinalIgnoreCase);
 
+            var stagedCustomGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string ResolveParentGroup(string sourceParent, HashSet<string> ancestors)
+            {
+                var requirement = plan.Groups.SingleOrDefault(g =>
+                    g.BranchId.Equals(branch.Branch.BranchId, StringComparison.OrdinalIgnoreCase) &&
+                    g.Parent.Equals(sourceParent, StringComparison.OrdinalIgnoreCase));
+                if (requirement is not null) return requirement.Name;
+                if (!ancestors.Add(sourceParent) ||
+                    !customGroups.TryGetValue(sourceParent, out var groups) || groups.Length != 1 ||
+                    string.IsNullOrWhiteSpace(groups[0].Parent))
+                    throw new InvalidOperationException("Circular or unknown branch accounting group: " + sourceParent);
+                var original = groups[0];
+                var parent = ResolveParentGroup(original.Parent.Trim(), ancestors);
+                var mapped = branch.Branch.DisplayName.Trim() + " " + original.Name.Trim();
+                if (!stagedCustomGroups.Add(mapped)) return mapped;
+                // Preserve the source hierarchy below the mandatory branch
+                // classification. Group parent nesting is not a DR/CR calculation.
+                var shell = new MasterRecord { Name = mapped, Parent = parent, Type = "Group" };
+                var groupXml = XDocument.Parse(TallyErp9ManualGroupImport.Build(plan.DestinationCompanyName, [shell]));
+                foreach (var message in groupXml.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
+                    masterMessages.Add(new XElement(message));
+                return mapped;
+            }
             string AccountingParent(string ledger)
             {
                 if (!ledgerAuthority.TryGetValue(ledger, out var sources) || sources.Length != 1)
                     throw new InvalidOperationException("Missing or ambiguous branch Ledger authority: " +
                         branch.Branch.DisplayName + "/" + ledger);
-                var parent = sources[0].Parent.Trim();
-                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                while (true)
-                {
-                    var requirement = plan.Groups.SingleOrDefault(g =>
-                        g.BranchId.Equals(branch.Branch.BranchId, StringComparison.OrdinalIgnoreCase) &&
-                        g.Parent.Equals(parent, StringComparison.OrdinalIgnoreCase));
-                    if (requirement is not null) return requirement.Name;
-                    if (!visited.Add(parent) || !customGroups.TryGetValue(parent, out var group) ||
-                        group.Length != 1 || string.IsNullOrWhiteSpace(group[0].Parent))
-                        throw new InvalidOperationException("Ledger '" + ledger + "' has an unverified accounting parent: " + parent);
-                    parent = group[0].Parent.Trim();
-                }
+                return ResolveParentGroup(sources[0].Parent.Trim(),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
             }
 
             string LedgerName(string sourceName)
@@ -131,8 +143,14 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 if (!ledgerAuthority.TryGetValue(sourceName.Trim(), out var masters) || masters.Length != 1)
                     throw new InvalidOperationException("Voucher references an unverified branch ledger: " +
                         branch.Branch.DisplayName + "/" + sourceName);
-                // Every branch owns its own ledger even when the original names are
-                // identical. Never merge taxes, parties, bank accounts or cash by name.
+                // Optional cash uses the exact already-planned branch Cash
+                // ledger; all other accounts remain branch-qualified.
+                var cash = plan.CashLedgers.SingleOrDefault(x =>
+                    x.BranchId.Equals(branch.Branch.BranchId, StringComparison.OrdinalIgnoreCase));
+                if (cash is not null &&
+                    masters[0].Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase))
+                    return cash.Name;
+                // Never merge taxes, parties, bank accounts or other ledgers by name.
                 return sourceName.Trim() + " - " + branch.Branch.DisplayName.Trim();
             }
 
@@ -182,6 +200,12 @@ public static class TallyConsolidatedPreparedXmlBuilder
             foreach (var original in used)
             {
                 var destinationLedger = LedgerName(original);
+                var cashPlanned = plan.CashLedgers.Any(x =>
+                    x.BranchId.Equals(branch.Branch.BranchId, StringComparison.OrdinalIgnoreCase) &&
+                    x.Name.Equals(destinationLedger, StringComparison.OrdinalIgnoreCase));
+                // The optional cash ledger was already included in the verified
+                // master-first plan. Do not duplicate or recreate it in source XML.
+                if (cashPlanned) continue;
                 var parent = AccountingParent(original);
                 if (!mappedLedgerMasters.Add(destinationLedger))
                     throw new InvalidOperationException("Two branch ledgers map to one consolidated ledger: " + destinationLedger);
