@@ -4384,30 +4384,34 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        // R8 R6 navigation safety bar: CurrentPage changes immediately so WPF paints the
-        // requested module at once, but prepared-snapshot hydration is coalesced for a very
-        // short settle window. Rapid module clicks therefore prepare only the page the user
-        // actually stops on; no feature, cache authority or refresh path is removed.
-        _ = Task.Run(async () =>
+        // Give the requested module's missing cache streams priority as soon
+        // as the view changes. This signal does not load SQLite on the WPF
+        // thread; the existing cache workers perform preparation independently.
+        // Heavy hidden-page presentation warming remains at ApplicationIdle.
+        if (currentClient is not null)
+            foreach (var module in VisibleModulesForPage(page))
+                if (!_workspaceStateCache.IsModuleReady(currentClient.Id, currentClient.FinancialYear, module))
+                    _workspaceStateCache.EnsureModulePrepared(
+                        currentClient.Id, currentClient.FinancialYear, module);
+
+        // WPF first paints the new page, then ContextIdle prepares its binding.
+        // A dispatcher-generation check coalesces rapid navigation without an
+        // unconditional 90ms sleep / Task.Run on EVERY module click.
+        _ = dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
         {
-            await Task.Delay(90).ConfigureAwait(false);
-            if (generation != Volatile.Read(ref _navigationPrepareGeneration)) return;
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            if (generation != Volatile.Read(ref _navigationPrepareGeneration) ||
+                !ReferenceEquals(CurrentPage, page)) return;
+            try
             {
-                if (generation != Volatile.Read(ref _navigationPrepareGeneration) ||
-                    !ReferenceEquals(CurrentPage, page)) return;
-                try
-                {
-                    if (!ReferenceEquals(previousPage, CurrentPage)) ReleasePageForNavigation(previousPage);
-                    PreparePageForDisplay(page);
-                }
-                catch (Exception exception)
-                {
-                    PipelineRuntimeDiagnostics.NavigationFailed(page.GetType().Name, exception);
-                    ApplicationState = $"Could not prepare {page.Title}: {exception.Message}";
-                }
-            }));
-        });
+                if (!ReferenceEquals(previousPage, CurrentPage)) ReleasePageForNavigation(previousPage);
+                PreparePageForDisplay(page);
+            }
+            catch (Exception exception)
+            {
+                PipelineRuntimeDiagnostics.NavigationFailed(page.GetType().Name, exception);
+                ApplicationState = $"Could not prepare {page.Title}: {exception.Message}";
+            }
+        }));
     }
 
     private void PreparePageForDisplay(PageViewModel? page)
