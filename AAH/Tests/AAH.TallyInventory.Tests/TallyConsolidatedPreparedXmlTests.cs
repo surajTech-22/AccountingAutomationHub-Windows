@@ -118,6 +118,53 @@ internal static class TallyConsolidatedPreparedXmlTests
                 "-100.25", "100.25", "Sundry Debtors", "Sales Accounts", altered: true) }, b]),
             "foreign Tally Alter must never be replayed");
 
+        // A branch's live Tally MASTERID is source provenance, NEVER the
+        // consolidated destination MASTERID. Rebase only in the offline XML.
+        var confirmedAlterXml = Xml("Sales", "1", "KA-INV-1", "Buyer", "Local Sales",
+            "-100.25", "100.25", "Sundry Debtors", "Sales Accounts", altered: true)
+            .Replace(@"<VOUCHER ACTION=""Alter""",
+                @"<VOUCHER ACTION=""Alter"" TAGNAME=""MASTER ID"" TAGVALUE=""912""");
+        var rebased = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = confirmedAlterXml }, b ]);
+        var rebasedVoucher = XDocument.Parse(rebased.VouchersXml).Descendants("VOUCHER").First();
+        Check(rebased.RebasedBranchAlterCount == 1 &&
+              (string?)rebasedVoucher.Attribute("ACTION") == "Create" &&
+              rebasedVoucher.Attribute("TAGVALUE") is null &&
+              rebasedVoucher.Attribute("TAGNAME") is null,
+              "Foreign Tally MASTERID was reused in consolidated destination XML.");
+        var customMasters = new MasterRecord[] {
+            Ledger("Buyer", "Sundry Debtors"),
+            Ledger("Local Sales", "Regional Sales"),
+            new() { Name = "Regional Sales", Type = "Group", Parent = "Sales Accounts" }
+        };
+        var customBranch = new TallyPreparedBranchXml(Karnataka,
+            a.Xml.Replace("<PARENT>Sales Accounts</PARENT>", "<PARENT>Regional Sales</PARENT>"),
+            customMasters);
+        var custom = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [customBranch, b]);
+        var customDoc = XDocument.Parse(custom.MastersXml);
+        Check(customDoc.Descendants("GROUP").Any(x =>
+                  (string?)x.Element("NAME") == "Karnataka Regional Sales" &&
+                  (string?)x.Element("PARENT") == "Karnataka Sales") &&
+              customDoc.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Local Sales - Karnataka" &&
+                  (string?)x.Element("PARENT") == "Karnataka Regional Sales"),
+              "Custom source ledger classification lost its branch hierarchy.");
+
+        var withCash = TallyBranchConsolidationMasterPlanner.Build(
+            "Consolidated Books", "test-company", "2025-26", [Karnataka, TamilNadu], [],
+            true, separateCashLedgers: true);
+        var cashSource = Prepared(Karnataka,
+            Xml("Receipt", "10", "Cash sale", "Cash", "Local Sales",
+                "-10", "10", "Cash-in-Hand", "Sales Accounts"),
+            Ledger("Cash", "Cash-in-Hand"), Ledger("Local Sales", "Sales Accounts"));
+        var cashResult = TallyConsolidatedPreparedXmlBuilder.Build(withCash, [cashSource, b]);
+        var cashMaster = XDocument.Parse(cashResult.MastersXml);
+        Check(cashMaster.Descendants("LEDGER").Count(x =>
+                (string?)x.Element("NAME") == "Cash - Karnataka") == 1 &&
+              XDocument.Parse(cashResult.VouchersXml).Descendants("LEDGERNAME")
+                  .Any(x => x.Value == "Cash - Karnataka"),
+              "Optional branch Cash was duplicated instead of reusing planned master.");
+
         var outgoing = Prepared(Karnataka,
             Xml("Payment", "21", "AAH-INTERBANK:TRANSFER-10", "Bank", "Clearing", "-500.00", "500.00",
                 "Bank Accounts", "Current Liabilities"),
