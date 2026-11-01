@@ -311,9 +311,14 @@ public static class TallyConsolidatedPreparedXmlBuilder
 
         var masterBuilder = new StringBuilder();
         TallyExcelParityXmlWriter.BeginAllMastersImport(masterBuilder, plan.DestinationCompanyName);
-        var groupSource = XDocument.Parse(plan.GroupXml);
-        foreach (var m in groupSource.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
-            masterBuilder.AppendLine(m.ToString(SaveOptions.DisableFormatting));
+        // Reuse every existing master-plan XML stage in dependency order:
+        // compulsory groups, optional Cash, optional Voucher Types.
+        foreach (var planXml in new[] { plan.GroupXml, plan.CashLedgerXml, plan.VoucherTypeXml })
+        {
+            var source = XDocument.Parse(planXml);
+            foreach (var message in source.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
+                masterBuilder.AppendLine(message.ToString(SaveOptions.DisableFormatting));
+        }
         foreach (var m in commonInventoryMasters.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
             masterBuilder.AppendLine(new XElement("TALLYMESSAGE", m.Value).ToString(SaveOptions.DisableFormatting));
         foreach (var m in masterMessages)
