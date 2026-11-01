@@ -131,6 +131,35 @@ internal static class TallyConsolidatedBranchSourceTests
             && dashboard.Contains("link.FinancialYear + \" (AAH-linked)\"", StringComparison.Ordinal),
             "Missing safe FY fallback when the live Tally company omits FY metadata.");
 
-        Console.WriteLine("PASS: source-owned Karnataka/Gujarat XML needs no separate Tally company link.");
+        // The original branch Live XML timer is link-gated, whereas source
+        // branches in consolidated accounting are NOT required to link a
+        // second Tally company. The consolidated command must regenerate an
+        // absent branch preview from its own saved books, without posting.
+        var offlineGujaratXml = PreparedXml.Replace("Working Company", "AAH Prepared Branch CL-GJ");
+        var gujaratStatus = "Accounting Automation Hub - Live Tally XML\n" +
+            "Source: saved offline branch accounting; no Tally posting\n" +
+            "Client: CL-GJ | FY 2025-26\n";
+        Check(TallyConsolidatedBranchSourcePolicy.Validate(
+            offlineGujaratXml, gujaratStatus, "CL-GJ", "2025-26", Destination, null) ==
+            "AAH Prepared Branch CL-GJ",
+            "A correctly owned, offline prepared Gujarat branch must not require a branch Tally link.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            offlineGujaratXml, gujaratStatus, "CL-KA", "2025-26", Destination, null),
+            "Gujarat XML cannot be reused as Karnataka's source.");
+
+        var mainWindow = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
+        Check(mainWindow.Contains("if (existing.Length == 0)", StringComparison.Ordinal) &&
+            mainWindow.Contains("PrepareMissingBranchXmlAsync(child, branch.Name, financialYear)", StringComparison.Ordinal) &&
+            mainWindow.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
+            mainWindow.Contains("snapshot.Unsupported != 0 || snapshot.MissingLedgers != 0", StringComparison.Ordinal) &&
+            mainWindow.Contains("Source: saved offline branch accounting; no Tally posting", StringComparison.Ordinal),
+            "Missing-branch XML must be prepared from saved branch accounting, never fabricated or posted.");
+        Check(mainWindow.Contains("DispatcherPriority.ContextIdle, new Action(() =>", StringComparison.Ordinal) &&
+            !mainWindow.Contains("Task.Delay(90)", StringComparison.Ordinal) &&
+            mainWindow.Contains("_workspaceStateCache.EnsureModulePrepared(\n                        currentClient.Id", StringComparison.Ordinal),
+            "A fixed module navigation delay or missing visible-module cache priority was reintroduced.");
+
+        Console.WriteLine("PASS: offline branch XML preparation, owned source checks, fast module opening and no live Tally posting.");
     }
 }
