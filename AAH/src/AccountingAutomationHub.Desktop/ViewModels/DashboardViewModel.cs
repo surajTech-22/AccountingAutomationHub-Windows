@@ -2843,7 +2843,9 @@ public sealed class DashboardViewModel :
             "The global dropdown can show open Tally companies, but linking requires an active client.";
         TallyReportStatus = "Open a client and link Tally to view reports.";
         TallyStatisticsStatus = "Open a client and link Tally to view Statistics.";
-        TallyExportStatus = _isConsolidatedTallyScope\n            ? "Consolidated vouchers: Generate branch-prepared XML above; normal Export Selected is disabled to protect source accounting."\n            : "Open a client and link Tally before exporting vouchers.";
+        TallyExportStatus = _isConsolidatedTallyScope
+            ? "Consolidated vouchers: Generate branch-prepared XML above; normal Export Selected is disabled to protect source accounting."
+            : "Open a client and link Tally before exporting vouchers.";
         TallyLiveXmlStatus = _tallyCoordinator.LiveXmlStatus;
         ApplyNoCompanyIdentity();
         _dateClientId = 0;
