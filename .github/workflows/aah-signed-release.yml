@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.554)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.555)"
         required: true
-        default: "v4.0.0.554"
+        default: "v4.0.0.555"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.554: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.555: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.554]')) }}
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.555]')) }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.554' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.555' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH Windows GitHub+SHA256 auto-update channel. UNSIGNED (Windows SmartScreen may warn). Install Setup.exe once; future upgrades are fetched from pinned releases and applied after AAH closes normally. Not a code-signed publisher release. v4.0.0.554 preserves the original Dashboard Tally Export / Auto Sync layout for consolidated import and repairs literal / encoded 0x04 XML control characters at branch generation, live master/stock readback, and voucher verification without modifying protected DR/CR/GST/identity fields. ores original Dashboard Tally Export / Auto Sync layout for consolidated import: no separate top import panel, consolidated actions sit at original manual Export location. Repairs 0x04 in free-text of live master XML and accepts omitted Tally FY metadata when exact saved Client/FY company link matches; rejects mismatches. Original voucher DR/CR/GST unchanged. Live Tally acceptance still requires owner trial on backup company. Initial consolidated Tally voucher import trial: first test with a backed-up / duplicate Tally company; do not blindly retry a partial import. Automated builds passed but live Tally acceptance has not yet been reported by the owner."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.555: fixes consolidated Tally import blocked by outdated optional branch FY links; branch ClientId/FY and prepared vouchers remain authoritative. Only exact FY, client, source company and distinct Tally source links may enrich master metadata. Tally status shows saved AAH-linked FY when the live company omits optional FY metadata. Preserves original Dashboard Tally Export panel, branch DR/CR and GST, master-first readback and duplicate protections. Backup your company for the first live Tally trial; do not blindly retry a partially accepted import. GitHub SHA256 verification; unsigned Windows release may prompt SmartScreen."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
