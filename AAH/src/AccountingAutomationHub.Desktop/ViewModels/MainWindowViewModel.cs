@@ -2353,8 +2353,14 @@ public sealed class MainWindowViewModel :
             var savedXml = await Task.Run(() =>
                 _tallyAccountingExportService.GenerateLiveXml(profile, previewCompany, start, end));
             var savedMasters = _masterRepository.Get(profile.Id, financialYear, false);
+            // Private branch profiles may inherit the parent State. For GST
+            // vouchers, registration state is determined by this branch's
+            // actual GSTIN prefix, not the parent's office address.
+            var registrationState = profile.Gstin.Trim().Length == 15
+                ? ClientBranchCatalog.StateBranchName(profile.Gstin)
+                : profile.State;
             branchInputs.Add(TallyConsolidatedSourcePreviewAdapter.Extract(
-                identity, savedXml, savedMasters, profile.State));
+                identity, savedXml, savedMasters, registrationState));
         }
 
         // Native live Master read is read-only and uses the original Tally HTTP
