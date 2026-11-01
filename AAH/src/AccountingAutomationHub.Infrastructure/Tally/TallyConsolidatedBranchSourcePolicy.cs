@@ -37,7 +37,7 @@ public static class TallyConsolidatedBranchSourcePolicy
                 branchClientCode + " / " + financialYear);
 
         var document = XDocument.Parse(preparedXml, LoadOptions.None);
-        if (!document.Root?.Name.LocalName.Equals("ENVELOPE", StringComparison.OrdinalIgnoreCase) == true ||
+        if (document.Root is null || !document.Root.Name.LocalName.Equals("ENVELOPE", StringComparison.OrdinalIgnoreCase) ||
             !document.Descendants().Any(x =>
                 x.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Saved branch XML is not a complete original Tally import envelope.");
