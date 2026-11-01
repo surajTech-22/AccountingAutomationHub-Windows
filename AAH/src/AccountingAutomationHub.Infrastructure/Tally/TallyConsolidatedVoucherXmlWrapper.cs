@@ -39,6 +39,7 @@ public static class TallyConsolidatedVoucherXmlWrapper
             .Distinct().ToDictionary(x => x.BranchId, x => x.Gstin, StringComparer.OrdinalIgnoreCase);
         var seenBranches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenAnchors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenInterbankTransferMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenLedgerNames = new Dictionary<string, (string Parent, string BranchId)>(StringComparer.OrdinalIgnoreCase);
         var mappedLedgers = new List<TallyConsolidatedLedgerMapping>();
         var transformedVouchers = new List<XElement>();
@@ -132,6 +133,9 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     (string.IsNullOrWhiteSpace(item.TransferMatchId) ||
                      item.CrossesDifferentPan))
                     throw new InvalidOperationException("Interbank Contra must be matched within the SAME PAN and retain both accounting sides.");
+                if (item.Kind == TallyConsolidatedTransferKind.Interbank &&
+                    !seenInterbankTransferMatches.Add(item.TransferMatchId.Trim()))
+                    throw new InvalidOperationException("An interbank transfer was prepared more than once across branch source sets. Match once and preserve both Dr/Cr sides.");
                 if (item.CrossesDifferentPan)
                     throw new InvalidOperationException("Different-PAN or intercompany transfers are out of scope.");
 
@@ -149,6 +153,9 @@ public static class TallyConsolidatedVoucherXmlWrapper
                 var baseType = typeElement?.Value.Trim() ?? "";
                 if (baseType.Length == 0)
                     throw new InvalidOperationException("Voucher type must be explicitly present in the source's original XML.");
+                if (baseType.Equals("Contra", StringComparison.OrdinalIgnoreCase) &&
+                    item.Kind == TallyConsolidatedTransferKind.Ordinary)
+                    throw new InvalidOperationException("Contra vouchers require verified cash-versus-interbank transfer classification.");
                 var targetType = baseType;
                 if (item.Kind == TallyConsolidatedTransferKind.Interbank)
                     targetType = "Contra"; // one common interbank Contra, never branch-suffixed
@@ -162,6 +169,12 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     targetType = specific.Name;
                 }
                 if (typeElement is null) throw new InvalidOperationException("Original Tally voucher type is missing.");
+                var voucherDate = voucher.Elements().FirstOrDefault(x => x.Name.LocalName == "DATE")?.Value.Trim() ?? "";
+                if (!DateTime.TryParseExact(voucherDate, "yyyyMMdd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var date) ||
+                    date < FinancialYearStart(masterPlan.FinancialYear) ||
+                    date >= FinancialYearStart(masterPlan.FinancialYear).AddYears(1))
+                    throw new InvalidOperationException("Source voucher date is invalid or outside the selected consolidated financial year.");
                 typeElement.Value = targetType;
                 voucher.SetAttributeValue("VCHTYPE", targetType);
                 voucher.SetAttributeValue("ACTION", "Create");
@@ -296,7 +309,7 @@ public static class TallyConsolidatedVoucherXmlWrapper
     }
 
     private static bool IsIdentityName(string name) => name.ToUpperInvariant() is
-        "MASTERID" or "ALTERID" or "REMOTEID" or "VCHKEY" or "OBJGUID" or
+        "MASTERID" or "ALTERID" or "REMOTEID" or "VCHKEY" or "OBJGUID" or "GUID" or
         "TAGVALUE" or "TAGNAME" or "LASTVCHID";
 
     private static string DeterministicGuid(string value)
