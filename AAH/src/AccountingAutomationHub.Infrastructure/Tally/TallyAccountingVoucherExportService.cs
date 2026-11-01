@@ -17,6 +17,7 @@ using AccountingAutomationHub.Domain.Purchases;
 using AccountingAutomationHub.Domain.Sales;
 using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Journals;
+using AccountingAutomationHub.Infrastructure.Masters;
 using AccountingAutomationHub.Infrastructure.Governance;
 using AccountingAutomationHub.Infrastructure.Persistence;
 
@@ -909,7 +910,8 @@ public sealed class TallyAccountingVoucherExportService
         ClientProfile client,
         TallyCompanyInfo company,
         DateTime fromDate,
-        DateTime toDate)
+        DateTime toDate,
+        bool offlineConsolidatedBranchSource = false)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(company);
@@ -969,7 +971,8 @@ public sealed class TallyAccountingVoucherExportService
             stockGroups,
             stockCategories,
             godowns,
-            costCentres);
+            costCentres,
+            offlineConsolidatedBranchSource: offlineConsolidatedBranchSource);
 
         return new TallyLiveAccountingXmlSnapshot
         {
@@ -3120,7 +3123,8 @@ public sealed class TallyAccountingVoucherExportService
         IReadOnlyCollection<StockSimpleMasterRecord> costCentres,
         IReadOnlySet<string>? freshLiveLedgerKeys = null,
         IReadOnlySet<string>? freshLiveGroupKeys = null,
-        bool enforceFreshLiveMasterPreflight = false)
+        bool enforceFreshLiveMasterPreflight = false,
+        bool offlineConsolidatedBranchSource = false)
     {
         var builder = new StringBuilder();
         // Proven workbook modXMLWriter: one All Masters envelope, masters first, vouchers second.
@@ -3129,7 +3133,8 @@ public sealed class TallyAccountingVoucherExportService
         var requiredLedgers = BuildRequiredLedgers(vouchers, masters);
         AppendRequiredAccountingMasters(
             builder, gstApplicableFrom, requiredLedgers, masters, bankAccounts,
-            freshLiveLedgerKeys, freshLiveGroupKeys, enforceFreshLiveMasterPreflight);
+            freshLiveLedgerKeys, freshLiveGroupKeys, enforceFreshLiveMasterPreflight,
+            offlineConsolidatedBranchSource);
         AppendRequiredStockMasters(builder, gstApplicableFrom, vouchers, stockItems, stockItemUnitProfiles, stockUnits, stockGroups, stockCategories, godowns, costCentres);
         foreach (var voucher in vouchers) AppendVoucher(builder, voucher);
         TallyExcelParityXmlWriter.EndAllMastersImport(builder);
@@ -3415,7 +3420,8 @@ public sealed class TallyAccountingVoucherExportService
         IReadOnlyCollection<BankAccountRecord> bankAccounts,
         IReadOnlySet<string>? freshLiveLedgerKeys,
         IReadOnlySet<string>? freshLiveGroupKeys,
-        bool enforceFreshLiveMasterPreflight)
+        bool enforceFreshLiveMasterPreflight,
+        bool offlineConsolidatedBranchSource = false)
     {
         var groups = masters
             .Where(master => master.Type.Equals("Group", StringComparison.OrdinalIgnoreCase) && master.Name.Trim().Length > 0)
@@ -3443,6 +3449,13 @@ public sealed class TallyAccountingVoucherExportService
         foreach (var group in OrderRequiredGroups(requiredGroups.Values, groups))
         {
             if (liveGroups.Contains(TallyMasterKey(group.Name))) continue;
+            // Only an offline, private-branch SOURCE preview may treat AAH's
+            // exact canonical Tally built-in groups as pre-existing. This
+            // does NOT grant live master authority to an actual Tally import:
+            // the consolidated destination still performs fresh master readback.
+            // Never CREATE a built-in or silently accept a changed parent.
+            if (offlineConsolidatedBranchSource && IsCanonicalOfflineTallyBuiltInGroup(group))
+                continue;
             if (!IsLocalTallyCreateMaster(group))
                 throw new InvalidOperationException(
                     $"Required Group '{group.Name}' is not live in Tally and is sourced from '{group.Source}'. " +
@@ -3517,6 +3530,19 @@ public sealed class TallyAccountingVoucherExportService
             // a whole batch from reaching Tally with missing accounting masters.
             if (existing is null)
             {
+                // Only the TWO exact standard Tally ledger definitions are safe
+                // to stage as source XML templates without a branch Tally link.
+                // The consolidated XML builder will rename them beneath their
+                // mandatory branch group. All local/foreign party, bank, tax and
+                // custom ledger metadata still needs a complete source record.
+                if (offlineConsolidatedBranchSource && candidates.Length == 1 &&
+                    IsCanonicalOfflineTallyBuiltInLedger(candidates[0]) &&
+                    TallyMasterKey(ledger.Parent).Equals(
+                        TallyMasterKey(candidates[0].Parent), StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendLedgerMaster(builder, ledger, null, applicableFrom, "Create");
+                    continue;
+                }
                 if (enforceFreshLiveMasterPreflight)
                     throw new InvalidOperationException(
                         $"Required Ledger '{ledger.Name}' is not live in Tally and has no local Master eligible for CREATE.");
@@ -3571,6 +3597,30 @@ public sealed class TallyAccountingVoucherExportService
         }
         return required.OrderBy(Depth).ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray();
     }
+
+    private static readonly IReadOnlyDictionary<string, string> OfflineTallyBuiltinGroupParents =
+        MasterSynchronizationService.StandardStructure("AAH offline branch source")
+            .Where(master => master.Type.Equals("Group", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(master => TallyMasterKey(master.Name),
+                master => TallyMasterKey(master.Parent), StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, string> OfflineTallyBuiltinLedgerParents =
+        MasterSynchronizationService.StandardStructure("AAH offline branch source")
+            .Where(master => master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(master => TallyMasterKey(master.Name),
+                master => TallyMasterKey(master.Parent), StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsCanonicalOfflineTallyBuiltInGroup(MasterRecord master) =>
+        master.Type.Equals("Group", StringComparison.OrdinalIgnoreCase) &&
+        master.Source.Equals("Standard hierarchy", StringComparison.OrdinalIgnoreCase) &&
+        OfflineTallyBuiltinGroupParents.TryGetValue(TallyMasterKey(master.Name), out var parent) &&
+        parent.Equals(TallyMasterKey(master.Parent), StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsCanonicalOfflineTallyBuiltInLedger(MasterRecord master) =>
+        master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+        master.Source.Equals("Standard hierarchy", StringComparison.OrdinalIgnoreCase) &&
+        OfflineTallyBuiltinLedgerParents.TryGetValue(TallyMasterKey(master.Name), out var parent) &&
+        parent.Equals(TallyMasterKey(master.Parent), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsLiveTallyMaster(MasterRecord master) =>
         master.Source.Contains("Tally", StringComparison.OrdinalIgnoreCase);
