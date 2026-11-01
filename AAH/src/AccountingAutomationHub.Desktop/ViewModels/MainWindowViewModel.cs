@@ -2379,6 +2379,7 @@ public sealed class MainWindowViewModel :
 
         var identities = new List<TallyBranchMasterIdentity>();
         var branchSources = new List<TallyPreparedBranchXml>();
+        var skippedOptionalSourceLinks = 0;
         // This is the same Tally HTTP service as the Dashboard, not another
         // connection. Read original master XML only for linked OPEN branch
         // companies, to preserve complete party/GST/bank master definitions.
@@ -2429,13 +2430,19 @@ public sealed class MainWindowViewModel :
             // private ClientId/FY, not by a separate Tally company. A source
             // Tally link is OPTIONAL. Only the consolidated destination must
             // be linked to Tally for the final import.
-            var sourceLink = _tallyRepository.GetLinkForClient(child.Id);
+            var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
             var statusPath = Path.Combine(Path.GetDirectoryName(existing[0])!,
                 "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
             var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
+            // AAH's own ClientId/FY and generated XML are the branch source
+            // authority. Its older optional Tally link may belong to another
+            // FY/company and must not veto the saved branch's prepared vouchers.
             var sourceCompany = TallyConsolidatedBranchSourcePolicy.Validate(
-                xml, statusText, child.ClientCode, financialYear,
-                company, sourceLink);
+                xml, statusText, child.ClientCode, financialYear, company, null);
+            var sourceLink = TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                savedSourceLink, child.Id, financialYear, company, sourceCompany);
+            if (savedSourceLink is not null && sourceLink is null)
+                skippedOptionalSourceLinks++;
 
             var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
             // A separate branch Tally company is NOT required. If one is
@@ -2477,6 +2484,8 @@ public sealed class MainWindowViewModel :
         {
             Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
                      $"matched {result.InterbankReconciled} explicit interbank transfers. " +
+                     (skippedOptionalSourceLinks == 0 ? "" :
+                         $"Ignored {skippedOptionalSourceLinks} unrelated/outdated optional branch Tally link(s). ") +
                      "XML preview saved to: " + destination +
                      ". No Tally import was sent; duplicate/version/readback gate still required."
         };

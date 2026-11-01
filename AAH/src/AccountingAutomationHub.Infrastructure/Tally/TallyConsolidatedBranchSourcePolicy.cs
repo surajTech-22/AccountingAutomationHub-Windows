@@ -11,6 +11,31 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 public static class TallyConsolidatedBranchSourcePolicy
 {
+    /// <summary>
+    /// The private branch ClientId/FY and prepared XML are authoritative.
+    /// A previously saved branch Tally link is merely optional extra master
+    /// metadata. Never let an obsolete FY, mismatched company, or link to
+    /// the writable consolidated target block source-owned XML or contribute
+    /// masters/MASTERIDs to the destination company.
+    /// This selection is read-only: keep the original saved link unchanged.
+    /// </summary>
+    public static TallyClientLink? SelectOptionalLiveSourceLink(
+        TallyClientLink? saved, long branchClientId, string financialYear,
+        TallyCompanyInfo destination, string preparedXmlCompany)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (saved is null || branchClientId <= 0 ||
+            saved.ClientId != branchClientId ||
+            string.IsNullOrWhiteSpace(saved.CompanyKey) ||
+            string.IsNullOrWhiteSpace(saved.CompanyName) ||
+            !saved.FinancialYear.Trim().Equals(financialYear.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            saved.CompanyKey.Trim().Equals(destination.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !saved.CompanyName.Trim().Equals(preparedXmlCompany.Trim(), StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return saved;
+    }
+
     public static string Validate(
         string preparedXml, string? statusText, string branchClientCode,
         string financialYear, TallyCompanyInfo destination,
