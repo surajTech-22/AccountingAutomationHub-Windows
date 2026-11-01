@@ -137,7 +137,9 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
             Xml = "<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA><TALLYMESSAGE>" +
                   Voucher("Karnataka GST") +
                   "</TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>",
-            Selected = 1, Ready = 1
+            Selected = 1, Ready = 1,
+            SourceAnchors = ["AAH|GSTJ|101|2025-26|2025-04"],
+            SourceEntityTypes = ["GST Journal"]
         };
         var adapted = TallyConsolidatedSourcePreviewAdapter.Extract(Ka, savedXml,
         [
@@ -146,7 +148,7 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
         ], "Karnataka");
         Check(adapted.Vouchers.Count == 1 && adapted.Ledgers.Count == 2 &&
               adapted.Vouchers.Single().IsSavedSource &&
-              adapted.Vouchers.Single().SourceAnchor.Length == 64,
+              adapted.Vouchers.Single().SourceAnchor == "AAH|GSTJ|101|2025-26|2025-04",
             "Already-prepared source vouchers must be read without generating GST journals.");
         var wrongParent = TallyConsolidatedSourcePreviewAdapter.Extract(Ka,
             savedXml, [new MasterRecord { Type = "Ledger", Name = "Customer A", Parent = "Primary" },
