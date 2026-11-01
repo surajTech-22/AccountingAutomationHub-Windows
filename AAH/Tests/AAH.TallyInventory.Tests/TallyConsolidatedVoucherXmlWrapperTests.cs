@@ -46,8 +46,13 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
         TallyConsolidatedTransferKind kind = TallyConsolidatedTransferKind.Ordinary,
         bool matched = false) => new(branch, OriginalLedgers,
         [
-            new("Sales", "DOCUMENT-1", voucher, true, true, unit, kind, matched, "MATCH-001")
-        ]);
+            new("Sales", "DOCUMENT-1",
+                branch.BranchId == Tn.BranchId
+                    ? voucher.Replace("<CMPGSTSTATE>Karnataka</CMPGSTSTATE>",
+                        "<CMPGSTSTATE>Tamil Nadu</CMPGSTSTATE>", StringComparison.Ordinal)
+                    : voucher,
+                true, true, unit, kind, matched, "MATCH-001")
+        ], branch.BranchId == Tn.BranchId ? "Tamil Nadu" : "Karnataka");
 
     private static void Check(bool condition, string error)
     {
@@ -138,7 +143,7 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
         [
             new MasterRecord { Type = "Ledger", Name = "Customer A", Parent = "Sundry Debtors" },
             new MasterRecord { Type = "Ledger", Name = "Sales Local", Parent = "Sales Accounts" }
-        ]);
+        ], "Karnataka");
         Check(adapted.Vouchers.Count == 1 && adapted.Ledgers.Count == 2 &&
               adapted.Vouchers.Single().IsSavedSource &&
               adapted.Vouchers.Single().SourceAnchor.Length == 64,
