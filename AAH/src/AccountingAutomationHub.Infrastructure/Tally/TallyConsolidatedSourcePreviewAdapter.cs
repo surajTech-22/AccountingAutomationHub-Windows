@@ -16,7 +16,7 @@ public static class TallyConsolidatedSourcePreviewAdapter
     public static TallyConsolidatedBranchXmlInput Extract(
         TallyBranchMasterIdentity branch,
         TallyLiveAccountingXmlSnapshot prepared,
-        IReadOnlyCollection<MasterRecord> savedBranchMasters)
+        IReadOnlyCollection<MasterRecord> savedBranchMasters, string sourceState = "")
     {
         ArgumentNullException.ThrowIfNull(branch);
         ArgumentNullException.ThrowIfNull(prepared);
@@ -86,7 +86,7 @@ public static class TallyConsolidatedSourcePreviewAdapter
             return new TallyConsolidatedSourceLedger(name, saved[0].Parent.Trim());
         }).ToArray();
 
-        return new TallyConsolidatedBranchXmlInput(branch, ledgers, vouchers);
+        return new TallyConsolidatedBranchXmlInput(branch, ledgers, vouchers, sourceState);
     }
 
     private static int UnverifiedSourceRecordCount(this TallyLiveAccountingXmlSnapshot prepared) =>
