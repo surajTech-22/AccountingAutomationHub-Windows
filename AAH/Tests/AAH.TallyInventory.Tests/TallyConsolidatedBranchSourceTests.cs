@@ -70,6 +70,43 @@ internal static class TallyConsolidatedBranchSourceTests
         Check(TallyConsolidatedBranchSourcePolicy.Validate(
             PreparedXml, SourceStatus, "CL-KA", "2025-26", Destination, ownLink) == "Working Company",
             "Optional genuine branch Tally link was rejected.");
+        Check(ReferenceEquals(
+            TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                ownLink, 101, "2025-26", Destination, "Working Company"), ownLink),
+            "A fresh matching branch link was unnecessarily discarded.");
+
+        // The real consolidated screenshot had a verified parent FY 2025-26,
+        // but an older optional branch link held a DIFFERENT FY. That link
+        // must not block source-owned branch XML and cannot lend old masters.
+        var staleFy = new TallyClientLink
+        {
+            ClientId = 101, CompanyKey = "ka-branch",
+            CompanyName = "Working Company", FinancialYear = "2024-25"
+        };
+        var validSourceCompany = TallyConsolidatedBranchSourcePolicy.Validate(
+            PreparedXml, SourceStatus, "CL-KA", "2025-26", Destination, null);
+        Check(validSourceCompany == "Working Company" &&
+            TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                staleFy, 101, "2025-26", Destination, validSourceCompany) is null,
+            "A stale branch Tally FY must be ignored, not used for master readback or block prepared XML.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            ownLink, 102, "2025-26", Destination, validSourceCompany) is null,
+            "A source Tally link from another private branch was accepted.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            ownLink, 101, "2025-26", Destination, "Different Company") is null,
+            "A source Tally link mismatching the prepared branch XML was accepted.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            new TallyClientLink
+            {
+                ClientId = 101, CompanyKey = "consolidated-1",
+                CompanyName = "Working Company", FinancialYear = "2025-26"
+            }, 101, "2025-26", Destination, validSourceCompany) is null,
+            "The writable consolidated Tally company was used as a branch master source.");
+        // Ownership still cannot be bypassed by changing the status/FY,
+        // even when no optional source Tally link is available.
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            PreparedXml, "Client: CL-KA | FY 2024-25", "CL-KA", "2025-26",
+            Destination, null), "A stale source-owned branch XML FY was accepted.");
         Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
             PreparedXml, SourceStatus, "CL-KA", "2025-26", Destination,
             new TallyClientLink
@@ -79,6 +116,21 @@ internal static class TallyConsolidatedBranchSourceTests
                 CompanyName = "Working Company",
                 FinancialYear = "2025-26"
             }), "consolidated target reused as source link");
+        // Tally may omit FinancialYear in an otherwise correctly linked live
+        // company. The Dashboard should show the saved Client/FY, explicitly
+        // labelled as AAH-linked, rather than an unexplained dash.
+        DirectoryInfo? root = new DirectoryInfo(Environment.CurrentDirectory);
+        while (root is not null &&
+            !File.Exists(Path.Combine(root.FullName, "AAH", "src",
+                "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs")))
+            root = root.Parent;
+        Check(root is not null, "Dashboard source missing for linked-FY display regression.");
+        var dashboard = File.ReadAllText(Path.Combine(root!.FullName, "AAH",
+            "src", "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+        Check(dashboard.Contains("!string.IsNullOrWhiteSpace(openCompany?.FinancialYear)", StringComparison.Ordinal)
+            && dashboard.Contains("link.FinancialYear + \" (AAH-linked)\"", StringComparison.Ordinal),
+            "Missing safe FY fallback when the live Tally company omits FY metadata.");
+
         Console.WriteLine("PASS: source-owned Karnataka/Gujarat XML needs no separate Tally company link.");
     }
 }

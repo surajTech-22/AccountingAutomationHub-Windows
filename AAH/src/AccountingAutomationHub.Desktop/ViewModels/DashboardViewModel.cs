@@ -2808,7 +2808,15 @@ public sealed class DashboardViewModel :
     {
         TallyCompanyName = EmptyToDash(openCompany?.Name ?? link.CompanyName);
         TallyCompanyGstin = EmptyToDash(openCompany?.Gstin ?? link.Gstin);
-        TallyCompanyFinancialYear = EmptyToDash(openCompany?.FinancialYear ?? link.FinancialYear);
+        // Some genuine Tally live-company responses omit FY metadata while the
+        // saved Client/FY link remains authoritative for AAH export scoping.
+        // Do not coalesce only null here: empty live values also need fallback.
+        // Mark the fallback so it is not mistaken for Tally-reported metadata.
+        TallyCompanyFinancialYear = !string.IsNullOrWhiteSpace(openCompany?.FinancialYear)
+            ? openCompany.FinancialYear
+            : !string.IsNullOrWhiteSpace(link.FinancialYear)
+                ? link.FinancialYear + " (AAH-linked)"
+                : "—";
         TallyCompanyState = EmptyToDash(openCompany?.StateName ?? link.StateName);
         TallyCompanyNumber = EmptyToDash(openCompany?.CompanyNumber ?? link.CompanyNumber);
         TallyCompanyBooksPeriod = BuildBooksPeriod(
