@@ -78,6 +78,35 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
 
+        // Branch vouchers may refer to already-live Tally ledgers whose CREATE
+        // declaration is absent from the normal prepared XML. The original
+        // branch's full Tally master data is used without recreating GST data.
+        var withoutBuyerDoc = XDocument.Parse(a.Xml);
+        withoutBuyerDoc.Descendants("TALLYMESSAGE")
+            .Where(x => (string?)x.Element("LEDGER")?.Attribute("NAME") == "Buyer")
+            .Remove();
+        const string fullBuyer = """
+            <AAHMASTEREXPORT><RESPONSE><LEDGER NAME="Buyer">
+              <NAME>Buyer</NAME><PARENT>Sundry Debtors</PARENT>
+              <MASTERID>305</MASTERID><TAXTYPE>Others</TAXTYPE>
+              <MAILINGNAME>Buyer Original</MAILINGNAME>
+              <GSTIN>29ABCDE1234F1Z5</GSTIN><COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+              <STATE>KA</STATE><LEDGSTREGDETAILS.LIST><GSTIN>29ABCDE1234F1Z5</GSTIN></LEDGSTREGDETAILS.LIST>
+            </LEDGER></RESPONSE></AAHMASTEREXPORT>
+            """;
+        var liveMasterCase = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = withoutBuyerDoc.ToString(), SourceLiveMastersXml = fullBuyer }, b ]);
+        var detailed = XDocument.Parse(liveMasterCase.MastersXml).Descendants("LEDGER").Single(x =>
+            (string?)x.Element("NAME") == "Buyer - Karnataka");
+        Check(detailed.Element("MASTERID") is null &&
+              (string?)detailed.Element("PARENT") == "Karnataka Debtors" &&
+              detailed.Descendants("GSTIN").Any(x => x.Value == "29ABCDE1234F1Z5"),
+              "Original GST ledger metadata or branch Tally MASTERID handling failed.");
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = withoutBuyerDoc.ToString(),
+                SourceLiveMastersXml = @"<RESPONSE><LEDGER NAME=""Buyer""><NAME>Buyer</NAME><PARENT>Sundry Debtors</PARENT><MASTERID>305</MASTERID></LEDGER></RESPONSE>" }, b ]),
+            "a thin live ledger collection cannot replace complete GST/party source metadata");
+
         // Inventory values and tax preparation are also source-owned. Only
         // the stock MASTER identity is namespaced for the destination company.
         string WithStock(string original) => original
