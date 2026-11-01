@@ -2385,7 +2385,12 @@ public sealed class MainWindowViewModel :
             sourceIdentities, liveMasters, freshDestinationMasterAuthorityVerified: true,
             separateVoucherTypes: separateVoucherTypes,
             separateCashLedgers: separateCashLedgers,
-            eligibleVoucherTypes: separateVoucherTypes ? types : null);
+            eligibleVoucherTypes: separateVoucherTypes ? types : null) with
+        {
+            // TallyPrime 3.0+ can hold multiple GST Tax Units. Reconcile by
+            // the exact live GSTRegNumber and MASTERID, not display name alone.
+            VerifiedTaxUnits = TallyConsolidatedTaxUnitAuthorityReader.Parse(liveMasterXml)
+        };
         var prepared = TallyConsolidatedVoucherXmlWrapper.Prepare(
             masterPlan, branchInputs, liveMasters, destinationMasterAuthorityVerified: true);
 
