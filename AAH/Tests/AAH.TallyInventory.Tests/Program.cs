@@ -330,6 +330,7 @@ internal static class Program
         TallyBranchMasterImportContractTests.Run();
         TallyConsolidatedPreparedXmlTests.Run();
         TallyConsolidatedBranchSourceTests.Run();
+        TallyConsolidatedXmlTextSafetyTests.Run();
         Console.WriteLine($"PASS: {_passed}/{_passed} production Tally inventory regressions.");
     }
 }
