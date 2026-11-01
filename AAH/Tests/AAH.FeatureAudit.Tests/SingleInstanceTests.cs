@@ -37,6 +37,31 @@ internal static class SingleInstanceTests
             candidate.ReleaseMutex();
         }
         finally { abandoned?.Dispose(); }
+        Check(AppExitPolicy.ShouldCleanupRuntime(isOwner: true), "Primary owner lost its cleanup obligation.");
+        Check(!AppExitPolicy.ShouldCleanupRuntime(isOwner: false),
+            "Secondary instance must not checkpoint the live owner's SQLite database.");
+        Check(AppExitPolicy.CanExitCompletely(false, false, false), "Idle tray exit was blocked.");
+        Check(!AppExitPolicy.CanExitCompletely(true, false, false), "Busy Tally was interrupted.");
+        Check(!AppExitPolicy.CanExitCompletely(false, true, false), "Active auto import was interrupted.");
+        Check(!AppExitPolicy.CanExitCompletely(false, false, true), "Distributed import was interrupted.");
+
+        // UI/source contract: the window must offer a direct Exit route even if
+        // Windows Explorer loses the tray icon. Closing X still hides to tray.
+        var source = new DirectoryInfo(Environment.CurrentDirectory);
+        while (source is not null &&
+               !File.Exists(Path.Combine(source.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "App.xaml.cs")))
+            source = source.Parent;
+        Check(source is not null, "Could not find desktop source for exit integration regression.");
+        var app = File.ReadAllText(Path.Combine(source!.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "App.xaml.cs"));
+        var window = File.ReadAllText(Path.Combine(source.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "MainWindow.xaml"));
+        Check(app.Contains("exitItem.Click += (_, _) => Dispatcher.BeginInvoke(new Action(RequestExitCompletely));", StringComparison.Ordinal) &&
+              app.Contains("Environment.Exit(0);", StringComparison.Ordinal) &&
+              app.Contains("AppExitPolicy.ShouldCleanupRuntime(_ownsSingleInstanceMutex)", StringComparison.Ordinal) &&
+              window.Contains("Click=\"ExitCompletely_Click\"", StringComparison.Ordinal) &&
+              window.Contains("Click=\"Close_Click\"", StringComparison.Ordinal),
+              "Missing independent tray/window Exit, secondary termination, or owner-only cleanup.");
+
+        Console.WriteLine("PASS: primary-only cleanup, no ghost secondary, independent tray/window Exit and safe busy gate.");
         Console.WriteLine("PASS existing-unowned mutex, live-owner exclusion and abandoned-owner restart.");
     }
 }

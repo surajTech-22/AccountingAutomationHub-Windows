@@ -923,6 +923,12 @@ public partial class MainWindow : Window
         RoutedEventArgs e) =>
         Close();
 
+    private void ExitCompletely_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.Application.Current is App app)
+            app.RequestExitCompletely();
+    }
+
     private void ToggleMaximizeRestore() =>
         WindowState = WindowState == WindowState.Maximized
             ? WindowState.Normal
