@@ -315,7 +315,15 @@ var tallyPageView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "s
     "AccountingAutomationHub.Desktop", "Views", "ConsolidatedTallyImportView.xaml"));
 var appTemplates = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "App.xaml"));
-Check(shellModel.Contains("new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel)", StringComparison.Ordinal) &&
+Check(shellModel.Contains("new ConsolidatedTallyImportViewModel(", StringComparison.Ordinal) &&
+      shellModel.Contains("PrepareConsolidatedXmlPreviewAsync(client.Id, client.FinancialYear, types, cash)", StringComparison.Ordinal) &&
+      tallyPageModel.Contains("PrepareXmlPreviewCommand", StringComparison.Ordinal) &&
+      tallyPageView.Contains("Command=\"{Binding PrepareXmlPreviewCommand}\"", StringComparison.Ordinal) &&
+      shellModel.Contains("_tallyAccountingExportService.GenerateLiveXml(", StringComparison.Ordinal) &&
+      shellModel.Contains("_tallyHttpService.ExportMastersAsync(company)", StringComparison.Ordinal) &&
+      shellModel.Contains("TallyConsolidatedSourcePreviewAdapter.Extract(", StringComparison.Ordinal) &&
+      shellModel.Contains("TallyConsolidatedVoucherXmlWrapper.Prepare(", StringComparison.Ordinal) &&
+      shellModel.Contains("AAH-Consolidated-Tally-Previews", StringComparison.Ordinal) &&
       shellModel.Contains("new NavigationItem(\"Tally Import\"", StringComparison.Ordinal) &&
       shellModel.Contains("() => _consolidatedTallyImportPage!", StringComparison.Ordinal) &&
       shellModel.Contains("if (NavigationItems.Count == choices.Count", StringComparison.Ordinal) &&
