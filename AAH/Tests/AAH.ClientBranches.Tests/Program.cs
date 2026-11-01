@@ -315,7 +315,9 @@ var tallyPageView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "s
     "AccountingAutomationHub.Desktop", "Views", "ConsolidatedTallyImportView.xaml"));
 var appTemplates = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "App.xaml"));
-Check(shellModel.Contains("new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel)", StringComparison.Ordinal) &&
+Check(shellModel.Contains("new ConsolidatedTallyImportViewModel(\\n                        client.Id, client.FinancialYear, _dashboardViewModel,", StringComparison.Ordinal) &&
+       shellModel.Contains("ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash)", StringComparison.Ordinal) &&
+       shellModel.Contains("GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash)", StringComparison.Ordinal) &&
       shellModel.Contains("new NavigationItem(\"Tally Import\"", StringComparison.Ordinal) &&
       shellModel.Contains("() => _consolidatedTallyImportPage!", StringComparison.Ordinal) &&
       shellModel.Contains("if (NavigationItems.Count == choices.Count", StringComparison.Ordinal) &&
