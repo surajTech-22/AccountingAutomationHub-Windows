@@ -327,6 +327,7 @@ internal static class Program
             Check(b.Length == 0, "An empty inventory dependency set created a Master.");
         });
         TallyBranchMasterPlannerTests.Run();
+        TallyConsolidatedVoucherXmlWrapperTests.Run();
         Console.WriteLine($"PASS: {_passed}/{_passed} production Tally inventory regressions.");
     }
 }
