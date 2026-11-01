@@ -10,7 +10,7 @@ on:
       release_tag:
         description: 'Existing stable release to re-notify (does not rebuild or reinstall)'
         required: true
-        default: 'v4.0.0.534'
+        default: 'v4.0.0.551'
         type: string
 
 permissions:
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   resend:
-    if: ${{ github.repository == 'surajTech-22/AccountingAutomationHub-Windows' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[AAH-RESEND-v4.0.0.534]')) }}
+    if: ${{ github.repository == 'surajTech-22/AccountingAutomationHub-Windows' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[AAH-RESEND-v4.0.0.551]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -26,7 +26,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag || 'v4.0.0.534' }}
+          RELEASE_TAG: ${{ inputs.release_tag || 'v4.0.0.551' }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag'; exit 1; }
