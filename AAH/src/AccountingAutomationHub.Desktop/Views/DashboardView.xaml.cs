@@ -44,6 +44,19 @@ public partial class DashboardView : UserControl
         set => SetValue(TallyOnlyModeProperty, value);
     }
 
+    // Projection of group-specific commands only. DashboardView's DataContext
+    // always remains the existing, linked, authoritative DashboardViewModel.
+    public static readonly DependencyProperty ConsolidatedImportWorkspaceProperty =
+        DependencyProperty.Register(nameof(ConsolidatedImportWorkspace),
+            typeof(ConsolidatedTallyImportViewModel), typeof(DashboardView),
+            new PropertyMetadata(null));
+
+    public ConsolidatedTallyImportViewModel? ConsolidatedImportWorkspace
+    {
+        get => (ConsolidatedTallyImportViewModel?)GetValue(ConsolidatedImportWorkspaceProperty);
+        set => SetValue(ConsolidatedImportWorkspaceProperty, value);
+    }
+
     public DashboardView()
     {
         InitializeComponent();
