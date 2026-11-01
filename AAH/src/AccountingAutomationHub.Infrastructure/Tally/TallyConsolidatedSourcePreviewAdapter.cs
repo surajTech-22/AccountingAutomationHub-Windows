@@ -22,7 +22,9 @@ public static class TallyConsolidatedSourcePreviewAdapter
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(savedBranchMasters);
         if (prepared.Unsupported > 0 || prepared.MissingLedgers > 0 ||
-            prepared.ConflictsBlocked > 0 || prepared.UnverifiedSourceRecordCount() > 0)
+            prepared.ConflictsBlocked > 0 || prepared.RepeatedSourceCandidatesSkipped > 0 ||
+            prepared.ExactDuplicatesSkipped > 0 ||
+            prepared.Selected != prepared.Ready)
             throw new InvalidOperationException("Source branch has unresolved accounting/master conflicts; cannot silently omit them from Consolidated.");
         if (string.IsNullOrWhiteSpace(prepared.Xml))
             throw new InvalidOperationException("Branch accounting preview is unavailable.");
@@ -90,6 +92,4 @@ public static class TallyConsolidatedSourcePreviewAdapter
         return new TallyConsolidatedBranchXmlInput(branch, ledgers, vouchers, sourceState);
     }
 
-    private static int UnverifiedSourceRecordCount(this TallyLiveAccountingXmlSnapshot prepared) =>
-        prepared.Ready < 0 || prepared.Selected < prepared.Ready ? 1 : 0;
 }
