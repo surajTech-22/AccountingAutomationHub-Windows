@@ -28,11 +28,7 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         ArgumentNullException.ThrowIfNull(link);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(prepared);
-        if (link.ClientId <= 0 ||
-            !IgnoreCase.Equals(link.CompanyKey, destination.CompanyKey) ||
-            !IgnoreCase.Equals(link.CompanyName, destination.Name) ||
-            !IgnoreCase.Equals(link.FinancialYear, destination.FinancialYear))
-            throw new InvalidOperationException("Consolidated destination Tally link or financial year changed.");
+        var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(link, destination);
 
         var masterDoc = XDocument.Parse(prepared.MastersXml, LoadOptions.None);
         var voucherDoc = XDocument.Parse(prepared.VouchersXml, LoadOptions.None);
@@ -76,7 +72,7 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         if (open.Count(x => IgnoreCase.Equals(x.CompanyKey, destination.CompanyKey) &&
                             IgnoreCase.Equals(x.Name, destination.Name)) != 1)
             throw new InvalidOperationException("The exact linked consolidated Tally company is not uniquely open.");
-        if (!int.TryParse(destination.FinancialYear[..Math.Min(4, destination.FinancialYear.Length)],
+        if (!int.TryParse(financialYear[..Math.Min(4, financialYear.Length)],
             NumberStyles.None, CultureInfo.InvariantCulture, out var firstYear) ||
             firstYear < 1900 || firstYear > 9998)
             throw new InvalidOperationException("Cannot confirm the destination financial-year voucher authority.");

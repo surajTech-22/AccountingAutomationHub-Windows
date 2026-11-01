@@ -3,50 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views"
              Background="{DynamicResource AppBackgroundBrush}">
-    <Grid Margin="18,12,18,0">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <StackPanel Margin="0,0,0,8">
-            <TextBlock Text="Consolidated · Tally Import" FontSize="20" FontWeight="SemiBold"/>
-            <TextBlock Text="Uses the original Dashboard Tally Link. Consolidated Export uses the branch-prepared XML and verifies live master and voucher readback. The normal parent-client voucher exporter remains unavailable."
-                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
-                       FontSize="11" Margin="0,5,0,0"/>
-        </StackPanel>
-        <Border Grid.Row="1" BorderThickness="1" CornerRadius="8"
-                BorderBrush="{DynamicResource TextSecondaryBrush}" Padding="12" Margin="0,4,0,10">
-            <StackPanel>
-                <TextBlock Text="Branch master import" FontWeight="SemiBold" FontSize="14"/>
-                <TextBlock Text="Branch accounting groups are compulsory. Create only missing masters after checking the live linked Tally company."
-                           Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,8"/>
-                <WrapPanel>
-                    <CheckBox Content="Separate voucher types for each branch (optional)"
-                              IsChecked="{Binding SeparateVoucherTypes, Mode=TwoWay}"
-                              VerticalAlignment="Center" Margin="0,0,18,8"/>
-                    <CheckBox Content="Separate branch cash ledgers (optional)"
-                              IsChecked="{Binding SeparateCashLedgers, Mode=TwoWay}"
-                              VerticalAlignment="Center" Margin="0,0,0,8"/>
-                </WrapPanel>
-                <Button Content="Import / verify branch masters in linked Tally"
-                        Command="{Binding ImportBranchMastersCommand}"
-                        HorizontalAlignment="Left" Padding="12,7"/>
-                <TextBlock Text="{Binding MasterImportStatus}" TextWrapping="Wrap"
-                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
-                <Button Content="Generate consolidated XML from prepared branch vouchers"
-                        Command="{Binding PrepareConsolidatedXmlCommand}"
-                        HorizontalAlignment="Left" Padding="12,7" Margin="0,12,0,0"/>
-                <TextBlock Text="{Binding PreparedXmlStatus}" TextWrapping="Wrap"
-                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
-                <Button Content="Export verified consolidated vouchers to Tally"
-                        Command="{Binding ImportConsolidatedVouchersCommand}"
-                        HorizontalAlignment="Left" Padding="12,7" Margin="0,12,0,0"/>
-                <TextBlock Text="{Binding VoucherImportStatus}" TextWrapping="Wrap"
-                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
-            </StackPanel>
-        </Border>
-        <views:DashboardView Grid.Row="2" TallyOnlyMode="True"
-                             DataContext="{Binding ExistingDashboardWorkspace}"/>
-    </Grid>
+    <!-- Reuse the ORIGINAL Tally Link + Export/Auto Sync card. The
+         consolidated commands belong at its existing Export position. -->
+    <views:DashboardView TallyOnlyMode="True"
+                         ConsolidatedImportWorkspace="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type views:ConsolidatedTallyImportView}}}"
+                         DataContext="{Binding ExistingDashboardWorkspace}"/>
 </UserControl>

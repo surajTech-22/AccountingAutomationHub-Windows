@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:iconPacks="http://metro.mahapps.com/winfx/xaml/iconpacks" x:Class="AccountingAutomationHub.Desktop.Views.DashboardView" Loaded="DashboardView_Loaded" Unloaded="DashboardView_Unloaded" PreviewMouseDown="DashboardView_PreviewMouseDown">
+﻿<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:iconPacks="http://metro.mahapps.com/winfx/xaml/iconpacks" x:Class="AccountingAutomationHub.Desktop.Views.DashboardView" x:Name="DashboardRoot" Loaded="DashboardView_Loaded" Unloaded="DashboardView_Unloaded" PreviewMouseDown="DashboardView_PreviewMouseDown">
     <UserControl.Resources>
         <Style x:Key="DashboardSecondaryButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
@@ -873,6 +873,51 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- Place consolidated actions at the ORIGINAL export control.
+                                     No standalone master import panel above the Tally link. -->
+                                <ContentControl Content="{Binding ConsolidatedImportWorkspace, ElementName=DashboardRoot}"
+                                                Margin="0,13,0,0">
+                                    <ContentControl.Style>
+                                        <Style TargetType="ContentControl">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ConsolidatedImportWorkspace, ElementName=DashboardRoot}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ContentControl.Style>
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <TextBlock Text="Consolidated Import to Tally" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                                <TextBlock Text="Uses this Tally link, original branch-prepared vouchers, and master-first readback. No GST or DR/CR recalculation."
+                                                           FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                           Margin="0,0,0,9"/>
+                                                <WrapPanel Margin="0,0,0,5">
+                                                    <CheckBox Content="Separate voucher types per branch (optional)"
+                                                              IsChecked="{Binding SeparateVoucherTypes, Mode=TwoWay}" Margin="0,0,18,5"/>
+                                                    <CheckBox Content="Separate branch cash ledgers (optional)"
+                                                              IsChecked="{Binding SeparateCashLedgers, Mode=TwoWay}" Margin="0,0,8,5"/>
+                                                </WrapPanel>
+                                                <WrapPanel>
+                                                    <Button Content="Import / Verify Branch Masters" Command="{Binding ImportBranchMastersCommand}"
+                                                            Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"/>
+                                                    <Button Content="Generate Consolidated XML" Command="{Binding PrepareConsolidatedXmlCommand}"
+                                                            Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"/>
+                                                    <Button Content="Export Consolidated to Tally" Command="{Binding ImportConsolidatedVouchersCommand}"
+                                                            Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,6"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="{Binding MasterImportStatus}" FontSize="10" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                                <TextBlock Text="{Binding PreparedXmlStatus}" FontSize="10" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
+                                                <TextBlock Text="{Binding VoucherImportStatus}" FontSize="10" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
                                 <WrapPanel Margin="0,13,0,0">
                                     <Button Content="Export Selected to Tally" Command="{Binding ExportSelectedToTallyCommand}" Margin="0,0,8,0">
                                         <Button.Style>
@@ -885,7 +930,7 @@
                                             </Style>
                                         </Button.Style>
                                     </Button>
-                                    <TextBlock Text="Consolidated vouchers: use Generate consolidated XML above. Normal client Export Selected cannot safely import combined branch vouchers."
+                                    <TextBlock Text="Consolidated vouchers use the original Tally panel and link. Parent client-only Export Selected cannot post grouped books."
                                                Width="590" TextWrapping="Wrap" FontSize="11"
                                                Foreground="{DynamicResource TextSecondaryBrush}">
                                         <TextBlock.Style>

@@ -235,13 +235,14 @@ public sealed class DashboardViewModel :
         if (_isConsolidatedTallyScope == active) return;
         _isConsolidatedTallyScope = active;
         OnPropertyChanged(nameof(IsConsolidatedTallyScope));
+        OnPropertyChanged(nameof(HasAnyTallyExportData));
         if (active)
         {
             Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
             Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
             Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
             IsTallyAutoSyncSettingsOpen = false;
-            TallyAutoSyncStatus = "Consolidated Tally link is available. Generate consolidated XML above; the normal client voucher exporter is not used for grouped books.";
+            TallyAutoSyncStatus = "Consolidated Tally link is available. Use Consolidated Import in the existing Tally Export panel; branch-prepared voucher values remain authoritative.";
         }
         if (_clientContext.CurrentClient is { } current)
             _tallyCoordinator.SetOutboundAutoSyncEnabled(current,
@@ -680,7 +681,8 @@ public sealed class DashboardViewModel :
     public bool HasSalesExportData => SalesTallyExportMonths.Any(option => option.SourceCount > 0);
     public bool HasCashExportData => CashTallyExportMonths.Any(option => option.SourceCount > 0);
     public bool HasJournalExportData => JournalTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasAnyTallyExportData => HasBankExportData || HasPurchaseExportData || HasSalesExportData ||
+    public bool HasAnyTallyExportData => IsConsolidatedTallyScope ||
+                                         HasBankExportData || HasPurchaseExportData || HasSalesExportData ||
                                          HasCashExportData || HasJournalExportData;
     public bool HasTallyMetrics => TallyMetrics.Count > 0;
     public bool HasTallyReportRows => TallyReportRows.Count > 0;
