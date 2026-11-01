@@ -243,12 +243,29 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     sourceDeclarations.Length == 0)
                     throw new InvalidOperationException("Neither prepared branch XML nor fresh original-company Tally export " +
                         "contains full master details for '" + original + "'. Cannot guess party/GST/bank metadata.");
-                // Prefer original prepared CREATE over live exporter duplicates.
+                // Prefer the original prepared CREATE. Otherwise use the
+                // richest source-company Tally object, NOT a thin collection
+                // stub that silently drops GST/party/bank details.
                 var preparedDeclaration = sourceDeclarations.FirstOrDefault(x =>
                     x.Parent is not null && Is(x.Parent, "TALLYMESSAGE") &&
                     Field(x, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase));
-                var sourceLedger = preparedDeclaration ?? sourceDeclarations[0];
+                var sourceLedger = preparedDeclaration ?? sourceDeclarations
+                    .OrderByDescending(x => x.Descendants().Count()).First();
                 var liveParent = Value(sourceLedger, "PARENT");
+                var authority = ledgerAuthority[original][0];
+                var foreignSourceId = Value(sourceLedger, "MASTERID");
+                if (authority.TallyMasterId.Trim().Length > 0 &&
+                    foreignSourceId.Length > 0 &&
+                    !foreignSourceId.Equals(authority.TallyMasterId.Trim(), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Original branch Ledger MASTERID changed before consolidation: " + original);
+                if (preparedDeclaration is null &&
+                    (sourceLedger.Descendants().Count() <= 7) &&
+                    (liveParent.Equals("Duties & Taxes", StringComparison.OrdinalIgnoreCase) ||
+                     liveParent.Equals("Sundry Debtors", StringComparison.OrdinalIgnoreCase) ||
+                     liveParent.Equals("Sundry Creditors", StringComparison.OrdinalIgnoreCase) ||
+                     liveParent.Equals("Bank Accounts", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("Full original GST/party/bank master metadata was not returned for '" +
+                        original + "'. A thin live collection is not a safe consolidated ledger template.");
                 if (!liveParent.Equals(ledgerAuthority[original][0].Parent, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Branch Ledger parent differs from source Master authority: " + original);
                 var ledger = new XElement(sourceLedger);
