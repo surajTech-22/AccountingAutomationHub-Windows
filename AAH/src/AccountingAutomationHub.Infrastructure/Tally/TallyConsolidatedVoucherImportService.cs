@@ -153,8 +153,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
                     expected.Number + ". No automatic retry is safe.");
             var full = after.Full.Where(x => IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
             if (full.Length != 1 || !SamePostings(expected.Postings,
-                    ReadPostings(XDocument.Parse(full[0].OriginalXml).Descendants()
-                        .First(x => Is(x, "VOUCHER")))))
+                    ReadPostings(XDocument.Parse(full[0].OriginalXml).Root!
+                        .DescendantsAndSelf().First(x => Is(x, "VOUCHER")))))
                 throw new InvalidOperationException("Live Tally DR/CR postings differ from branch XML for " +
                     expected.Number + ". Import stopped; inspect posted voucher before continuing.");
             imported++;
