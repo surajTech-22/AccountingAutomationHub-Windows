@@ -41,11 +41,11 @@ internal static class TallyBranchMasterImportContractTests
               "Optional voucher type must use live Tally authority.");
 
         Reject(() => TallyBranchConsolidationImportService.ReadLiveMasters(
-            xml.Replace("<MASTERID>101</MASTERID></GROUP>", "<MASTERID>999</MASTERID></GROUP>")),
+            xml.Replace("<GROUP NAME=\\"Karnataka Banks\\"><PARENT>Bank Accounts</PARENT><MASTERID>101</MASTERID></GROUP>", "<GROUP NAME=\\"Karnataka Banks\\"><PARENT>Bank Accounts</PARENT><MASTERID>999</MASTERID></GROUP>")),
             "same-name conflicting MASTERIDs");
         Reject(() => TallyBranchConsolidationImportService.ReadLiveMasters(
-            xml.Replace("<PARENT>Bank Accounts</PARENT><MASTERID>101</MASTERID></GROUP>",
-                        "<PARENT>Sundry Creditors</PARENT><MASTERID>101</MASTERID></GROUP>")),
+            xml.Replace("<GROUP NAME=\\"Karnataka Banks\\"><PARENT>Bank Accounts</PARENT><MASTERID>101</MASTERID></GROUP>",
+                        "<GROUP NAME=\\"Karnataka Banks\\"><PARENT>Sundry Creditors</PARENT><MASTERID>101</MASTERID></GROUP>")),
             "same-name conflicting parents");
         Reject(() => TallyBranchConsolidationImportService.ReadLiveMasters("<RESPONSE/>"),
             "empty live master read-back");
