@@ -197,8 +197,16 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 var originalNumber = Value(v, "VOUCHERNUMBER");
                 var date = Value(v, "DATE");
                 var type = Value(v, "VOUCHERTYPENAME");
-                if (originalNumber.Length == 0 || date.Length != 8 || type.Length == 0)
-                    throw new InvalidOperationException("Prepared voucher lacks a stable number, date or type.");
+                if (originalNumber.Length == 0 || type.Length == 0 ||
+                    !DateTime.TryParseExact(date, "yyyyMMdd", CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out var voucherDate))
+                    throw new InvalidOperationException("Prepared voucher lacks a stable number, valid date or type.");
+                if (plan.FinancialYear.Length < 4 ||
+                    !int.TryParse(plan.FinancialYear[..4], NumberStyles.None,
+                        CultureInfo.InvariantCulture, out var startYear) ||
+                    voucherDate < new DateTime(startYear, 4, 1) ||
+                    voucherDate >= new DateTime(startYear + 1, 4, 1))
+                    throw new InvalidOperationException("Prepared branch voucher is outside the consolidated financial year.");
                 var anchor = branch.Branch.BranchId + "|" + date + "|" + type + "|" + originalNumber;
                 if (!seenVoucherAnchors.Add(anchor))
                     throw new InvalidOperationException("Duplicate voucher within one branch's prepared XML: " + anchor);

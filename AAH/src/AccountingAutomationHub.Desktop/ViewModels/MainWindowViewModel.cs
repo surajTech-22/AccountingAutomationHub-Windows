@@ -2427,6 +2427,9 @@ public sealed class MainWindowViewModel :
                 !sourceLink.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Branch '" + branch.Name +
                     "' has no confirmed source-owned Tally company link.");
+            if (sourceLink.CompanyKey.Equals(company.CompanyKey, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("A branch's source Tally link cannot be the consolidated destination company: " +
+                    branch.Name);
             var sourceDoc = System.Xml.Linq.XDocument.Parse(xml);
             var sourceCompany = sourceDoc.Descendants().FirstOrDefault(x =>
                 x.Name.LocalName.Equals("SVCURRENTCOMPANY", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";

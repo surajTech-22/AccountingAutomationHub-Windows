@@ -135,6 +135,9 @@ internal static class TallyConsolidatedPreparedXmlTests
                 "<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Unverified Rice</STOCKITEMNAME></ALLINVENTORYENTRIES.LIST></VOUCHER></TALLYMESSAGE>") }, b ]),
             "inventory item without full original master must be blocked");
 
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = a.Xml.Replace("<DATE>20250505</DATE>", "<DATE>20240405</DATE>") }, b ]),
+            "an unrelated financial-year voucher was allowed into the consolidated XML");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a]),
             "missing branch must stop the import");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
