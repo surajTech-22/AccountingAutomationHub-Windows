@@ -2480,6 +2480,30 @@ public sealed class MainWindowViewModel :
         };
     }
 
+    /// <summary>
+    /// Uses the exact prepared branch XML stage, then the existing Tally HTTP
+    /// transport with a fresh destination voucher and master readback.
+    /// It never invokes the normal parent-client Export Selected route.
+    /// </summary>
+    private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
+        long parentId, string financialYear, bool separateTypes, bool separateCash)
+    {
+        var prepared = await GenerateConsolidatedPreparedXmlAsync(
+            parentId, financialYear, separateTypes, separateCash);
+        var current = _clientContext.CurrentClient;
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        var company = _tallyCoordinator.SelectedCompany;
+        if (current is null || current.Id != parentId ||
+            !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            link is null || company is null || link.ClientId != parentId ||
+            _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
+            _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
+            throw new InvalidOperationException(
+                "The verified consolidated workspace or original Dashboard Tally link changed.");
+        var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService);
+        return await importer.ImportAsync(link, company, prepared);
+    }
+
     private void RebuildWorkspaceNavigation(
         string? preferredTitle = null)
     {
@@ -2521,7 +2545,8 @@ public sealed class MainWindowViewModel :
                     _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(
                         client.Id, client.FinancialYear, _dashboardViewModel,
                         (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash),
-                        (types, cash) => GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash));
+                        (types, cash) => GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash),
+                        (types, cash) => ExportConsolidatedVouchersAsync(client.Id, client.FinancialYear, types, cash));
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
