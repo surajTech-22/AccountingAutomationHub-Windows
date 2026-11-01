@@ -50,7 +50,10 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         {
             if (!string.Equals(Field(voucher, "ACTION"), "Create", StringComparison.OrdinalIgnoreCase) ||
                 Field(voucher, "TAGNAME").Length > 0 || Field(voucher, "TAGVALUE").Length > 0 ||
-                voucher.DescendantsAndSelf().Any(x => Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID")))
+                voucher.DescendantsAndSelf().Any(x =>
+                    Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID") ||
+                    x.Attributes().Any(attribute =>
+                        attribute.Name.LocalName is "GUID" or "MASTERID" or "ALTERID" or "TAGNAME" or "TAGVALUE")))
                 throw new InvalidOperationException("Consolidated target cannot replay a foreign ALTER, MASTERID or GUID.");
             var dateText = Value(voucher, "DATE");
             if (!DateTime.TryParseExact(dateText, "yyyyMMdd", CultureInfo.InvariantCulture,
