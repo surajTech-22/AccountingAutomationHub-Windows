@@ -30,8 +30,10 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         ArgumentNullException.ThrowIfNull(prepared);
         var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(link, destination);
 
-        var masterDoc = XDocument.Parse(prepared.MastersXml, LoadOptions.None);
-        var voucherDoc = XDocument.Parse(prepared.VouchersXml, LoadOptions.None);
+        var masterDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            prepared.MastersXml, "staged consolidated masters");
+        var voucherDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            prepared.VouchersXml, "staged consolidated vouchers");
         RequireDestination(masterDoc, destination.Name);
         RequireDestination(voucherDoc, destination.Name);
         var masters = Messages(masterDoc).Select(x => x.Elements().Single()).ToArray();
@@ -158,7 +160,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
                     expected.Number + ". No automatic retry is safe.");
             var full = after.Full.Where(x => IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
             if (full.Length != 1 || !SamePostings(expected.Postings,
-                    ReadPostings(XDocument.Parse(full[0].OriginalXml).Root!
+                    ReadPostings(TallyConsolidatedXmlTextSafety.ParseDocument(
+                        full[0].OriginalXml, "live voucher posting readback").Root!
                         .DescendantsAndSelf().First(x => Is(x, "VOUCHER")))))
                 throw new InvalidOperationException("Live Tally DR/CR postings differ from branch XML for " +
                     expected.Number + ". Import stopped; inspect posted voucher before continuing.");
@@ -238,7 +241,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         var stockXml = await tally.ExportStockMastersAsync(destination, token).ConfigureAwait(false);
         var result = new Dictionary<string, XElement>(IgnoreCase);
         foreach (var raw in new[] { masterXml, stockXml })
-        foreach (var item in XDocument.Parse(raw, LoadOptions.None).Descendants())
+        foreach (var item in TallyConsolidatedXmlTextSafety.ParseDocument(
+            raw, "live consolidated master/stock authority").Descendants())
         {
             if (!PriorMasters.Contains(item.Name.LocalName) &&
                 !MasterOrder.Contains(item.Name.LocalName)) continue;

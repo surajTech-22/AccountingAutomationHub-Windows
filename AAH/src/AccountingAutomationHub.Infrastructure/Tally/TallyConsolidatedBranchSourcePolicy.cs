@@ -36,7 +36,8 @@ public static class TallyConsolidatedBranchSourcePolicy
             throw new InvalidOperationException("Prepared XML is not owned by the saved branch Client/FY: " +
                 branchClientCode + " / " + financialYear);
 
-        var document = XDocument.Parse(preparedXml, LoadOptions.None);
+        var document = TallyConsolidatedXmlTextSafety.ParseDocument(
+            preparedXml, "saved source branch " + branchClientCode);
         if (document.Root is null || !document.Root.Name.LocalName.Equals("ENVELOPE", StringComparison.OrdinalIgnoreCase) ||
             !document.Descendants().Any(x =>
                 x.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)))

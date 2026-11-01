@@ -43,7 +43,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
         {
             if (string.IsNullOrWhiteSpace(branch.Xml))
                 throw new InvalidOperationException("The branch has no prepared Tally XML: " + branch.Branch.DisplayName);
-            var source = XDocument.Parse(TallyConsolidatedXmlTextSafety.Repair(branch.Xml).Xml, LoadOptions.PreserveWhitespace);
+            var source = TallyConsolidatedXmlTextSafety.ParseDocument(
+                branch.Xml, "prepared branch " + branch.Branch.DisplayName, LoadOptions.PreserveWhitespace);
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
@@ -56,7 +57,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
             // from the original branch's freshly exported Tally masters, never
             // by guessing GSTIN, banking or party settings.
             var liveSource = string.IsNullOrWhiteSpace(branch.SourceLiveMastersXml)
-                ? null : XDocument.Parse(TallyConsolidatedXmlTextSafety.Repair(branch.SourceLiveMastersXml).Xml, LoadOptions.PreserveWhitespace);
+                ? null : TallyConsolidatedXmlTextSafety.ParseDocument(
+                    branch.SourceLiveMastersXml, "live source masters " + branch.Branch.DisplayName,
+                    LoadOptions.PreserveWhitespace);
             var originalLedgerXml = source.Descendants().Where(x => Is(x, "LEDGER") &&
                     x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
                 .Concat(liveSource?.Descendants().Where(x => Is(x, "LEDGER")) ?? [])
@@ -133,7 +136,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 // Preserve the source hierarchy below the mandatory branch
                 // classification. Group parent nesting is not a DR/CR calculation.
                 var shell = new MasterRecord { Name = mapped, Parent = parent, Type = "Group" };
-                var groupXml = XDocument.Parse(TallyErp9ManualGroupImport.Build(plan.DestinationCompanyName, [shell]));
+                var groupXml = TallyConsolidatedXmlTextSafety.ParseDocument(
+                    TallyErp9ManualGroupImport.Build(plan.DestinationCompanyName, [shell]),
+                    "planned nested branch group");
                 foreach (var message in groupXml.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
                     masterMessages.Add(new XElement(message));
                 return mapped;
@@ -367,7 +372,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
         // compulsory groups, optional Cash, optional Voucher Types.
         foreach (var planXml in new[] { plan.GroupXml, plan.CashLedgerXml, plan.VoucherTypeXml })
         {
-            var source = XDocument.Parse(planXml);
+            var source = TallyConsolidatedXmlTextSafety.ParseDocument(
+                planXml, "planned consolidated master definitions");
             foreach (var message in source.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
                 masterBuilder.AppendLine(message.ToString(SaveOptions.DisableFormatting));
         }
