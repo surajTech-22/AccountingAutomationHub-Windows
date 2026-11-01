@@ -107,7 +107,7 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     (!sharedCash || previously.Parent != targetParent))
                     throw new InvalidOperationException($"Destination ledger '{targetName}' would conflate two independent branch identities.");
                 seenLedgerNames[targetName] = (targetParent, branch.BranchId);
-                if (destination.TryGetValue(targetName, out var candidate))
+                if (destination.ContainsKey(targetName))
                     RequireExactLiveMaster(destination, targetName, "Ledger", targetParent);
                 ledgerRemap.Add(sourceName, targetName);
                 mappedLedgers.Add(new(branch.BranchId, sourceName, ledger.Parent.Trim(),
@@ -147,8 +147,7 @@ public static class TallyConsolidatedVoucherXmlWrapper
 
                 var typeElement = voucher.Elements().FirstOrDefault(e => e.Name.LocalName == "VOUCHERTYPENAME");
                 var baseType = typeElement?.Value.Trim() ?? "";
-                if (baseType.Length == 0 || !item.SourceType.Equals(baseType, StringComparison.OrdinalIgnoreCase) &&
-                    item.SourceType.Equals("Voucher Type", StringComparison.OrdinalIgnoreCase))
+                if (baseType.Length == 0)
                     throw new InvalidOperationException("Voucher type must be explicitly present in the source's original XML.");
                 var targetType = baseType;
                 if (item.Kind == TallyConsolidatedTransferKind.Interbank)
@@ -183,6 +182,10 @@ public static class TallyConsolidatedVoucherXmlWrapper
                 // collisions across branches. Never claim that this proves absence
                 // in the *destination*; live destination duplicate authority still gates posting.
                 var stableGuid = DeterministicGuid(masterPlan.DestinationCompanyKey + "|" + key);
+                // Remove the original GUID first. A destination-scoped stable
+                // identity must never coexist with a source company's GUID.
+                foreach (var oldGuid in voucher.Elements().Where(e => e.Name.LocalName == "GUID").ToArray())
+                    oldGuid.Remove();
                 voucher.AddFirst(new XElement("GUID", stableGuid));
 
                 var accountingEntries = voucher.Elements().Where(e =>
@@ -215,7 +218,11 @@ public static class TallyConsolidatedVoucherXmlWrapper
                 // GST registration is a source-owned choice, not an inferred state
                 // from the consolidated destination. Validate rather than overwrite it.
                 var taxUnit = voucher.Elements().FirstOrDefault(e => e.Name.LocalName == "TAXUNITNAME")?.Value.Trim() ?? "";
-                if (item.IsGstRelevant && branch.Gstin.Length > 0)
+                var requiresGstRegistration = item.IsGstRelevant ||
+                    baseType.Equals("Sales", StringComparison.OrdinalIgnoreCase) ||
+                    baseType.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ||
+                    voucher.Descendants().Any(x => x.Name.LocalName is "TAXUNITNAME" or "CMPGSTSTATE");
+                if (requiresGstRegistration && branch.Gstin.Length > 0)
                 {
                     if (taxUnit.Length == 0 ||
                         !taxUnit.Equals(item.VerifiedTaxUnitName, StringComparison.OrdinalIgnoreCase))
