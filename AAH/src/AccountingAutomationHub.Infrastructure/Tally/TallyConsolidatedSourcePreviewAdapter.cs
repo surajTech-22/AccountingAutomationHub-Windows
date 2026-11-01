@@ -83,7 +83,8 @@ public static class TallyConsolidatedSourcePreviewAdapter
             if (!candidate.TryGetValue(name, out var saved) || saved.Length != 1 ||
                 saved[0].Parent.Trim().Length == 0)
                 throw new InvalidOperationException($"Branch '{branch.DisplayName}' ledger '{name}' has no unambiguous saved source parent.");
-            return new TallyConsolidatedSourceLedger(name, saved[0].Parent.Trim());
+            return new TallyConsolidatedSourceLedger(name, saved[0].Parent.Trim(),
+                SharedCash: saved[0].Parent.Trim().Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase));
         }).ToArray();
 
         return new TallyConsolidatedBranchXmlInput(branch, ledgers, vouchers, sourceState);
