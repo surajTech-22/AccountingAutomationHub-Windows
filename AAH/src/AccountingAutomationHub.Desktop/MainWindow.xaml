@@ -283,6 +283,9 @@
                                  ToolTip="Consolidated and named branch books. Each enabled branch has separate accounting records.">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="{x:Type ListBoxItem}">
+                                    <!-- Do not expose BranchAccountingWorkspace.ToString(): it
+                                         contains private ClientId, ScopeId and StorageScopeKey. -->
+                                    <Setter Property="ToolTip" Value="{Binding DisplayName}"/>
                                     <Setter Property="Padding" Value="10,7"/>
                                     <Setter Property="Margin" Value="0,2,0,2"/>
                                     <Setter Property="Foreground" Value="White"/>
