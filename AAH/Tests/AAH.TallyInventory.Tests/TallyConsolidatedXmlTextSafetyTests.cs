@@ -45,7 +45,7 @@ internal static class TallyConsolidatedXmlTextSafetyTests
             "Karnataka Bank", "Karnataka&#4; Bank")),
             "numeric reference changed a ledger name");
         Reject(() => TallyConsolidatedXmlTextSafety.Repair(xml.Replace(
-            "<VOUCHER>", "<VOUCHER ATTR=\\\"bad&#x04;name\\\">")),
+            "<VOUCHER>", "<VOUCHER ATTR=\"bad&#x04;name\">")),
             "numeric reference changed an attribute");
 
         var again = TallyConsolidatedXmlTextSafety.Repair(repaired.Xml);
