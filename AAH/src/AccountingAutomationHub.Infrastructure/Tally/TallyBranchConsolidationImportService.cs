@@ -44,7 +44,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             .ConfigureAwait(false));
         var allVoucherTypes = before.Where(x => x.Type == "Voucher Type")
             .Select(x => x.Name)
-            .Where(x => !x.Contains(" - ", StringComparison.Ordinal)) // avoid recursive branch-type cloning
+            .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase))) // exclude already-generated branch types only
             .ToArray();
         var plan = TallyBranchConsolidationMasterPlanner.Build(
             destination.Name, destination.CompanyKey, destination.FinancialYear,
