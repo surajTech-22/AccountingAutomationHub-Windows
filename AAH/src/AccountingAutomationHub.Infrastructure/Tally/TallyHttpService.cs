@@ -623,7 +623,7 @@ public sealed class TallyHttpService : IDisposable
             BuildCollectionRequest(company.Name, "AAH Godowns", "Godown", "Name,Parent,MasterID,GUID,AlterID"),
             BuildCollectionRequest(company.Name, "AAH Tax Classifications", "TaxClassification", "Name,Parent,MasterID,GUID,AlterID"),
             BuildCollectionRequest(company.Name, "AAH Income Tax Classifications", "IncomeTaxClassification", "Name,Parent,MasterID,GUID,AlterID"),
-            BuildCollectionRequest(company.Name, "AAH Tax Units", "TaxUnit", "Name,Parent,MasterID,GUID,AlterID"),
+            BuildCollectionRequest(company.Name, "AAH Tax Units", "TaxUnit", "Name,Parent,MasterID,GUID,AlterID,GSTRegNumber,StateName"),
             BuildCollectionRequest(company.Name, "AAH Income Tax Slabs", "IncomeTaxSlab", "Name,Parent,MasterID,GUID,AlterID")
         };
 
