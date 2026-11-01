@@ -78,6 +78,8 @@ public sealed class MainWindowViewModel :
     private readonly AccountingLiveChangeHub _liveChangeHub;
     private readonly SqliteTallyRepository _tallyRepository;
     private readonly TallyLiveConnectionCoordinator _tallyCoordinator;
+    private readonly TallyHttpService _tallyHttpService;
+    private readonly TallyAccountingVoucherExportService _tallyAccountingExportService;
     private readonly TallyApplicationLaunchService _tallyApplicationLaunchService = new();
     private readonly ApplicationPreferenceService _applicationPreferences;
     private readonly BackgroundAutomationService _automationService;
@@ -428,6 +430,7 @@ public sealed class MainWindowViewModel :
         var tallyHttpService = new TallyHttpService(
             _applicationPreferences.Get(ApplicationSettingKeys.TallyHost),
             _applicationPreferences.GetInt(ApplicationSettingKeys.TallyPort, 9000));
+        _tallyHttpService = tallyHttpService;
         var tallyMasterImportService = new TallyMasterImportService();
         var tallyLiveMasterSyncService =
             new TallyLiveMasterSynchronizationService(
@@ -453,6 +456,7 @@ public sealed class MainWindowViewModel :
                 _tallyRepository,
                 tallyHttpService,
                 tallyLiveMasterSyncService);
+        _tallyAccountingExportService = tallyAccountingExportService;
         var bankTransferReconciliationService =
             new BankTransferReconciliationService(_bankingRepository, _masterRepository);
         var tallyBankStatementReconciliationService =
@@ -2283,6 +2287,127 @@ public sealed class MainWindowViewModel :
         }
     }
 
+    /// <summary>
+    /// An explicit, read-only Consolidated XML preview using the already saved
+    /// private-branch books, original module preparation and the CURRENT linked
+    /// Tally destination's freshly read master authority. No HTTP import is called.
+    /// Existing journal vouchers (including GST) are read, never regenerated.
+    /// AAH's normal per-branch Tally import continues unchanged.
+    /// </summary>
+    private async Task<string> PrepareConsolidatedXmlPreviewAsync(
+        long parentClientId, string financialYear,
+        bool separateVoucherTypes, bool separateCashLedgers)
+    {
+        var active = _clientContext.CurrentClient;
+        if (active is null || active.Id != parentClientId ||
+            !active.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            !HasBranchWorkspaces || _isPrivateBranchActive ||
+            SelectedBranchWorkspace?.IsConsolidated != true)
+            throw new InvalidOperationException("Select the correct Consolidated company and financial year first.");
+        if (!CanViewModule(GovernancePermissions.TallyView) ||
+            !_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
+            throw new InvalidOperationException("Tally export authority is required to prepare a consolidated XML preview.");
+        if (_tallyCoordinator.IsBusy)
+            throw new InvalidOperationException("The existing Tally connection is busy. Do not overlap its master authority read.");
+
+        var link = _tallyRepository.GetLinkForClient(parentClientId)
+            ?? throw new InvalidOperationException("Link the Consolidated destination to a writable Tally company first.");
+        var company = _tallyCoordinator.OpenCompanies.FirstOrDefault(item =>
+            item.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException("The exact linked Consolidated Tally destination is not open.");
+        var members = _privateBranchAccounts.FindByParent(parentClientId);
+        var branchScopes = BranchWorkspaces.Where(scope => !scope.IsConsolidated).ToArray();
+        if (members.Count < 2 || members.Count != branchScopes.Length)
+            throw new InvalidOperationException("Every configured branch must have a verified saved private accounting owner before consolidation.");
+
+        var sourceIdentities = new List<TallyBranchMasterIdentity>();
+        var branchInputs = new List<TallyConsolidatedBranchXmlInput>();
+        var start = FinancialYearStart(financialYear);
+        var end = start.AddYears(1).AddDays(-1);
+        foreach (var branch in branchScopes)
+        {
+            var owner = members.SingleOrDefault(item =>
+                item.BranchId.Equals(branch.ScopeId, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("A configured branch is missing its durable accounting Client ID.");
+            var profile = _clientRepository.GetById(owner.ChildClientId)
+                ?? throw new InvalidOperationException("Saved branch Client ID was not found.");
+            if (!profile.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+                !profile.Pan.Equals(active.Pan, StringComparison.OrdinalIgnoreCase) ||
+                !profile.Gstin.Equals(branch.Gstin, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Branch Client/FY/PAN/GSTIN does not match its saved accounting owner.");
+
+            var identity = new TallyBranchMasterIdentity(
+                profile.Id, branch.ScopeId, branch.DisplayName,
+                profile.Pan, profile.Gstin, profile.FinancialYear);
+            sourceIdentities.Add(identity);
+
+            // A source-only preview namespace is necessary: neither the linked
+            // parent destination's voucher fingerprints nor a sibling's identity
+            // may suppress an existing saved branch journal or sales invoice.
+            var previewCompany = new TallyCompanyInfo
+            {
+                CompanyKey = "AAH-CONSOLIDATION-PREVIEW-" + company.CompanyKey + "-" + branch.ScopeId,
+                Name = profile.ClientName,
+                FinancialYear = financialYear
+            };
+            var savedXml = await Task.Run(() =>
+                _tallyAccountingExportService.GenerateLiveXml(profile, previewCompany, start, end));
+            var savedMasters = _masterRepository.Get(profile.Id, financialYear, false);
+            branchInputs.Add(TallyConsolidatedSourcePreviewAdapter.Extract(
+                identity, savedXml, savedMasters));
+        }
+
+        // Native live Master read is read-only and uses the original Tally HTTP
+        // service. No Master is imported, and no source client is switched.
+        var liveMasterXml = await _tallyHttpService.ExportMastersAsync(company);
+        var parsed = new TallyMasterImportService().ParseXmlContent(
+            liveMasterXml, parentClientId, financialYear, company.Name);
+        var liveMasters = parsed.Records;
+        if (parsed.ParsedObjects == 0 ||
+            !liveMasters.Any(x => x.Type.Equals("Group", StringComparison.OrdinalIgnoreCase) &&
+                                  x.Name.Equals("Sundry Debtors", StringComparison.OrdinalIgnoreCase) &&
+                                  x.TallyMasterId.Trim().Length > 0))
+            throw new InvalidOperationException("The selected Tally destination did not provide complete verified live Master identity.");
+
+        var types = liveMasters
+            .Where(item => item.Type.Equals("Voucher Type", StringComparison.OrdinalIgnoreCase) &&
+                           item.TallyMasterId.Trim().Length > 0)
+            .Select(item => item.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var masterPlan = TallyBranchConsolidationMasterPlanner.Build(
+            company.Name, company.CompanyKey, financialYear,
+            sourceIdentities, liveMasters, freshDestinationMasterAuthorityVerified: true,
+            separateVoucherTypes: separateVoucherTypes,
+            separateCashLedgers: separateCashLedgers,
+            eligibleVoucherTypes: separateVoucherTypes ? types : null);
+        var prepared = TallyConsolidatedVoucherXmlWrapper.Prepare(
+            masterPlan, branchInputs, liveMasters, destinationMasterAuthorityVerified: true);
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var folder = Path.Combine(home, "Downloads", "AAH-Consolidated-Tally-Previews",
+            DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(folder);
+        static void Save(string directory, string filename, string xml) =>
+            File.WriteAllText(Path.Combine(directory, filename), xml, new System.Text.UTF8Encoding(false));
+        Save(folder, "01-Compulsory-Branch-Groups.xml", prepared.BranchGroupsXml);
+        Save(folder, "02-Branch-Ledgers.xml", prepared.BranchLedgersXml);
+        Save(folder, "03-Optional-Cash-Ledgers.xml", prepared.OptionalCashLedgersXml);
+        Save(folder, "04-Optional-Voucher-Types.xml", prepared.OptionalVoucherTypesXml);
+        Save(folder, "05-Branch-Vouchers-Preview.xml", prepared.VouchersXml);
+        File.WriteAllText(Path.Combine(folder, "READ-ME-FIRST.txt"),
+            "AAH CONSOLIDATED TALLY XML - PREVIEW ONLY" + Environment.NewLine +
+            "Destination: " + company.Name + Environment.NewLine +
+            "Financial year: " + financialYear + Environment.NewLine +
+            "Branches: " + sourceIdentities.Count + Environment.NewLine +
+            "Prepared voucher count: " + prepared.VoucherCount + Environment.NewLine +
+            "This is NOT an authorized live import package. DO NOT import these files into production Tally." + Environment.NewLine +
+            "The final workflow must import masters first, read back MASTERIDs, check source-specific destination duplicate/ALTER authority," + Environment.NewLine +
+            "validate installed-version GST registration and inventory mappings, reconcile bank transfers and read back every accepted voucher." + Environment.NewLine +
+            "No GST journal was regenerated. Existing branch accounting records were only read." + Environment.NewLine,
+            new System.Text.UTF8Encoding(false));
+        return $"Prepared {prepared.VoucherCount:N0} source-owned vouchers from {sourceIdentities.Count:N0} branches in {folder}. Preview only; consolidated live posting stays disabled.";
+    }
+
     private void RebuildWorkspaceNavigation(
         string? preferredTitle = null)
     {
@@ -2321,7 +2446,9 @@ public sealed class MainWindowViewModel :
                 if (_consolidatedTallyImportPage is null ||
                     _consolidatedTallyImportPage.ParentClientId != client.Id ||
                     !_consolidatedTallyImportPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
-                    _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(client.Id, client.FinancialYear, _dashboardViewModel);
+                    _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(
+                        client.Id, client.FinancialYear, _dashboardViewModel,
+                        (types, cash) => PrepareConsolidatedXmlPreviewAsync(client.Id, client.FinancialYear, types, cash));
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
