@@ -14,6 +14,7 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
 {
     private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
     private readonly Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> _prepareXml;
+    private readonly Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> _importVouchers;
     private bool _separateVoucherTypes;
     private bool _separateCashLedgers;
     private string _masterImportStatus =
@@ -23,7 +24,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         long parentClientId, string financialYear,
         DashboardViewModel existingDashboardWorkspace,
         Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters,
-        Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml)
+        Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml,
+        Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> importVouchers)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
         if (parentClientId <= 0 || string.IsNullOrWhiteSpace(financialYear))
@@ -34,6 +36,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
             ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
         _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
         _prepareXml = prepareXml ?? throw new ArgumentNullException(nameof(prepareXml));
+        _importVouchers = importVouchers ?? throw new ArgumentNullException(nameof(importVouchers));
+        ImportConsolidatedVouchersCommand = new AsyncRelayCommand(ImportVouchersAsync);
         PrepareConsolidatedXmlCommand = new AsyncRelayCommand(PrepareXmlAsync);
         ImportBranchMastersCommand = new AsyncRelayCommand(ImportMastersAsync);
     }
@@ -43,6 +47,9 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public DashboardViewModel ExistingDashboardWorkspace { get; }
     public AsyncRelayCommand ImportBranchMastersCommand { get; }
     public AsyncRelayCommand PrepareConsolidatedXmlCommand { get; }
+    public AsyncRelayCommand ImportConsolidatedVouchersCommand { get; }
+    private string _voucherImportStatus = "Import requires a verified Tally link, master-first readback and collision-free prepared branch vouchers. A failed readback will stop without retry.";
+    public string VoucherImportStatus { get => _voucherImportStatus; private set => SetProperty(ref _voucherImportStatus, value); }
     private string _preparedXmlStatus = "Collects the existing prepared XML from every branch. No calculations except explicitly matched interbank transfers.";
     public string PreparedXmlStatus { get => _preparedXmlStatus; private set => SetProperty(ref _preparedXmlStatus, value); }
     public bool SeparateVoucherTypes
@@ -72,6 +79,23 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         catch (Exception exception)
         {
             PreparedXmlStatus = "Consolidated XML not generated: " + exception.Message;
+        }
+    }
+
+    private async Task ImportVouchersAsync()
+    {
+        VoucherImportStatus = "Checking live consolidated masters, duplicate voucher identities and prepared branch DR/CR...";
+        try
+        {
+            var result = await _importVouchers(SeparateVoucherTypes, SeparateCashLedgers);
+            VoucherImportStatus =
+                $"{result.ImportedVouchers} voucher(s) imported and read back; " +
+                $"{result.CreatedMasters} missing master(s) created. " + result.Status;
+        }
+        catch (Exception ex)
+        {
+            VoucherImportStatus =
+                "Import stopped. DO NOT retry blindly: verify live Tally after any partial acceptance. " + ex.Message;
         }
     }
 
