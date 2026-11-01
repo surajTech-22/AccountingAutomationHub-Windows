@@ -1,0 +1,30 @@
+name: AAH Consolidated Tally Master Import Contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AAH/src/AccountingAutomationHub.Infrastructure/Tally/TallyBranchConsolidationImportService.cs'
+      - 'AAH/src/AccountingAutomationHub.Infrastructure/Tally/TallyBranchConsolidationMasterPlanner.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/ViewModels/ConsolidatedTallyImportViewModel.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/ViewModels/MainWindowViewModel.cs'
+      - 'AAH/src/AccountingAutomationHub.Desktop/Views/ConsolidatedTallyImportView.xaml'
+      - 'AAH/Tests/AAH.TallyInventory.Tests/**'
+      - '.github/workflows/aah-consolidated-tally-import.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-tally-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Desktop Tally Import UI
+        run: dotnet build AAH/src/AccountingAutomationHub.Desktop/AccountingAutomationHub.Desktop.csproj --configuration Release
+      - name: Verify existing Tally import and branch master contracts
+        run: dotnet run --project AAH/Tests/AAH.TallyInventory.Tests/AAH.TallyInventory.Tests.csproj --configuration Release
