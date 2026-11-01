@@ -83,9 +83,8 @@ internal static class TallyConsolidatedPreparedXmlTests
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a, b with { Branch = Karnataka }]), "wrong branch identity");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
-            a with { Xml = a.Xml.Replace("<LEDGER NAME=\"Buyer\" ACTION=\"Create\">",
-                "<GROUP NAME=\"Buyer\" ACTION=\"Create\">").Replace("</LEDGER></TALLYMESSAGE>",
-                "</GROUP></TALLYMESSAGE>") }, b ]), "missing source ledger master");
+            a with { Xml = a.Xml.Replace("<LEDGER NAME=\\\"Buyer\\\" ACTION=\\\"Create\\\">",
+                "<LEDGER NAME=\\\"Not Buyer\\\" ACTION=\\\"Create\\\">") }, b ]), "missing source ledger master");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a with { Xml = Xml("Sales", "1", "KA-INV-1", "Buyer", "Local Sales",
                 "-100.25", "100.25", "Sundry Debtors", "Sales Accounts", altered: true) }, b]),
