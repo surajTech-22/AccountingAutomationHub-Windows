@@ -56,9 +56,19 @@ public static class TallyConsolidatedSourcePreviewAdapter
 
         var vouchers = new List<TallyConsolidatedSavedVoucher>();
         var usedLedgerNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenXmlIdentity = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var voucher in doc.Descendants().Where(x => x.Name.LocalName == "VOUCHER"))
+        var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var savedVouchers = doc.Descendants().Where(x => x.Name.LocalName == "VOUCHER").ToArray();
+        if (prepared.SourceAnchors.Count != savedVouchers.Length ||
+            prepared.SourceEntityTypes.Count != savedVouchers.Length)
+            throw new InvalidOperationException("Existing AAH XML preparation did not retain exact durable source anchors for every voucher; no consolidated posting identity can be inferred.");
+        for (var i = 0; i < savedVouchers.Length; i++)
         {
+            var voucher = savedVouchers[i];
+            var sourceAnchor = prepared.SourceAnchors[i].Trim();
+            var entityType = prepared.SourceEntityTypes[i].Trim();
+            if (sourceAnchor.Length == 0 || entityType.Length == 0 ||
+                !seenSources.Add(entityType + "|" + sourceAnchor))
+                throw new InvalidOperationException("Branch voucher source anchor is missing or duplicated.");
             var type = voucher.Elements().FirstOrDefault(x => x.Name.LocalName == "VOUCHERTYPENAME")?.Value.Trim() ?? "";
             if (type.Length == 0)
                 throw new InvalidOperationException("Saved branch voucher has no Tally voucher type.");
@@ -68,14 +78,10 @@ public static class TallyConsolidatedSourcePreviewAdapter
                     usedLedgerNames.Add(entry.Value.Trim());
 
             var xml = voucher.ToString(SaveOptions.DisableFormatting);
-            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml)));
-            if (!seenXmlIdentity.Add(hash))
-                throw new InvalidOperationException("Two byte-identical vouchers were prepared by one branch. Exact source identity must be reviewed before consolidation.");
-
             var taxUnit = voucher.Elements().FirstOrDefault(x => x.Name.LocalName == "TAXUNITNAME")?.Value.Trim() ?? "";
-            // SourceHash is a PREVIEW fingerprint only, not a replacement for
-            // durable source anchor/version and Tally destination MASTERID.
-            vouchers.Add(new TallyConsolidatedSavedVoucher(type, hash, xml,
+            // The ORIGINAL AAH saved source anchor (including GST-Journal period)
+            // remains authoritative if invoice content or XML fields change.
+            vouchers.Add(new TallyConsolidatedSavedVoucher(entityType, sourceAnchor, xml,
                 IsSavedSource: true, IsGstRelevant: type is "Sales" or "Purchase",
                 VerifiedTaxUnitName: taxUnit));
         }
