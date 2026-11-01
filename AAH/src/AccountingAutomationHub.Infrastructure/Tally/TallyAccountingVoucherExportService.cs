@@ -974,6 +974,11 @@ public sealed class TallyAccountingVoucherExportService
         return new TallyLiveAccountingXmlSnapshot
         {
             Xml = xml,
+            SourceAnchors = prepared.Select(voucher =>
+                voucher.SourceAnchor.Trim().Length > 0
+                    ? voucher.SourceAnchor.Trim()
+                    : voucher.SourceKey.Trim()).ToArray(),
+            SourceEntityTypes = prepared.Select(voucher => voucher.SourceType).ToArray(),
             FromDate = range.FromDate,
             ToDate = range.ToDate,
             Selected = result.Selected,
