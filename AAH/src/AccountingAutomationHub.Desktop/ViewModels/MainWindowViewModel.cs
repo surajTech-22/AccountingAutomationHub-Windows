@@ -2422,24 +2422,27 @@ public sealed class MainWindowViewModel :
                     "Expected one verified prepared Tally XML file for branch '" + branch.Name +
                     "'; found " + existing.Length + ". Open the branch and complete its normal XML preparation first.");
             var xml = File.ReadAllText(existing[0]);
+            // The original branch's prepared accounting is owned by its AAH
+            // private ClientId/FY, not by a separate Tally company. A source
+            // Tally link is OPTIONAL. Only the consolidated destination must
+            // be linked to Tally for the final import.
             var sourceLink = _tallyRepository.GetLinkForClient(child.Id);
-            if (sourceLink is null || sourceLink.ClientId != child.Id ||
-                !sourceLink.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Branch '" + branch.Name +
-                    "' has no confirmed source-owned Tally company link.");
-            if (sourceLink.CompanyKey.Equals(company.CompanyKey, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("A branch's source Tally link cannot be the consolidated destination company: " +
-                    branch.Name);
-            var sourceDoc = System.Xml.Linq.XDocument.Parse(xml);
-            var sourceCompany = sourceDoc.Descendants().FirstOrDefault(x =>
-                x.Name.LocalName.Equals("SVCURRENTCOMPANY", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
-            if (!sourceCompany.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Prepared XML belongs to another branch Tally company: " +
-                    branch.Name + ". Refresh the original branch XML first.");
+            var statusPath = Path.Combine(Path.GetDirectoryName(existing[0])!,
+                "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
+            var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
+            var sourceCompany = TallyConsolidatedBranchSourcePolicy.Validate(
+                xml, statusText, child.ClientCode, financialYear,
+                company, sourceLink);
+
             var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
-            var sourceCandidates = openCompanies.Where(x =>
-                x.CompanyKey.Equals(sourceLink.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-                x.Name.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase)).ToArray();
+            // A separate branch Tally company is NOT required. If one is
+            // explicitly linked and open, its full Master export can supply
+            // source-defined GST/party/bank attributes without reconstruction.
+            var sourceCandidates = sourceLink is null
+                ? Array.Empty<TallyCompanyInfo>()
+                : openCompanies.Where(x =>
+                    x.CompanyKey.Equals(sourceLink.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
+                    x.Name.Equals(sourceCompany, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (sourceCandidates.Length > 1)
                 throw new InvalidOperationException("Ambiguous live source Tally company for branch: " + branch.Name);
             var fullSourceMasterXml = sourceCandidates.Length == 1
