@@ -6,6 +6,6 @@
     <!-- Reuse the ORIGINAL Tally Link + Export/Auto Sync card. The
          consolidated commands belong at its existing Export position. -->
     <views:DashboardView TallyOnlyMode="True"
-                         ConsolidatedImportWorkspace="{Binding}"
+                         ConsolidatedImportWorkspace="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type views:ConsolidatedTallyImportView}}}"
                          DataContext="{Binding ExistingDashboardWorkspace}"/>
 </UserControl>
