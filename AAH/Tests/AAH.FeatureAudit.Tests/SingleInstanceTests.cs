@@ -47,13 +47,14 @@ internal static class SingleInstanceTests
 
         // UI/source contract: the window must offer a direct Exit route even if
         // Windows Explorer loses the tray icon. Closing X still hides to tray.
-        var source = new DirectoryInfo(Environment.CurrentDirectory);
+        DirectoryInfo? source = new DirectoryInfo(Environment.CurrentDirectory);
         while (source is not null &&
                !File.Exists(Path.Combine(source.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "App.xaml.cs")))
             source = source.Parent;
         Check(source is not null, "Could not find desktop source for exit integration regression.");
-        var app = File.ReadAllText(Path.Combine(source!.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "App.xaml.cs"));
-        var window = File.ReadAllText(Path.Combine(source.FullName, "AAH", "src", "AccountingAutomationHub.Desktop", "MainWindow.xaml"));
+        var sourceRoot = source!.FullName;
+        var app = File.ReadAllText(Path.Combine(sourceRoot, "AAH", "src", "AccountingAutomationHub.Desktop", "App.xaml.cs"));
+        var window = File.ReadAllText(Path.Combine(sourceRoot, "AAH", "src", "AccountingAutomationHub.Desktop", "MainWindow.xaml"));
         Check(app.Contains("exitItem.Click += (_, _) => Dispatcher.BeginInvoke(new Action(RequestExitCompletely));", StringComparison.Ordinal) &&
               app.Contains("Environment.Exit(0);", StringComparison.Ordinal) &&
               app.Contains("AppExitPolicy.ShouldCleanupRuntime(_ownsSingleInstanceMutex)", StringComparison.Ordinal) &&
