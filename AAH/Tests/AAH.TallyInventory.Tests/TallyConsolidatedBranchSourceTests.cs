@@ -157,7 +157,7 @@ internal static class TallyConsolidatedBranchSourceTests
             "Missing-branch XML must be prepared from saved branch accounting, never fabricated or posted.");
         Check(mainWindow.Contains("DispatcherPriority.ContextIdle, new Action(() =>", StringComparison.Ordinal) &&
             !mainWindow.Contains("Task.Delay(90)", StringComparison.Ordinal) &&
-            mainWindow.Contains("_workspaceStateCache.EnsureModulePrepared(\n                        currentClient.Id", StringComparison.Ordinal),
+            mainWindow.Contains("currentClient.Id, currentClient.FinancialYear, module);", StringComparison.Ordinal),
             "A fixed module navigation delay or missing visible-module cache priority was reintroduced.");
 
         Console.WriteLine("PASS: offline branch XML preparation, owned source checks, fast module opening and no live Tally posting.");
