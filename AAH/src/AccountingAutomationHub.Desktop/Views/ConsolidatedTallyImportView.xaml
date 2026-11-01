@@ -3,21 +3,40 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views"
              Background="{DynamicResource AppBackgroundBrush}">
-    <!-- The SAME Tally card that currently appears on the Consolidated Dashboard.
-         Only its navigation surface is new. No separate coordinator, poller or
-         full normal-client export route is enabled by this screen. -->
     <Grid Margin="18,12,18,0">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <StackPanel Margin="0,0,0,8">
             <TextBlock Text="Consolidated · Tally Import" FontSize="20" FontWeight="SemiBold"/>
-            <TextBlock Text="Uses the existing Dashboard Tally Link and Export controls. Consolidated voucher posting stays blocked until verified branch-wise master and voucher import is connected."
+            <TextBlock Text="Uses the existing Dashboard Tally Link and Export settings. The separate branch-master stage below never imports unverified consolidated vouchers."
                        Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
                        FontSize="11" Margin="0,5,0,0"/>
         </StackPanel>
-        <views:DashboardView Grid.Row="1" TallyOnlyMode="True"
+        <Border Grid.Row="1" BorderThickness="1" CornerRadius="8"
+                BorderBrush="{DynamicResource TextSecondaryBrush}" Padding="12" Margin="0,4,0,10">
+            <StackPanel>
+                <TextBlock Text="Branch master import" FontWeight="SemiBold" FontSize="14"/>
+                <TextBlock Text="Branch accounting groups are compulsory. Create only missing masters after checking the live linked Tally company."
+                           Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                <WrapPanel>
+                    <CheckBox Content="Separate voucher types for each branch (optional)"
+                              IsChecked="{Binding SeparateVoucherTypes, Mode=TwoWay}"
+                              VerticalAlignment="Center" Margin="0,0,18,8"/>
+                    <CheckBox Content="Separate branch cash ledgers (optional)"
+                              IsChecked="{Binding SeparateCashLedgers, Mode=TwoWay}"
+                              VerticalAlignment="Center" Margin="0,0,0,8"/>
+                </WrapPanel>
+                <Button Content="Import / verify branch masters in linked Tally"
+                        Command="{Binding ImportBranchMastersCommand}"
+                        HorizontalAlignment="Left" Padding="12,7"/>
+                <TextBlock Text="{Binding MasterImportStatus}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+            </StackPanel>
+        </Border>
+        <views:DashboardView Grid.Row="2" TallyOnlyMode="True"
                              DataContext="{Binding ExistingDashboardWorkspace}"/>
     </Grid>
 </UserControl>
