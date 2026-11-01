@@ -477,7 +477,7 @@ internal static class TallyExcelParityXmlWriter
     internal static void AppendLedgerMaster(StringBuilder builder, TallyExcelLedgerMaster spec)
     {
         var action = string.IsNullOrWhiteSpace(spec.Action) ? "Create" : spec.Action.Trim();
-        var partyLedger = IsPartyGroup(spec.Parent);
+        var partyLedger = spec.ParentIsPartyGroup || IsPartyGroup(spec.Parent);
         var cashLedger = spec.Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase) ||
                          spec.Parent.Equals("Cash-in-hand", StringComparison.OrdinalIgnoreCase);
         var suspenseLedger = spec.Parent.Equals("Suspense A/c", StringComparison.OrdinalIgnoreCase) ||
@@ -677,4 +677,5 @@ internal sealed record TallyExcelLedgerMaster(
     string IfscCode = "",
     string AccountType = "",
     decimal? OdLimit = null,
-    decimal? DrawingPower = null);
+    decimal? DrawingPower = null,
+    bool ParentIsPartyGroup = false);

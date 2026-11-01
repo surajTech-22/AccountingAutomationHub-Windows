@@ -247,4 +247,10 @@ public sealed record TallyBranchMasterPlan(
     IReadOnlyList<TallyBranchGroupRequirement> Groups,
     IReadOnlyList<TallyBranchCashLedgerRequirement> CashLedgers,
     IReadOnlyList<TallyBranchVoucherTypeRequirement> VoucherTypes,
-    string GroupXml, string CashLedgerXml, string VoucherTypeXml);
+    string GroupXml, string CashLedgerXml, string VoucherTypeXml)
+{
+    // Exact Tax Unit/GSTIN + MASTERID evidence from the selected destination
+    // is a separate preflight dependency for GST transactions. Never infer it
+    // from a branch's source-company Tax Unit display name.
+    public IReadOnlyList<TallyConsolidatedTaxUnitAuthority> VerifiedTaxUnits { get; init; } = [];
+}

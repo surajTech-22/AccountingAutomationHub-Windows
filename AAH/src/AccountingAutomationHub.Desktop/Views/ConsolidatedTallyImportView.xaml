@@ -9,6 +9,7 @@
     <Grid Margin="18,12,18,0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <StackPanel Margin="0,0,0,8">
@@ -17,7 +18,27 @@
                        Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
                        FontSize="11" Margin="0,5,0,0"/>
         </StackPanel>
-        <views:DashboardView Grid.Row="1" TallyOnlyMode="True"
+        <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,3,0,12">
+            <StackPanel>
+                <TextBlock Text="Consolidated XML · Validate / Preview"
+                           FontWeight="SemiBold" FontSize="14"/>
+                <TextBlock Text="Mandatory branch accounting groups are always included. Separate voucher types and cash ledgers are optional."
+                           Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,5,0,8"/>
+                <WrapPanel>
+                    <CheckBox Content="Separate voucher types for every branch"
+                              IsChecked="{Binding SeparateVoucherTypes, Mode=TwoWay}" Margin="0,3,18,3"/>
+                    <CheckBox Content="Separate Cash-in-Hand ledger per branch"
+                              IsChecked="{Binding SeparateCashLedgers, Mode=TwoWay}" Margin="0,3,18,3"/>
+                    <Button Content="Prepare XML Preview" Command="{Binding PrepareXmlPreviewCommand}"
+                            Padding="12,7" Margin="0,0,6,0"/>
+                </WrapPanel>
+                <TextBlock Text="{Binding XmlPreviewStatus}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+                <TextBlock Text="Preview is NOT an import. Do not load generated voucher XML into your live Tally company until the approved destination readback workflow is available."
+                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
+        <views:DashboardView Grid.Row="2" TallyOnlyMode="True"
                              DataContext="{Binding ExistingDashboardWorkspace}"/>
     </Grid>
 </UserControl>
