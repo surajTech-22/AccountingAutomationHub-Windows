@@ -78,6 +78,7 @@ public sealed class MainWindowViewModel :
     private readonly AccountingLiveChangeHub _liveChangeHub;
     private readonly SqliteTallyRepository _tallyRepository;
     private readonly TallyHttpService _tallyHttpService;
+    private readonly TallyAccountingVoucherExportService _branchXmlPreparationService;
     private readonly TallyBranchConsolidationImportService _consolidatedMasterImporter;
     private readonly TallyLiveConnectionCoordinator _tallyCoordinator;
     private readonly TallyApplicationLaunchService _tallyApplicationLaunchService = new();
@@ -457,6 +458,7 @@ public sealed class MainWindowViewModel :
                 _tallyRepository,
                 tallyHttpService,
                 tallyLiveMasterSyncService);
+        _branchXmlPreparationService = tallyAccountingExportService;
         var bankTransferReconciliationService =
             new BankTransferReconciliationService(_bankingRepository, _masterRepository);
         var tallyBankStatementReconciliationService =
@@ -2418,10 +2420,23 @@ public sealed class MainWindowViewModel :
                 "AAH_TALLY_LIVE_CURRENT.xml"));
             var existing = candidates.Where(File.Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (existing.Length == 0)
+            {
+                // Independent branch Tally links are OPTIONAL. The normal live
+                // XML timer never prepares an unlinked branch, so gather its
+                // already-saved vouchers using the SAME original branch export
+                // framework. This is a source-only, local PREPARATION; no live
+                // Tally import, journal/GST regeneration, or group calculations.
+                // The prepared file stays in the private branch's AAH AppData,
+                // never inside a watched Auto Import folder.
+                var staged = await PrepareMissingBranchXmlAsync(child, branch.Name, financialYear);
+                existing = [staged];
+            }
             if (existing.Length != 1)
                 throw new InvalidOperationException(
-                    "Expected one verified prepared Tally XML file for branch '" + branch.Name +
-                    "'; found " + existing.Length + ". Open the branch and complete its normal XML preparation first.");
+                    "Ambiguous prepared Tally XML for branch '" + branch.Name +
+                    "'; found " + existing.Length +
+                    ". Resolve duplicate source paths before consolidated import.");
             // Legacy OCR / imported narration may contain forbidden XML C0
             // controls. Repair only presentation text; protected accounting
             // amounts, identities and XML attributes must fail closed.
@@ -2489,6 +2504,79 @@ public sealed class MainWindowViewModel :
                      "XML preview saved to: " + destination +
                      ". No Tally import was sent; duplicate/version/readback gate still required."
         };
+    }
+
+    /// <summary>
+    /// Prepare missing source XML from this private branch's already-persisted
+    /// accounting vouchers through the ORIGINAL branch exporter. Consolidation
+    /// itself only gathers these source XML files. Never post to Tally, create
+    /// accounting records, or reuse the consolidated Tally company's identity
+    /// as a pretend branch link.
+    /// </summary>
+    private async Task<string> PrepareMissingBranchXmlAsync(
+        ClientProfile branchClient, string branchName, string financialYear)
+    {
+        if (_privateBranchAccounts.FindByChild(branchClient.Id) is null ||
+            !branchClient.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Source branch Client/FY ownership changed before XML preparation.");
+        return await Task.Run(() =>
+        {
+            var (from, to) = TallyLiveConnectionCoordinator.FinancialYearDates(financialYear);
+            // This string is an OFFLINE XML destination marker, not a link or
+            // another company in Tally. The final consolidated writer selects
+            // only its separately confirmed real destination link.
+            var sourceCompany = new TallyCompanyInfo
+            {
+                Name = "AAH Prepared Branch " + branchClient.ClientCode,
+                CompanyKey = "AAH-OFFLINE-BRANCH-" + branchClient.Id,
+                FinancialYear = financialYear
+            };
+            var snapshot = _branchXmlPreparationService.GenerateLiveXml(
+                branchClient, sourceCompany, from, to);
+            if (snapshot.Ready == 0)
+                throw new InvalidOperationException(
+                    "Branch '" + branchName + "' has no original, ready voucher entries in its saved FY books. " +
+                    "Verify the branch's actual Sales/Purchase/Bank/Journal imports before consolidating.");
+            if (snapshot.Unsupported != 0 || snapshot.MissingLedgers != 0 ||
+                snapshot.ConflictsBlocked != 0)
+                throw new InvalidOperationException(
+                    "Branch '" + branchName + "' has incomplete prepared source vouchers (" +
+                    snapshot.MissingLedgers + " missing ledgers, " + snapshot.Unsupported +
+                    " unsupported, " + snapshot.ConflictsBlocked +
+                    " conflicts). Resolve branch source records first; no partial XML exported.");
+
+            // Validate BEFORE writing so a failed/incomplete builder can never
+            // replace a previously verified source. Preserve Tally ledger names,
+            // dates, amounts, GST and voucher type entries unchanged.
+            TallyConsolidatedXmlTextSafety.ParseDocument(
+                snapshot.Xml, "offline prepared branch " + branchClient.ClientCode);
+            var safeCode = string.Concat(branchClient.ClientCode.Where(c =>
+                !Path.GetInvalidFileNameChars().Contains(c)));
+            var folder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Accounting Automation Hub", "Live Tally XML", safeCode, financialYear);
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT.xml");
+            var status = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
+            // Stage to temporary files and commit with atomic replacements.
+            // Reopening Consolidated reuses the exact same owned source.
+            var tempXml = path + ".tmp";
+            var tempStatus = status + ".tmp";
+            var preparedAt = DateTime.Now;
+            File.WriteAllText(tempXml, snapshot.Xml, System.Text.Encoding.UTF8);
+            File.WriteAllText(tempStatus,
+                "Accounting Automation Hub - Live Tally XML" + Environment.NewLine +
+                "Source: saved offline branch accounting; no Tally posting" + Environment.NewLine +
+                "Client: " + branchClient.ClientCode + " | FY " + financialYear + Environment.NewLine +
+                "Tally company: " + sourceCompany.Name + Environment.NewLine +
+                "Generated: " + preparedAt.ToString("yyyy-MM-dd HH:mm:ss",
+                    System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
+                "Ready in XML: " + snapshot.Ready + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+            File.Move(tempXml, path, overwrite: true);
+            File.Move(tempStatus, status, overwrite: true);
+            return path;
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -4296,30 +4384,34 @@ public sealed class MainWindowViewModel :
             return;
         }
 
-        // R8 R6 navigation safety bar: CurrentPage changes immediately so WPF paints the
-        // requested module at once, but prepared-snapshot hydration is coalesced for a very
-        // short settle window. Rapid module clicks therefore prepare only the page the user
-        // actually stops on; no feature, cache authority or refresh path is removed.
-        _ = Task.Run(async () =>
+        // Give the requested module's missing cache streams priority as soon
+        // as the view changes. This signal does not load SQLite on the WPF
+        // thread; the existing cache workers perform preparation independently.
+        // Heavy hidden-page presentation warming remains at ApplicationIdle.
+        if (currentClient is not null)
+            foreach (var module in VisibleModulesForPage(page))
+                if (!_workspaceStateCache.IsModuleReady(currentClient.Id, currentClient.FinancialYear, module))
+                    _workspaceStateCache.EnsureModulePrepared(
+                        currentClient.Id, currentClient.FinancialYear, module);
+
+        // WPF first paints the new page, then ContextIdle prepares its binding.
+        // A dispatcher-generation check coalesces rapid navigation without an
+        // unconditional 90ms sleep / Task.Run on EVERY module click.
+        _ = dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
         {
-            await Task.Delay(90).ConfigureAwait(false);
-            if (generation != Volatile.Read(ref _navigationPrepareGeneration)) return;
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            if (generation != Volatile.Read(ref _navigationPrepareGeneration) ||
+                !ReferenceEquals(CurrentPage, page)) return;
+            try
             {
-                if (generation != Volatile.Read(ref _navigationPrepareGeneration) ||
-                    !ReferenceEquals(CurrentPage, page)) return;
-                try
-                {
-                    if (!ReferenceEquals(previousPage, CurrentPage)) ReleasePageForNavigation(previousPage);
-                    PreparePageForDisplay(page);
-                }
-                catch (Exception exception)
-                {
-                    PipelineRuntimeDiagnostics.NavigationFailed(page.GetType().Name, exception);
-                    ApplicationState = $"Could not prepare {page.Title}: {exception.Message}";
-                }
-            }));
-        });
+                if (!ReferenceEquals(previousPage, CurrentPage)) ReleasePageForNavigation(previousPage);
+                PreparePageForDisplay(page);
+            }
+            catch (Exception exception)
+            {
+                PipelineRuntimeDiagnostics.NavigationFailed(page.GetType().Name, exception);
+                ApplicationState = $"Could not prepare {page.Title}: {exception.Message}";
+            }
+        }));
     }
 
     private void PreparePageForDisplay(PageViewModel? page)
