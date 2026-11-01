@@ -73,8 +73,14 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         if (open.Count(x => IgnoreCase.Equals(x.CompanyKey, destination.CompanyKey) &&
                             IgnoreCase.Equals(x.Name, destination.Name)) != 1)
             throw new InvalidOperationException("The exact linked consolidated Tally company is not uniquely open.");
-        var from = source.Min(x => x.Date);
-        var to = source.Max(x => x.Date);
+        if (!int.TryParse(destination.FinancialYear[..Math.Min(4, destination.FinancialYear.Length)],
+            NumberStyles.None, CultureInfo.InvariantCulture, out var firstYear) ||
+            firstYear < 1900 || firstYear > 9998)
+            throw new InvalidOperationException("Cannot confirm the destination financial-year voucher authority.");
+        var from = new DateTime(firstYear, 4, 1);
+        var to = new DateTime(firstYear + 1, 3, 31);
+        if (source.Any(x => x.Date < from || x.Date > to))
+            throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
         var before = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
             .ConfigureAwait(false);
         RequireNoCollision(before.Index, source);
@@ -183,7 +189,7 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
     private static string MasterKey(string type, string name) =>
         type.ToUpperInvariant() + "|" + name.Trim().ToUpperInvariant();
     private static string Key(DateTime date, string type, string number) =>
-        date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + "|" + type.Trim() + "|" + number.Trim();
+        type.Trim() + "|" + number.Trim(); // Voucher numbering is FY-scoped, not day-scoped.
 
     private static IReadOnlyList<(string Name, decimal Amount)> ReadPostings(XElement voucher)
     {
