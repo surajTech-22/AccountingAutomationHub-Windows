@@ -2341,6 +2341,111 @@ public sealed class MainWindowViewModel :
             link, destination, identities, separateVoucherTypes, separateCashLedgers);
     }
 
+    /// <summary>
+    /// Collect already-built branch XML only; never run sales, purchase, bank, GST,
+    /// journal preparation or the parent exporter in the consolidated workspace.
+    /// Files in Downloads are previews and are NOT sent to Tally.
+    /// </summary>
+    private async Task<TallyConsolidatedPreparedXmlResult> GenerateConsolidatedPreparedXmlAsync(
+        long parentId, string financialYear, bool separateTypes, bool separateCash)
+    {
+        var current = _clientContext.CurrentClient;
+        if (current is null || current.Id != parentId ||
+            !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
+            throw new InvalidOperationException("Select the saved consolidated branch workspace.");
+        if (NetworkClientRuntime.IsNetworkClient ||
+            !_governanceRepository.HasPermission(Environment.UserName, GovernancePermissions.TallyExport))
+            throw new InvalidOperationException("Tally export permission on the host computer is required.");
+        if (_tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected)
+            throw new InvalidOperationException("Verify the existing Dashboard Tally Link.");
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        var company = _tallyCoordinator.SelectedCompany;
+        if (link is null || company is null || link.ClientId != parentId ||
+            !link.CompanyKey.Equals(company.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Consolidated Tally company is not confirmed.");
+
+        var parent = _clientRepository.GetById(parentId)
+            ?? throw new InvalidOperationException("Parent Client/FY is missing.");
+        var configured = ClientBranchCatalog.Resolve(parent,
+            _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
+        if (configured.Count < 2)
+            throw new InvalidOperationException("Two or more saved branches are required.");
+        var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
+        if (pan.Length == 0 && (parent.Gstin ?? "").Length == 15)
+            pan = parent.Gstin.Substring(2, 10).ToUpperInvariant();
+
+        var identities = new List<TallyBranchMasterIdentity>();
+        var branchSources = new List<TallyPreparedBranchXml>();
+        var linkedFolders = _automationService.GetFolders()
+            .Where(x => x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var branch in configured)
+        {
+            var child = _privateBranchAccounts.GetOrCreate(
+                parent.Id, branch.BranchId, branch.Name, branch.Gstin);
+            var identity = new TallyBranchMasterIdentity(
+                child.Id, branch.BranchId, branch.Name, pan, branch.Gstin, financialYear);
+            identities.Add(identity);
+            var candidates = new List<string>();
+            foreach (var folder in linkedFolders)
+            {
+                if (folder.ClientId == child.Id)
+                    candidates.Add(Path.Combine(folder.FolderPath, "AAH_TALLY_LIVE_CURRENT.xml"));
+                if (folder.ClientId != parent.Id || !Directory.Exists(folder.FolderPath))
+                    continue;
+                foreach (var direct in Directory.EnumerateDirectories(folder.FolderPath))
+                {
+                    var file = Path.Combine(direct, "AAH_TALLY_LIVE_CURRENT.xml");
+                    if (ClientBranchAutoImportLayout.TryResolve(folder.FolderPath, file, out var owned) &&
+                        owned is not null && owned.ClientId == parent.Id &&
+                        owned.BranchId.Equals(branch.BranchId, StringComparison.OrdinalIgnoreCase))
+                        candidates.Add(file);
+                }
+            }
+            var safeCode = string.Concat(child.ClientCode.Where(c =>
+                !Path.GetInvalidFileNameChars().Contains(c)));
+            candidates.Add(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Accounting Automation Hub", "Live Tally XML", safeCode, financialYear,
+                "AAH_TALLY_LIVE_CURRENT.xml"));
+            var existing = candidates.Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (existing.Length != 1)
+                throw new InvalidOperationException(
+                    "Expected one verified prepared Tally XML file for branch '" + branch.Name +
+                    "'; found " + existing.Length + ". Open the branch and complete its normal XML preparation first.");
+            var xml = File.ReadAllText(existing[0]);
+            var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
+            branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters));
+        }
+
+        var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
+            link, company, identities, separateTypes, separateCash);
+        var result = TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);
+
+        var safeClient = string.Concat(parent.ClientCode.Where(c =>
+            !Path.GetInvalidFileNameChars().Contains(c)));
+        var destination = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads", "AAH Consolidated Tally", safeClient + "-" + financialYear);
+        Directory.CreateDirectory(destination);
+        var mastersPath = Path.Combine(destination, "AAH_CONSOLIDATED_MASTERS.xml");
+        var vouchersPath = Path.Combine(destination, "AAH_CONSOLIDATED_VOUCHERS.xml");
+        // Both XML documents are built and validated in memory before anything is written.
+        System.Xml.Linq.XDocument.Parse(result.MastersXml);
+        System.Xml.Linq.XDocument.Parse(result.VouchersXml);
+        File.WriteAllText(mastersPath, result.MastersXml, System.Text.Encoding.UTF8);
+        File.WriteAllText(vouchersPath, result.VouchersXml, System.Text.Encoding.UTF8);
+        return result with
+        {
+            Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
+                     $"matched {result.InterbankReconciled} explicit interbank transfers. " +
+                     "XML preview saved to: " + destination +
+                     ". No Tally import was sent; duplicate/version/readback gate still required."
+        };
+    }
+
     private void RebuildWorkspaceNavigation(
         string? preferredTitle = null)
     {
@@ -2381,7 +2486,8 @@ public sealed class MainWindowViewModel :
                     !_consolidatedTallyImportPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
                     _consolidatedTallyImportPage = new ConsolidatedTallyImportViewModel(
                         client.Id, client.FinancialYear, _dashboardViewModel,
-                        (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash));
+                        (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash),
+                        (types, cash) => GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash));
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0

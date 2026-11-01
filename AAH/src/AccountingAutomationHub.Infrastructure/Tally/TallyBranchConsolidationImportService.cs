@@ -112,6 +112,38 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             "Each branch GST ledger remains source-owned; no GST journal was regenerated.");
     }
 
+    /// <summary>Read-only live Tally preflight for the prepared XML stage.</summary>
+    public async Task<TallyBranchMasterPlan> PreviewPlanAsync(
+        TallyClientLink confirmedLink, TallyCompanyInfo destination,
+        IReadOnlyCollection<TallyBranchMasterIdentity> branches,
+        bool separateVoucherTypes = false, bool separateCashLedgers = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(confirmedLink);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (confirmedLink.ClientId <= 0 ||
+            !confirmedLink.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+            !confirmedLink.CompanyName.Equals(destination.Name, StringComparison.OrdinalIgnoreCase) ||
+            !confirmedLink.FinancialYear.Equals(destination.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Confirmed consolidated Tally link does not match selected company/FY.");
+        var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
+        if (live.Count(x => x.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
+                            x.Name.Equals(destination.Name, StringComparison.OrdinalIgnoreCase)) != 1)
+            throw new InvalidOperationException("Selected consolidated Tally company is not uniquely open.");
+        var fresh = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
+            .ConfigureAwait(false));
+        var baseTypes = fresh.Where(x => x.Type == "Voucher Type")
+            .Select(x => x.Name)
+            .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var plan = TallyBranchConsolidationMasterPlanner.Build(
+            destination.Name, destination.CompanyKey, destination.FinancialYear,
+            branches, fresh, true, separateVoucherTypes, separateCashLedgers,
+            separateVoucherTypes ? baseTypes : null);
+        TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
+        return plan;
+    }
+
     private static string SingleVoucherTypeXml(string batchXml, string company, string name)
     {
         var source = XDocument.Parse(batchXml);

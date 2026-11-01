@@ -13,6 +13,7 @@ namespace AccountingAutomationHub.Desktop.ViewModels;
 public sealed class ConsolidatedTallyImportViewModel : PageViewModel
 {
     private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
+    private readonly Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> _prepareXml;
     private bool _separateVoucherTypes;
     private bool _separateCashLedgers;
     private string _masterImportStatus =
@@ -21,7 +22,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public ConsolidatedTallyImportViewModel(
         long parentClientId, string financialYear,
         DashboardViewModel existingDashboardWorkspace,
-        Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters)
+        Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters,
+        Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
         if (parentClientId <= 0 || string.IsNullOrWhiteSpace(financialYear))
@@ -31,6 +33,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         ExistingDashboardWorkspace = existingDashboardWorkspace
             ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
         _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
+        _prepareXml = prepareXml ?? throw new ArgumentNullException(nameof(prepareXml));
+        PrepareConsolidatedXmlCommand = new AsyncRelayCommand(PrepareXmlAsync);
         ImportBranchMastersCommand = new AsyncRelayCommand(ImportMastersAsync);
     }
 
@@ -38,6 +42,9 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public string FinancialYear { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
     public AsyncRelayCommand ImportBranchMastersCommand { get; }
+    public AsyncRelayCommand PrepareConsolidatedXmlCommand { get; }
+    private string _preparedXmlStatus = "Collects the existing prepared XML from every branch. No calculations except explicitly matched interbank transfers.";
+    public string PreparedXmlStatus { get => _preparedXmlStatus; private set => SetProperty(ref _preparedXmlStatus, value); }
     public bool SeparateVoucherTypes
     {
         get => _separateVoucherTypes;
@@ -52,6 +59,20 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     {
         get => _masterImportStatus;
         private set => SetProperty(ref _masterImportStatus, value);
+    }
+
+    private async Task PrepareXmlAsync()
+    {
+        PreparedXmlStatus = "Checking each branch's existing XML and original ledger authority...";
+        try
+        {
+            var result = await _prepareXml(SeparateVoucherTypes, SeparateCashLedgers);
+            PreparedXmlStatus = result.Status;
+        }
+        catch (Exception exception)
+        {
+            PreparedXmlStatus = "Consolidated XML not generated: " + exception.Message;
+        }
     }
 
     private async Task ImportMastersAsync()
