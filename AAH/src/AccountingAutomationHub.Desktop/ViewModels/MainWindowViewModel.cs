@@ -77,6 +77,7 @@ public sealed class MainWindowViewModel :
     private readonly AccountingRefreshCoordinator _refreshCoordinator;
     private readonly AccountingLiveChangeHub _liveChangeHub;
     private readonly SqliteTallyRepository _tallyRepository;
+    private readonly TallyHttpService _tallyHttpService;
     private readonly TallyBranchConsolidationImportService _consolidatedMasterImporter;
     private readonly TallyLiveConnectionCoordinator _tallyCoordinator;
     private readonly TallyApplicationLaunchService _tallyApplicationLaunchService = new();
@@ -429,6 +430,7 @@ public sealed class MainWindowViewModel :
         var tallyHttpService = new TallyHttpService(
             _applicationPreferences.Get(ApplicationSettingKeys.TallyHost),
             _applicationPreferences.GetInt(ApplicationSettingKeys.TallyPort, 9000));
+        _tallyHttpService = tallyHttpService;
         _consolidatedMasterImporter = new TallyBranchConsolidationImportService(tallyHttpService);
         var tallyMasterImportService = new TallyMasterImportService();
         var tallyLiveMasterSyncService =
@@ -2377,6 +2379,10 @@ public sealed class MainWindowViewModel :
 
         var identities = new List<TallyBranchMasterIdentity>();
         var branchSources = new List<TallyPreparedBranchXml>();
+        // This is the same Tally HTTP service as the Dashboard, not another
+        // connection. Read original master XML only for linked OPEN branch
+        // companies, to preserve complete party/GST/bank master definitions.
+        var openCompanies = await _tallyHttpService.DiscoverCompaniesAsync();
         var linkedFolders = _automationService.GetFolders()
             .Where(x => x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -2428,7 +2434,15 @@ public sealed class MainWindowViewModel :
                 throw new InvalidOperationException("Prepared XML belongs to another branch Tally company: " +
                     branch.Name + ". Refresh the original branch XML first.");
             var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
-            branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters));
+            var sourceCandidates = openCompanies.Where(x =>
+                x.CompanyKey.Equals(sourceLink.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
+                x.Name.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (sourceCandidates.Length > 1)
+                throw new InvalidOperationException("Ambiguous live source Tally company for branch: " + branch.Name);
+            var fullSourceMasterXml = sourceCandidates.Length == 1
+                ? await _tallyHttpService.ExportMastersAsync(sourceCandidates[0])
+                : "";
+            branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters, fullSourceMasterXml));
         }
 
         var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
