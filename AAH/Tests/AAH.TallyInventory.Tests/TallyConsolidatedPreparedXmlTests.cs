@@ -78,6 +78,34 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
 
+        // Inventory values and tax preparation are also source-owned. Only
+        // the stock MASTER identity is namespaced for the destination company.
+        string WithStock(string original) => original
+            .Replace("<TALLYMESSAGE><VOUCHER", """
+                <TALLYMESSAGE><STOCKITEM NAME="Rice" ACTION="Create"><NAME>Rice</NAME><PARENT>Primary</PARENT>
+                <BASEUNITS>QTL</BASEUNITS></STOCKITEM></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER
+                """)
+            .Replace("</VOUCHER></TALLYMESSAGE>", """
+                <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Rice</STOCKITEMNAME>
+                <AMOUNT>100.25</AMOUNT></ALLINVENTORYENTRIES.LIST>
+                </VOUCHER></TALLYMESSAGE>
+                """);
+        var inventory = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = WithStock(a.Xml) }, b with { Xml = WithStock(b.Xml) }]);
+        var inventoryVoucher = XDocument.Parse(inventory.VouchersXml);
+        var inventoryMaster = XDocument.Parse(inventory.MastersXml);
+        Check(inventoryVoucher.Descendants("STOCKITEMNAME").Select(x => x.Value).ToHashSet()
+              .SetEquals(new[] { "Rice - Karnataka", "Rice - Tamil Nadu" }) &&
+              inventoryMaster.Descendants("STOCKITEM").Count() == 2 &&
+              inventoryVoucher.Descendants("ALLINVENTORYENTRIES.LIST")
+                  .All(x => x.Element("AMOUNT")?.Value == "100.25"),
+              "Prepared stock item identity or item amount was regenerated.");
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = a.Xml.Replace("</VOUCHER></TALLYMESSAGE>",
+                "<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Unverified Rice</STOCKITEMNAME></ALLINVENTORYENTRIES.LIST></VOUCHER></TALLYMESSAGE>") }, b ]),
+            "inventory item without full original master must be blocked");
+
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a]),
             "missing branch must stop the import");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
