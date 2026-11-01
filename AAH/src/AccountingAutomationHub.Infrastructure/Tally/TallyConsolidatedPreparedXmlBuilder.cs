@@ -238,8 +238,23 @@ public static class TallyConsolidatedPreparedXmlBuilder
             var amounts = new List<decimal>();
             foreach (var (branch, original) in sourcePair)
             {
+                var sourceGroups = branch.Masters.Where(x => x.Type.Equals("Group", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.OrdinalIgnoreCase);
+                bool IsBank(string parent)
+                {
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    while (seen.Add(parent))
+                    {
+                        if (parent.Equals("Bank Accounts", StringComparison.OrdinalIgnoreCase)) return true;
+                        if (!sourceGroups.TryGetValue(parent, out var groups) || groups.Length != 1)
+                            return false;
+                        parent = groups[0].Parent.Trim();
+                    }
+                    return false;
+                }
                 var bankNames = branch.Masters.Where(x => x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
-                    x.Parent.Equals("Bank Accounts", StringComparison.OrdinalIgnoreCase))
+                    IsBank(x.Parent.Trim()))
                     .Select(x => x.Name.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var entries = original.Elements().Where(x => Is(x, "ALLLEDGERENTRIES.LIST") || Is(x, "LEDGERENTRIES.LIST")).ToArray();
                 if (entries.Length != 2)

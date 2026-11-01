@@ -2416,6 +2416,17 @@ public sealed class MainWindowViewModel :
                     "Expected one verified prepared Tally XML file for branch '" + branch.Name +
                     "'; found " + existing.Length + ". Open the branch and complete its normal XML preparation first.");
             var xml = File.ReadAllText(existing[0]);
+            var sourceLink = _tallyRepository.GetLinkForClient(child.Id);
+            if (sourceLink is null || sourceLink.ClientId != child.Id ||
+                !sourceLink.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Branch '" + branch.Name +
+                    "' has no confirmed source-owned Tally company link.");
+            var sourceDoc = System.Xml.Linq.XDocument.Parse(xml);
+            var sourceCompany = sourceDoc.Descendants().FirstOrDefault(x =>
+                x.Name.LocalName.Equals("SVCURRENTCOMPANY", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            if (!sourceCompany.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Prepared XML belongs to another branch Tally company: " +
+                    branch.Name + ". Refresh the original branch XML first.");
             var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
             branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters));
         }
