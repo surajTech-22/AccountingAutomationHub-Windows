@@ -237,6 +237,15 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     voucher.Descendants().Any(x => x.Name.LocalName is "TAXUNITNAME" or "CMPGSTSTATE");
                 if (requiresGstRegistration && branch.Gstin.Length > 0)
                 {
+                    // TAXUNITNAME and CMPGSTSTATE must remain the SOURCE
+                    // registration. Never silently switch it to the parent.
+                    var gstState = voucher.Elements()
+                        .FirstOrDefault(e => e.Name.LocalName == "CMPGSTSTATE")?.Value.Trim() ?? "";
+                    if (source.SourceState.Length == 0 ||
+                        (gstState.Length > 0 &&
+                         !gstState.Equals(source.SourceState, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException(
+                            $"GST voucher '{key}' uses a state not verified for its source branch registration.");
                     if (taxUnit.Length == 0 ||
                         !taxUnit.Equals(item.VerifiedTaxUnitName, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException(
@@ -346,7 +355,8 @@ public sealed record TallyConsolidatedSavedVoucher(
 public sealed record TallyConsolidatedBranchXmlInput(
     TallyBranchMasterIdentity Branch,
     IReadOnlyCollection<TallyConsolidatedSourceLedger> Ledgers,
-    IReadOnlyCollection<TallyConsolidatedSavedVoucher> Vouchers);
+    IReadOnlyCollection<TallyConsolidatedSavedVoucher> Vouchers,
+    string SourceState = "");
 
 public sealed record TallyConsolidatedLedgerMapping(
     string BranchId, string SourceLedger, string SourceParent,
