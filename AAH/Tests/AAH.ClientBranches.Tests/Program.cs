@@ -90,6 +90,12 @@ try
                          !Directory.Exists(Path.Combine(x.FolderPath, "Sales")) &&
                          !Directory.Exists(Path.Combine(x.FolderPath, "GST"))),
         "Branch Auto Import must have a flat, marker-owned folder, not ten nested module directories.");
+    if (OperatingSystem.IsWindows())
+        Check(trees.All(x => (File.GetAttributes(Path.Combine(x.FolderPath,
+              ClientBranchAutoImportLayout.Marker)) &
+              (FileAttributes.Hidden | FileAttributes.System)) ==
+              (FileAttributes.Hidden | FileAttributes.System)),
+            "New branch JSON metadata must be hidden from normal Windows Explorer.");
     var statement = Path.Combine(trees[0].FolderPath, "test-bank.xlsx");
     File.WriteAllText(statement, "Synthetic branch-owned source; never imported");
     Check(ClientBranchAutoImportLayout.TryResolve(tempBranchesRoot, statement, out var found) &&
@@ -151,6 +157,12 @@ try
               Path.Combine(moved[0].FolderPath, "purchase.xlsx"), out var upgraded) &&
           upgraded!.BranchId == migrateBranch.BranchId,
           "Legacy marked branch folder was not moved safely to the XYZ root.");
+    if (OperatingSystem.IsWindows())
+        Check((File.GetAttributes(Path.Combine(moved[0].FolderPath,
+              ClientBranchAutoImportLayout.Marker)) &
+              (FileAttributes.Hidden | FileAttributes.System)) ==
+              (FileAttributes.Hidden | FileAttributes.System),
+              "Existing branch metadata must be hidden after safe folder migration.");
 }
 finally { try { Directory.Delete(tempBranchesRoot, recursive: true); } catch { } }
 
@@ -210,6 +222,8 @@ Check(shellView.Contains("ItemsSource=\"{Binding SidebarBranchWorkspaces}\"", St
       shellModel.Contains("var branches = separateBooksEnabled", StringComparison.Ordinal) &&
       shellView.Contains("IsEnabled=\"{Binding HasBranchWorkspaces}\"", StringComparison.Ordinal),
       "Branch hierarchy is not rendered in the left sidebar or posting safety was bypassed.");
+Check(shellView.Contains("<Setter Property=\\"ToolTip\\" Value=\\"{Binding DisplayName}\\"/>", StringComparison.Ordinal),
+    "Branch hover must display the friendly branch name, not the internal workspace record.");
 var consolidatedView = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
     "AccountingAutomationHub.Desktop", "Views", "ConsolidatedBranchDashboardView.xaml"));
 Check(shellModel.Contains("available.Add(_dashboardNavigationItem);", StringComparison.Ordinal) &&
