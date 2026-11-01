@@ -249,7 +249,25 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     if (taxUnit.Length == 0 ||
                         !taxUnit.Equals(item.VerifiedTaxUnitName, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException(
-                            $"GST source voucher '{key}' has no exact verified Tally tax-unit registration. Import blocked; do not substitute the consolidated default GSTIN.");
+                            $"GST source voucher '{key}' has no source-owned Tally tax-unit registration. Do not substitute the consolidated default GSTIN.");
+                    var units = masterPlan.VerifiedTaxUnits
+                        .Where(u => u.Gstin.Trim().Equals(branch.Gstin.Trim(), StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                    if (units.Length != 1 ||
+                        string.IsNullOrWhiteSpace(units[0].MasterId) ||
+                        string.IsNullOrWhiteSpace(units[0].Name) ||
+                        units[0].Gstin.Trim().Length != 15)
+                        throw new InvalidOperationException(
+                            $"Destination Tally has no unique, live MASTERID-bound Tax Unit for GSTIN '{branch.Gstin}'. Import blocked; verify the registration inside the linked destination company.");
+                    var unit = units[0];
+                    if (unit.State.Trim().Length > 0 &&
+                        !unit.State.Trim().Equals(source.SourceState, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(
+                            $"Destination Tally Tax Unit '{unit.Name}' GSTIN/state does not match branch '{branch.DisplayName}'.");
+                    // The Tax Unit's NAME can differ between the branch company
+                    // and the consolidated company. GSTIN and live MASTERID are
+                    // the authority, never a matching display name.
+                    voucher.Elements().First(e => e.Name.LocalName == "TAXUNITNAME").Value = unit.Name.Trim();
                 }
                 transformedVouchers.Add(voucher);
             }
