@@ -143,9 +143,11 @@ internal static class TallyConsolidatedVoucherXmlWrapperTests
               adapted.Vouchers.Single().IsSavedSource &&
               adapted.Vouchers.Single().SourceAnchor.Length == 64,
             "Already-prepared source vouchers must be read without generating GST journals.");
-        Reject(() => TallyConsolidatedSourcePreviewAdapter.Extract(Ka,
+        var wrongParent = TallyConsolidatedSourcePreviewAdapter.Extract(Ka,
             savedXml, [new MasterRecord { Type = "Ledger", Name = "Customer A", Parent = "Primary" },
-                       new MasterRecord { Type = "Ledger", Name = "Sales Local", Parent = "Sales Accounts" }]),
+                       new MasterRecord { Type = "Ledger", Name = "Sales Local", Parent = "Sales Accounts" }]);
+        Reject(() => TallyConsolidatedVoucherXmlWrapper.Prepare(groups,
+            [wrongParent, second], [], true),
             "branch master source-parent conflict");
         Console.WriteLine("PASS: branch adapter reads original saved voucher XML and exact existing ledger parents.");
         Console.WriteLine("PASS: fail-closed master, source, transfer, GST and debit/credit verification.");
