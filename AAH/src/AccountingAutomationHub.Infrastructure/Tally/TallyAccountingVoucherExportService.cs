@@ -4517,7 +4517,8 @@ public sealed class TallyAccountingVoucherExportService
     }
 
     private static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
-    // Use the existing XML-1.0-safe serializer shared with bank accounting.\n    private static string Xml(string value) => TallyExcelParityXmlWriter.Xml(value);
+    // Use the existing XML-1.0-safe serializer shared with bank accounting.
+    private static string Xml(string value) => TallyExcelParityXmlWriter.Xml(value);
 
     private sealed record PreparedVoucher(
         string SourceType, string SourceKey, string ContentHash, DateTime Date, DateTime? ReferenceDate,
