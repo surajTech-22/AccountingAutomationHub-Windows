@@ -116,6 +116,21 @@ internal static class TallyConsolidatedBranchSourceTests
                 CompanyName = "Working Company",
                 FinancialYear = "2025-26"
             }), "consolidated target reused as source link");
+        // Tally may omit FinancialYear in an otherwise correctly linked live
+        // company. The Dashboard should show the saved Client/FY, explicitly
+        // labelled as AAH-linked, rather than an unexplained dash.
+        DirectoryInfo? root = new DirectoryInfo(Environment.CurrentDirectory);
+        while (root is not null &&
+            !File.Exists(Path.Combine(root.FullName, "AAH", "src",
+                "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs")))
+            root = root.Parent;
+        Check(root is not null, "Dashboard source missing for linked-FY display regression.");
+        var dashboard = File.ReadAllText(Path.Combine(root!.FullName, "AAH",
+            "src", "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+        Check(dashboard.Contains("!string.IsNullOrWhiteSpace(openCompany?.FinancialYear)", StringComparison.Ordinal)
+            && dashboard.Contains("link.FinancialYear + \" (AAH-linked)\"", StringComparison.Ordinal),
+            "Missing safe FY fallback when the live Tally company omits FY metadata.");
+
         Console.WriteLine("PASS: source-owned Karnataka/Gujarat XML needs no separate Tally company link.");
     }
 }
