@@ -235,7 +235,7 @@ Require(applicationXaml.Contains("viewModels:ConsolidatedBranchDashboardViewMode
         consolidatedView.Contains("BranchLedger", StringComparison.Ordinal) == false &&
         consolidatedView.Contains("ItemsSource=\"{Binding VerifiedBranches}\"", StringComparison.Ordinal) &&
         consolidatedView.Contains("Text=\"{Binding HistoricalParentSummary}\"", StringComparison.Ordinal) &&
-        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client, _tallyRepository, _tallyClientViewModel)", StringComparison.Ordinal),
+        shellVm.Contains("new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal),
     "Consolidated dashboard does not use separate readback rows.");
 System.Xml.Linq.XDocument.Parse(applicationXaml);
 Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", StringComparison.Ordinal) &&
@@ -244,10 +244,10 @@ Require(mainShellView.Contains("SelectedSidebarBranchWorkspace, Mode=TwoWay", St
         applicationXaml.Contains("viewModels:BranchScopePreviewViewModel", StringComparison.Ordinal) &&
         shellVm.Contains("if (HasBranchWorkspaces && !_isPrivateBranchActive) return;", StringComparison.Ordinal) &&
         shellVm.Contains("if (client is null || (HasBranchWorkspaces && !_isPrivateBranchActive)) return false;", StringComparison.Ordinal) &&
-        shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(parent, branches)", StringComparison.Ordinal) &&
+        shellVm.Contains("BranchAccountingWorkspaceCatalog.Build(parent, configuredBranches)", StringComparison.Ordinal) &&
         shellVm.Contains("_privateBranchAccounts.GetOrCreate(", StringComparison.Ordinal) &&
         shellVm.Contains("_clientRepository.SetCurrent(privateClient.Id);", StringComparison.Ordinal) &&
-        shellVm.Contains("if (!_isPrivateBranchActive && !NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView))", StringComparison.Ordinal) &&
+        shellVm.Contains("if (!NetworkClientRuntime.IsNetworkClient && CanViewModule(GovernancePermissions.TallyView)) available.Add(_tallyNavigationItem);", StringComparison.Ordinal) &&
         shellVm.Contains("available.Add(_dashboardNavigationItem);", StringComparison.Ordinal) &&
         shellVm.Contains("_dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive)", StringComparison.Ordinal),
     "Consolidated/branch menu did not block the shared parent accounting data page.");
