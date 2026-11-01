@@ -2354,7 +2354,7 @@ public sealed class MainWindowViewModel :
                 _tallyAccountingExportService.GenerateLiveXml(profile, previewCompany, start, end));
             var savedMasters = _masterRepository.Get(profile.Id, financialYear, false);
             branchInputs.Add(TallyConsolidatedSourcePreviewAdapter.Extract(
-                identity, savedXml, savedMasters));
+                identity, savedXml, savedMasters, profile.State));
         }
 
         // Native live Master read is read-only and uses the original Tally HTTP
