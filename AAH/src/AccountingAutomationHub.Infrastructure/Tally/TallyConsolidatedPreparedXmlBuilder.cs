@@ -43,7 +43,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
         {
             if (string.IsNullOrWhiteSpace(branch.Xml))
                 throw new InvalidOperationException("The branch has no prepared Tally XML: " + branch.Branch.DisplayName);
-            var source = XDocument.Parse(branch.Xml, LoadOptions.PreserveWhitespace);
+            var source = XDocument.Parse(TallyConsolidatedXmlTextSafety.Repair(branch.Xml).Xml, LoadOptions.PreserveWhitespace);
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
@@ -56,7 +56,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
             // from the original branch's freshly exported Tally masters, never
             // by guessing GSTIN, banking or party settings.
             var liveSource = string.IsNullOrWhiteSpace(branch.SourceLiveMastersXml)
-                ? null : XDocument.Parse(branch.SourceLiveMastersXml, LoadOptions.PreserveWhitespace);
+                ? null : XDocument.Parse(TallyConsolidatedXmlTextSafety.Repair(branch.SourceLiveMastersXml).Xml, LoadOptions.PreserveWhitespace);
             var originalLedgerXml = source.Descendants().Where(x => Is(x, "LEDGER") &&
                     x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
                 .Concat(liveSource?.Descendants().Where(x => Is(x, "LEDGER")) ?? [])
