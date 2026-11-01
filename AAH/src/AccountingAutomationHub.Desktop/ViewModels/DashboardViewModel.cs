@@ -241,7 +241,7 @@ public sealed class DashboardViewModel :
             Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
             Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
             IsTallyAutoSyncSettingsOpen = false;
-            TallyAutoSyncStatus = "Consolidated Tally linking is available. Consolidated voucher export awaits source-owned group XML routing.";
+            TallyAutoSyncStatus = "Consolidated Tally link is available. Generate consolidated XML above; the normal client voucher exporter is not used for grouped books.";
         }
         if (_clientContext.CurrentClient is { } current)
             _tallyCoordinator.SetOutboundAutoSyncEnabled(current,
@@ -2843,7 +2843,7 @@ public sealed class DashboardViewModel :
             "The global dropdown can show open Tally companies, but linking requires an active client.";
         TallyReportStatus = "Open a client and link Tally to view reports.";
         TallyStatisticsStatus = "Open a client and link Tally to view Statistics.";
-        TallyExportStatus = "Open a client and link Tally before exporting vouchers.";
+        TallyExportStatus = _isConsolidatedTallyScope\n            ? "Consolidated vouchers: Generate branch-prepared XML above; normal Export Selected is disabled to protect source accounting."\n            : "Open a client and link Tally before exporting vouchers.";
         TallyLiveXmlStatus = _tallyCoordinator.LiveXmlStatus;
         ApplyNoCompanyIdentity();
         _dateClientId = 0;
