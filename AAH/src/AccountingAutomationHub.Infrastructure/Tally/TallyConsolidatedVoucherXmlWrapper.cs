@@ -267,7 +267,9 @@ public static class TallyConsolidatedVoucherXmlWrapper
                     original.Gstin, original.State, original.Country, original.Pincode,
                     original.MailingName, original.Address1, original.Address2, original.Address3,
                     original.IsBank, original.BankName, original.BankBranchName,
-                    original.AccountNumber, original.IfscCode, original.AccountType));
+                    original.AccountNumber, original.IfscCode, original.AccountType,
+                    ParentIsPartyGroup: mapped.SourceParent.Equals("Sundry Debtors", StringComparison.OrdinalIgnoreCase) ||
+                                        mapped.SourceParent.Equals("Sundry Creditors", StringComparison.OrdinalIgnoreCase)));
         }
         TallyExcelParityXmlWriter.EndAllMastersImport(ledgers);
         return new(companyName, masterPlan.DestinationCompanyKey, masterPlan.FinancialYear,
