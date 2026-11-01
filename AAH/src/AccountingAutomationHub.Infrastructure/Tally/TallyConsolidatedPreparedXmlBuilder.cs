@@ -37,6 +37,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
         var mappedStockMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var commonInventoryMasters = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
         var sourceVoucherCount = 0;
+        var sourceBoundAlters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var branch in prepared.OrderBy(x => x.Branch.BranchId, StringComparer.OrdinalIgnoreCase))
         {
@@ -158,12 +159,33 @@ public static class TallyConsolidatedPreparedXmlBuilder
                        x.Parent is not null && Is(x.Parent, "TALLYMESSAGE")))
             {
                 var v = new XElement(raw);
-                if (!Field(v, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase) ||
-                    Field(v, "TAGNAME").Length > 0 || Field(v, "TAGVALUE").Length > 0 ||
-                    v.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")) ||
-                    v.Attributes().Any(x => x.Name.LocalName.Equals("GUID", StringComparison.OrdinalIgnoreCase)))
-                    throw new InvalidOperationException("A prepared branch ALTER or Tally-bound voucher cannot be replayed as CREATE. " +
-                        "Reconcile its original identity in the existing export gate first.");
+                var sourceAction = Field(v, "ACTION");
+                if (sourceAction.Equals("Alter", StringComparison.OrdinalIgnoreCase))
+                {
+                    var id = Field(v, "TAGVALUE");
+                    if (!Field(v, "TAGNAME").Equals("MASTER ID", StringComparison.OrdinalIgnoreCase) ||
+                        id.Length == 0 || !id.All(char.IsDigit) ||
+                        !sourceBoundAlters.Add(branch.Branch.BranchId + "|" + id))
+                        throw new InvalidOperationException(
+                            "Unverified or repeated original branch Tally MASTERID; cannot rebase source voucher.");
+                    // The original MASTERID is authority only inside its branch
+                    // company. The consolidated target is a different company.
+                    // Stage CREATE for review; no XML stage is allowed to post
+                    // until the target's separate duplicate/version gate runs.
+                    foreach (var attribute in v.Attributes().Where(x =>
+                        x.Name.LocalName is "TAGNAME" or "TAGVALUE" or "GUID").ToArray())
+                        attribute.Remove();
+                    foreach (var identity in v.Elements().Where(x =>
+                        Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID")).ToArray())
+                        identity.Remove();
+                    v.SetAttributeValue("ACTION", "Create");
+                }
+                else if (!sourceAction.Equals("Create", StringComparison.OrdinalIgnoreCase) ||
+                         Field(v, "TAGNAME").Length > 0 || Field(v, "TAGVALUE").Length > 0 ||
+                         v.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")) ||
+                         v.Attributes().Any(x => x.Name.LocalName.Equals("GUID", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException(
+                        "Branch voucher has a foreign or ambiguous Tally identity; final XML blocked.");
                 var originalNumber = Value(v, "VOUCHERNUMBER");
                 var date = Value(v, "DATE");
                 var type = Value(v, "VOUCHERTYPENAME");
@@ -307,7 +329,10 @@ public static class TallyConsolidatedPreparedXmlBuilder
             masterBuilder.ToString(), voucherBuilder.ToString(),
             expected.Length, sourceVoucherCount, vouchers.Count, reconciled,
             "Original branch amounts, entries, tax values and journals were not recalculated. " +
-            "XML is staged only; live Tally duplicate/readback checks are still mandatory.");
+            "XML is staged only; live Tally duplicate/readback checks are still mandatory.")
+        {
+            RebasedBranchAlterCount = sourceBoundAlters.Count
+        };
     }
 
     private static void RewriteVoucher(
@@ -358,4 +383,9 @@ public sealed record TallyPreparedBranchXml(
 
 public sealed record TallyConsolidatedPreparedXmlResult(
     string MastersXml, string VouchersXml, int BranchCount,
-    int SourceVouchers, int FinalVouchers, int InterbankReconciled, string Status);
+    int SourceVouchers, int FinalVouchers, int InterbankReconciled, string Status)
+{
+    // This is a source-company bound master, never the target company's MASTERID.
+    // The target's old-version/read-back gate must make the final CREATE/ALTER decision.
+    public int RebasedBranchAlterCount { get; init; }
+}
