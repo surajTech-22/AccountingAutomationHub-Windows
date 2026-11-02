@@ -131,10 +131,18 @@ internal static class GstinLatestPartyNameTests
                 while(reader.Read())
                 {
                     var name=reader.GetString(0);
-                    using var json=JsonDocument.Parse(reader.GetString(1));
-                    Assert(name=="Kreativ Creative" &&
-                           json.RootElement.GetProperty(column).GetString()==name &&
-                           reader.GetInt32(3)==0, "Name column, JSON or user-edited flag diverged.");
+                    var rawJson=reader.GetString(1);
+                    Assert(name=="Kreativ Creative" && reader.GetInt32(3)==0,
+                        "Name column or user-edited flag diverged.");
+                    if (rawJson.Length > 0)
+                    {
+                        using var json=JsonDocument.Parse(rawJson);
+                        Assert(json.RootElement.GetProperty(column).GetString()==name,
+                            "Saved JSON and SQL party-name fields diverged.");
+                    }
+                    else
+                        Assert(count==1,
+                            "A historical renamed row must have JSON persisted; only untouched newest fixture may be blank.");
                     Assert(Convert.ToDecimal(reader.GetValue(2),CultureInfo.InvariantCulture)==
                         (count==0 ? 98320 : 27280), "GSTIN name fix changed invoice amount.");
                     count++;
