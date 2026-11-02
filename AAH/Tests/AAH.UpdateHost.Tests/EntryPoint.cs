@@ -72,6 +72,23 @@ internal static class EntryPoint
             "Update listener absent during startup, disposed before process exit or uses a wall-clock deadline.");
         Console.WriteLine("PASS: listener covers startup and cleanup; update waits for safe initialized idle.");
 
+        // Previously OnExit finished and logged mutex release, but a
+        // foreground helper thread left the old AccountingAutomationHub.exe
+        // process alive. Only a verified updater request, after the three
+        // idle samples and full runtime/OnExit cleanup, may end the process.
+        var verifiedRequest = desktopSource.IndexOf("_verifiedUpdaterExit = true;", StringComparison.Ordinal);
+        var idleSamples = desktopSource.LastIndexOf("quietSamples >= 3", verifiedRequest, StringComparison.Ordinal);
+        var cleanupGuard = desktopSource.IndexOf("if (_verifiedUpdaterExit && _runtimeCleaned)", StringComparison.Ordinal);
+        var ownerRelease = desktopSource.IndexOf("Process exit releasing final single-instance ownership.", StringComparison.Ordinal);
+        var finalExit = desktopSource.IndexOf("Environment.Exit(0);", cleanupGuard, StringComparison.Ordinal);
+        Assert(verifiedRequest > idleSamples && idleSamples > 0 &&
+               cleanupGuard > ownerRelease && ownerRelease > verifiedRequest &&
+               finalExit > cleanupGuard &&
+               desktopSource.Contains("finally { Shutdown(); }", StringComparison.Ordinal),
+            "Verified update can leave an already-cleaned ghost PID or exit before accounting/Tally safety gates.");
+        Console.WriteLine("PASS: verified updater completes process exit only after idle, accounting cleanup and mutex release.");
+
+
         Assert(automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !manualReimport) return false;", StringComparison.Ordinal) &&
                automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !item.ManualReimport)", StringComparison.Ordinal) &&
                automationSource.Contains("_queue.Any(item => item.ManualReimport)", StringComparison.Ordinal) &&
