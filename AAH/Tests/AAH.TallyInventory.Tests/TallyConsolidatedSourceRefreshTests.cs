@@ -133,7 +133,7 @@ internal static class TallyConsolidatedSourceRefreshTests
                 "AccountingAutomationHub.Infrastructure", "Tally", "TallyAccountingVoucherExportService.cs"));
             Check(main.Contains("TallyConsolidatedBranchXmlSnapshotCache.TryRead(", StringComparison.Ordinal) &&
                   main.Contains("ComputeOfflineConsolidationSourceFingerprint(branchClient)", StringComparison.Ordinal) &&
-                  main.Contains("return (cachedXml, cachedStatus);", StringComparison.Ordinal) &&
+                  main.Contains("return (cachedXml, cachedStatus, fingerprint);", StringComparison.Ordinal) &&
                   main.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
                   main.Contains("offlineConsolidatedBranchSource: true", StringComparison.Ordinal) &&
                   main.Contains("TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(", StringComparison.Ordinal) &&
