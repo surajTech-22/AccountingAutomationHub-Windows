@@ -2331,11 +2331,12 @@ Tally-style report availability
 
     private static void CleanupOldDiagnosticArtifacts(string root, string safeClient, string currentZipPath)
     {
-        // Fix63 cumulative retention repair: before creating the new diagnostic keep
-        // only one previous completed bundle. The new current ZIP then makes the
-        // promised maximum of two (Current + Previous), never three.
+        // Keep the complete newly created ZIP and one previous verified ZIP.
+        // A failed new archive never deletes the preceding diagnostic.
         foreach (var oldZip in Directory.EnumerateFiles(
                      root, $"AAH_TALLY_DIAGNOSTIC_*_{safeClient}.zip", SearchOption.TopDirectoryOnly)
+                 .Where(path => !Path.GetFullPath(path).Equals(
+                     Path.GetFullPath(currentZipPath), StringComparison.OrdinalIgnoreCase))
                  .OrderByDescending(File.GetLastWriteTimeUtc).Skip(1))
         {
             try { File.Delete(oldZip); }
