@@ -251,7 +251,8 @@ internal static class TallyConsolidatedPreparedXmlTests
         withPartyGstin.Descendants("LEDGER").Single(x => (string?)x.Element("NAME") == "Buyer")
             .Add(new XElement("PARTYGSTIN", "29ABCDE1234F1Z5"));
         withPartyGstin.Descendants("VOUCHER").Single()
-            .Add(new XElement("PARTYGSTIN", "24ABCDE1234F1Z5"));
+            .Add(new XElement("PARTYLEDGERNAME", "Buyer"),
+                 new XElement("PARTYGSTIN", "24ABCDE1234F1Z5"));
         var safeOverride = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a with { Xml = withPartyGstin.ToString() }, b ]);
         Check(XDocument.Parse(safeOverride.VouchersXml)
