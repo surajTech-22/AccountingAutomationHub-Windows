@@ -85,6 +85,18 @@ public static class TallyConsolidatedGstMasterPolicy
             throw new InvalidOperationException(
                 "Voucher has malformed original party GSTIN: " + sourceAnchor);
         var party = Value(voucher, "PARTYLEDGERNAME");
+        if (party.Length == 0) party = Value(voucher, "PARTYNAME");
+        if (party.Length == 0) party = Value(voucher, "BASICBASEPARTYNAME");
+        if (party.Length == 0)
+        {
+            // Journal/legacy vouchers can omit their top-level party tag.
+            // Use the original source's explicit party-ledger entry marker,
+            // never guess the counterparty from a tax or purchase line.
+            var marked = voucher.Descendants().FirstOrDefault(x =>
+                (Is(x, "ALLLEDGERENTRIES.LIST") || Is(x, "LEDGERENTRIES.LIST")) &&
+                Value(x, "ISPARTYLEDGER").Equals("Yes", StringComparison.OrdinalIgnoreCase));
+            if (marked is not null) party = Value(marked, "LEDGERNAME");
+        }
         if (party.Length == 0 || !sourceLedgers.TryGetValue(party, out var declarations) ||
             declarations.Length == 0)
             return; // existing missing-master checks remain authoritative.
