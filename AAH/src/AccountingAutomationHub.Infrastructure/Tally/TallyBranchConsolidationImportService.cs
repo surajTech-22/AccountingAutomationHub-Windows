@@ -156,6 +156,141 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         return live;
     }
 
+    /// <summary>
+    /// Consolidation is only a wrapper around the already-confirmed parent Tally link.
+    /// The ordinary Tally coordinator may rediscover the same live company with a
+    /// recomputed key (name/first-books FY drift). Reuse the ORIGINAL saved link only
+    /// after unique, independent company-number/GSTIN evidence and no contradictions.
+    /// This does not relink, mutate the ComboBox, or permit another company to import.
+    /// The live importers repeat independent Tally discovery and master readback.
+    /// </summary>
+    public static TallyCompanyInfo ResolveLinkedDestination(
+        TallyClientLink link,
+        TallyCompanyInfo? selected,
+        IReadOnlyCollection<TallyCompanyInfo> openCompanies)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        ArgumentNullException.ThrowIfNull(openCompanies);
+        if (selected is null)
+        {
+            var existing = openCompanies.Where(company =>
+                company.CompanyKey.Trim().Equals(link.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (existing.Length == 1)
+            {
+                selected = existing[0];
+            }
+            else if (existing.Length == 0)
+            {
+                // Ordinary 5-second discovery may replace the WPF ComboBox item
+                // with a recomputed key and temporarily clear SelectedItem.
+                // Recover only a UNIQUE target independently proved by a saved
+                // CompanyNumber/GSTIN, with no contradictory BooksFrom or ID.
+                static bool SameRecovery(string a, string b) =>
+                    a.Trim().Equals(b.Trim(), StringComparison.OrdinalIgnoreCase);
+                var recoveryGstin = TallyCompanyInfo.NormalizeGstin(link.Gstin);
+                var recoveryBooks = TallyCompanyInfo.ParseTallyDate(link.BooksFrom);
+                var candidates = openCompanies.Where(company =>
+                {
+                    var number = !string.IsNullOrWhiteSpace(link.CompanyNumber) &&
+                                 !string.IsNullOrWhiteSpace(company.CompanyNumber) &&
+                                 SameRecovery(link.CompanyNumber, company.CompanyNumber);
+                    var gstin = recoveryGstin.Length > 0 &&
+                                SameRecovery(recoveryGstin, TallyCompanyInfo.NormalizeGstin(company.Gstin));
+                    var numberConflict = !string.IsNullOrWhiteSpace(link.CompanyNumber) &&
+                                         !string.IsNullOrWhiteSpace(company.CompanyNumber) && !number;
+                    var gstinConflict = recoveryGstin.Length > 0 &&
+                                        TallyCompanyInfo.NormalizeGstin(company.Gstin).Length > 0 && !gstin;
+                    var companyBooks = TallyCompanyInfo.ParseTallyDate(company.BooksFrom);
+                    return (number || gstin) && !numberConflict && !gstinConflict &&
+                           (!recoveryBooks.HasValue || !companyBooks.HasValue ||
+                            recoveryBooks.Value.Date == companyBooks.Value.Date) &&
+                           (company.LinkedClientId <= 0 || company.LinkedClientId == link.ClientId);
+                }).ToArray();
+                if (candidates.Length == 1)
+                    selected = candidates[0];
+            }
+            if (selected is null)
+                throw new InvalidOperationException(
+                    "The saved consolidated Tally company is not uniquely open. Select the intended company and use the existing Link control; no import was sent.");
+        }
+
+        if (selected.LinkedClientId > 0 && selected.LinkedClientId != link.ClientId)
+            throw new InvalidOperationException(
+                "The selected Tally company is linked to another client. The consolidated destination was not changed.");
+
+        var sameKey = selected.CompanyKey.Trim().Equals(link.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase);
+        if (sameKey)
+        {
+            RequireConfirmedDestination(link, selected);
+            return selected;
+        }
+
+        static bool Has(string value) => !string.IsNullOrWhiteSpace(value);
+        static bool Same(string a, string b) =>
+            a.Trim().Equals(b.Trim(), StringComparison.OrdinalIgnoreCase);
+        var savedGstin = TallyCompanyInfo.NormalizeGstin(link.Gstin);
+        var selectedGstin = TallyCompanyInfo.NormalizeGstin(selected.Gstin);
+        var numberMatch = Has(link.CompanyNumber) && Has(selected.CompanyNumber) &&
+                          Same(link.CompanyNumber, selected.CompanyNumber);
+        var gstinMatch = Has(savedGstin) && Has(selectedGstin) && Same(savedGstin, selectedGstin);
+        var numberConflict = Has(link.CompanyNumber) && Has(selected.CompanyNumber) && !numberMatch;
+        var gstinConflict = Has(savedGstin) && Has(selectedGstin) && !gstinMatch;
+        var savedBooks = TallyCompanyInfo.ParseTallyDate(link.BooksFrom);
+        var selectedBooks = TallyCompanyInfo.ParseTallyDate(selected.BooksFrom);
+        var booksConflict = savedBooks.HasValue && selectedBooks.HasValue &&
+                            savedBooks.Value.Date != selectedBooks.Value.Date;
+
+        // Never promote company NAME, Tally availability or FY into identity evidence.
+        // In particular two distinct companies may share a GSTIN, so also require
+        // a unique live selected company and reject every contradictory known field.
+        if ((!numberMatch && !gstinMatch) || numberConflict || gstinConflict || booksConflict)
+            throw new InvalidOperationException(
+                "The selected Tally company is not independently verified as the saved consolidated link. " +
+                "Use the existing Link control to confirm the intended company; no XML or Tally import was sent.");
+
+        var selectedLiveMatches = openCompanies.Where(company =>
+            Same(company.CompanyKey, selected.CompanyKey) &&
+            Same(company.Name, selected.Name)).ToArray();
+        // When a key has drifted, independent identity must uniquely identify
+        // this ONE open company, not just the currently selected ComboBox entry.
+        // Different Tally books may reuse a GSTIN or company number.
+        var strongLiveMatches = openCompanies.Where(company =>
+        {
+            var number = Has(link.CompanyNumber) && Has(company.CompanyNumber) &&
+                         Same(link.CompanyNumber, company.CompanyNumber);
+            var gstin = Has(savedGstin) && Has(company.Gstin) &&
+                        Same(savedGstin, TallyCompanyInfo.NormalizeGstin(company.Gstin));
+            var liveBooks = TallyCompanyInfo.ParseTallyDate(company.BooksFrom);
+            var dateCompatible = !savedBooks.HasValue || !liveBooks.HasValue ||
+                                 savedBooks.Value.Date == liveBooks.Value.Date;
+            return (number || gstin) && dateCompatible;
+        }).ToArray();
+        if (selectedLiveMatches.Length != 1 || strongLiveMatches.Length != 1 ||
+            !ReferenceEquals(selectedLiveMatches[0], strongLiveMatches[0]))
+            throw new InvalidOperationException(
+                "The selected consolidated Tally company is not uniquely open or uniquely identified by the saved link. " +
+                "Use the existing Link control; no XML or import was sent.");
+
+        // The original linked CompanyKey is kept as the accounting authority;
+        // the actual live company name remains the HTTP transport destination.
+        var resolved = new TallyCompanyInfo
+        {
+            CompanyKey = link.CompanyKey,
+            Name = selected.Name,
+            CompanyNumber = selected.CompanyNumber,
+            Gstin = selected.Gstin,
+            StateName = selected.StateName,
+            BooksFrom = selected.BooksFrom,
+            StartingFrom = selected.StartingFrom,
+            FinancialYear = selected.FinancialYear,
+            LinkedClientId = link.ClientId,
+            LinkedClientCode = selected.LinkedClientCode,
+            LinkedClientName = selected.LinkedClientName
+        };
+        RequireConfirmedDestination(link, resolved);
+        return resolved;
+    }
+
     public async Task<TallyBranchMasterImportResult> ImportMastersAsync(
         TallyClientLink confirmedLink,
         TallyCompanyInfo destination,
