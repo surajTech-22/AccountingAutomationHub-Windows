@@ -27,10 +27,34 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             string.IsNullOrWhiteSpace(link.FinancialYear) ||
             string.IsNullOrWhiteSpace(link.CompanyKey) ||
             string.IsNullOrWhiteSpace(destination.CompanyKey) ||
-            !link.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-            !link.CompanyName.Trim().Equals(destination.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+            !link.CompanyKey.Trim().Equals(destination.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(link.CompanyName) ||
+            string.IsNullOrWhiteSpace(destination.Name))
             throw new InvalidOperationException(
-                "Confirm the exact linked consolidated Client/FY company; name or company key differs.");
+                "The consolidated destination is not the saved Client/FY Tally CompanyKey. " +
+                "Keep the existing link; select its linked company before generating XML.");
+
+        // Unlike ordinary branch export, consolidated import uses the saved parent
+        // CompanyKey to identify the destination. Tally may subsequently rename
+        // that SAME company (e.g. add 'Consolidated') without changing its
+        // GSTIN/company-number-based key. The stored display name is not an
+        // independent accounting identity and must not veto a valid linked key.
+        // Never accept contradictory nonempty strong metadata.
+        static bool Conflicting(string saved, string selected) =>
+            !string.IsNullOrWhiteSpace(saved) &&
+            !string.IsNullOrWhiteSpace(selected) &&
+            !saved.Trim().Equals(selected.Trim(), StringComparison.OrdinalIgnoreCase);
+        if (Conflicting(link.CompanyNumber, destination.CompanyNumber) ||
+            Conflicting(TallyCompanyInfo.NormalizeGstin(link.Gstin),
+                        TallyCompanyInfo.NormalizeGstin(destination.Gstin)))
+            throw new InvalidOperationException(
+                "The selected consolidated Tally company number or GSTIN contradicts the saved parent link.");
+        var linkedBookStart = TallyCompanyInfo.ParseTallyDate(link.BooksFrom);
+        var selectedBookStart = TallyCompanyInfo.ParseTallyDate(destination.BooksFrom);
+        if (linkedBookStart.HasValue && selectedBookStart.HasValue &&
+            linkedBookStart.Value.Date != selectedBookStart.Value.Date)
+            throw new InvalidOperationException(
+                "The selected consolidated Tally BooksFrom differs from the saved parent link.");
 
         RequireLinkedFinancialYearCoverage(link.FinancialYear, destination);
         return link.FinancialYear;
