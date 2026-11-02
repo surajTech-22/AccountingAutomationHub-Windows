@@ -66,6 +66,14 @@ internal static class TallyConsolidatedSourceRefreshTests
                 xmlPath, statusPath, code, "2024-25", sourceHash, out _, out _),
                 "previous FY XML was accepted");
 
+            // A source whose actual XML company is different must not be
+            // trusted simply because the status and SHA256 were recomputed.
+            var foreignXml = Prepared.Replace("AAH Prepared Branch CL-KA", "Different Live Company");
+            File.WriteAllText(xmlPath, foreignXml, Encoding.UTF8);
+            File.WriteAllText(statusPath,
+                TallyConsolidatedBranchXmlSnapshotCache.StampStatus(baseStatus, sourceHash, foreignXml));
+            Check(!Reusable(sourceHash), "a foreign XML company was reused as AAH private branch accounting");
+
             File.WriteAllText(xmlPath, Prepared.Replace("INV-1", "INV-2"), Encoding.UTF8);
             Check(!Reusable(sourceHash), "edited source XML passed original SHA256 integrity");
             // An actual regeneration writes the new XML + new verified status.
