@@ -87,6 +87,39 @@ internal static class TallyConsolidatedSourceRefreshTests
                     baseStatus.Replace("Ready in XML: 1", "Ready in XML: 2"), revisedHash, updated));
             Check(!Reusable(revisedHash), "incomplete snapshot voucher count reused");
 
+            // Simulate one branch being edited after its own snapshot was
+            // prepared while the wrapper loads a different branch. A correct
+            // final collection must reject the stale earlier snapshot.
+            var liveSourceHashes = new Dictionary<string, string>
+            {
+                ["KA"] = sourceHash,
+                ["GJ"] = revisedHash
+            };
+            var collected = new (string Client, string BranchName, string Fingerprint)[]
+            {
+                ("KA", "Karnataka", sourceHash),
+                ("GJ", "Gujarat", revisedHash)
+            };
+            TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+                collected, client => liveSourceHashes[client]);
+            liveSourceHashes["KA"] = TallyConsolidatedBranchXmlSnapshotCache.Sha256(
+                "new Karnataka invoice saved while Gujarat was collected");
+            try
+            {
+                TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+                    collected, client => liveSourceHashes[client]);
+                throw new InvalidOperationException(
+                    "Concurrent branch edit was silently accepted.");
+            }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains("Branch 'Karnataka' accounting changed", StringComparison.Ordinal))
+            {
+                // Expected: stop rather than build a mixed-time XML.
+            }
+            liveSourceHashes["KA"] = sourceHash;
+            TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+                collected, client => liveSourceHashes[client]);
+
             // Production contract: source fingerprint uses persisted inputs and
             // the original export path, never a new consolidated voucher writer.
             var assemblyRoot = new DirectoryInfo(AppContext.BaseDirectory);
@@ -103,7 +136,9 @@ internal static class TallyConsolidatedSourceRefreshTests
                   main.Contains("return (cachedXml, cachedStatus);", StringComparison.Ordinal) &&
                   main.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
                   main.Contains("offlineConsolidatedBranchSource: true", StringComparison.Ordinal) &&
-                  main.Contains("TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(", StringComparison.Ordinal),
+                  main.Contains("TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(", StringComparison.Ordinal) &&
+                  main.Contains("branchSourceFingerprints.Add((child, branch.Name, sourceFingerprint))", StringComparison.Ordinal) &&
+                  main.Split("TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(", StringSplitOptions.None).Length >= 3,
                 "the consolidated wrapper bypassed the existing individual exporter or the cache recheck");
             foreach (var repository in new[] {
                          "_purchaseRepository.GetRecords(", "_salesRepository.GetRecords(",
@@ -114,7 +149,7 @@ internal static class TallyConsolidatedSourceRefreshTests
                          "_stockMasterRepository.GetUnits(", "_stockMasterRepository.GetSimpleMasters(" })
                 Check(exporter.Contains(repository, StringComparison.Ordinal),
                     "source fingerprint or original exporter missing " + repository);
-            Console.WriteLine("PASS: consolidated XML reuses unchanged verified branch source, regenerates after updates and rejects stale/tampered/cross-branch XML.");
+            Console.WriteLine("PASS: consolidated XML source refresh, tamper checks and cross-branch concurrent edit rejection.");
         }
         finally
         {
