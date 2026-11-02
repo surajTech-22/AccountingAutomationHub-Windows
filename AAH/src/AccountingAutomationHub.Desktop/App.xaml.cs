@@ -761,9 +761,25 @@ public partial class App : System.Windows.Application
     // verified process-targeted update-shutdown handler.
     public void HandleMainWindowClosing(CancelEventArgs e)
     {
-        if (_isExiting || Preferences is null) return;
+        // X/Close ALWAYS means hide-to-tray, including the startup interval
+        // before Preferences has finished loading. Otherwise WPF may destroy
+        // the only main HWND and leave the updater with no running owner PID.
+        // Only verified update shutdown and explicit Exit Completely use the
+        // separate _isExiting path.
+        if (_isExiting) return;
         e.Cancel = true;
-        _mainWindow?.Hide();
+        try
+        {
+            _mainWindow?.Hide();
+            if (_trayIcon is not null)
+                _trayIcon.Visible = true;
+        }
+        catch (Exception exception)
+        {
+            WriteShutdownDiagnostic("Close-to-tray could not hide main window: " + exception);
+        }
+        WriteShutdownDiagnostic("Main window close intercepted; AAH remains alive in tray for background workers and auto-update.");
+        if (Preferences is null) return; // Do not let unfinished settings initialization close the process.
         if (NetworkClientRuntime.IsNetworkClient)
         {
             ShowTrayBalloon("AAH LAN is still live",
