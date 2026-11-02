@@ -58,7 +58,7 @@ internal static class TallyOfflineConsolidationLedgerTests
             TallyMasterId = "3091",
             TallyGuid = "source-company-only"
         };
-        var offline = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(true, [bound]) + "</ROOT>");
+        var offline = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(true, [bound]) + "</ROOT>", "bound source ledger fixture");
         var ledger = offline.Descendants("LEDGER").Single();
         Check((string?)ledger.Attribute("ACTION") == "Create" &&
               (string?)ledger.Element("PARENT") == "Sundry Creditors" &&
@@ -69,12 +69,12 @@ internal static class TallyOfflineConsolidationLedgerTests
 
         // The normal individual-company importer must keep its live Tally
         // MASTERID authority and must NOT try to CREATE the same bound Ledger.
-        var online = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(false, [bound]) + "</ROOT>");
+        var online = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(false, [bound]) + "</ROOT>", "normal source ledger fixture");
         Check(!online.Descendants("LEDGER").Any(),
             "Individual-company Tally CREATE behavior was modified.");
 
         // No source master means a voucher name alone cannot invent a party.
-        var absent = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(true, []) + "</ROOT>");
+        var absent = TallyConsolidatedXmlTextSafety.ParseDocument("<ROOT>" + Build(true, []) + "</ROOT>", "missing source ledger fixture");
         Check(!absent.Descendants("LEDGER").Any(),
             "Offline exporter manufactured an unverified party master.");
 
