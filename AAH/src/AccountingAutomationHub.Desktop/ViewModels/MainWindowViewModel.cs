@@ -2436,16 +2436,29 @@ public sealed class MainWindowViewModel :
             // A separate branch Tally company is NOT required. If one is
             // explicitly linked and open, its full Master export can supply
             // source-defined GST/party/bank attributes without reconstruction.
-            var sourceCandidates = sourceLink is null
-                ? Array.Empty<TallyCompanyInfo>()
-                : openCompanies.Where(x =>
-                    x.CompanyKey.Equals(sourceLink.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-                    x.Name.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (sourceCandidates.Length > 1)
-                throw new InvalidOperationException("Ambiguous live source Tally company for branch: " + branch.Name);
-            var fullSourceMasterXml = sourceCandidates.Length == 1
-                ? await _tallyHttpService.ExportMastersAsync(sourceCandidates[0])
-                : "";
+            // Source Tally is OPTIONAL, never a second consolidated company.
+            // Use the existing normal linked-company identity wrapper for the
+            // read-only source master export as well. Tally rediscovery may
+            // change the CompanyKey/name when its FIRST-books FY is returned.
+            // Refuse ambiguous/unrelated source companies without blocking the
+            // authoritative branch-prepared voucher XML itself.
+            TallyCompanyInfo? originalSource = null;
+            if (sourceLink is not null)
+            {
+                try
+                {
+                    var selectedSource = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                        sourceLink, null, openCompanies, financialYear);
+                    originalSource = TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+                        sourceLink, selectedSource, openCompanies, financialYear);
+                }
+                catch (InvalidOperationException)
+                {
+                    skippedOptionalSourceLinks++;
+                }
+            }
+            var fullSourceMasterXml = originalSource is null
+                ? "" : await _tallyHttpService.ExportMastersAsync(originalSource);
             branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters, fullSourceMasterXml));
         }
 

@@ -112,6 +112,63 @@ internal static class TallyConsolidatedPreparedXmlTests
             Plan(), [a with { Xml = repeated.ToString() }, b]),
             "Two blank-number vouchers with identical branch/date/type/reference must not silently coalesce.");
 
+        // Real Gujarat private-branch regression: the original exporter can
+        // stage a complete Ledger CREATE even when a separate branch Master
+        // cache row was not hydrated. It is original source authority, not a
+        // company-link or GSTIN-derived re-creation.
+        var onlySalesMaster = a with
+        {
+            Masters = [Ledger("Local Sales", "Sales Accounts")]
+        };
+        var preparedMasterAuthority = TallyConsolidatedPreparedXmlBuilder.Build(
+            Plan(), [onlySalesMaster, b]);
+        Check(XDocument.Parse(preparedMasterAuthority.MastersXml).Descendants("LEDGER")
+            .Any(x => (string?)x.Element("NAME") == "Buyer - Karnataka"),
+            "Original prepared branch Ledger CREATE was ignored when the Master cache was absent.");
+
+        // Never let a voucher name alone authorize an invented party/GST Ledger.
+        var missingBuyerDeclaration = XDocument.Parse(a.Xml);
+        missingBuyerDeclaration.Descendants("TALLYMESSAGE")
+            .Where(x => (string?)x.Element("LEDGER")?.Attribute("NAME") == "Buyer").Remove();
+        var missingBuyer = a with
+        {
+            Xml = missingBuyerDeclaration.ToString(),
+            Masters = [Ledger("Local Sales", "Sales Accounts")]
+        };
+        try
+        {
+            TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [missingBuyer, b]);
+            throw new Exception("Unverified Gujarat-style Customer Ledger was accepted without source authority.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            Check(ex.Message.Contains("Buyer", StringComparison.Ordinal) &&
+                  ex.Message.Contains("unverified posting Ledger", StringComparison.Ordinal),
+                "Unverified party ledger must be reported with exact branch source name.");
+        }
+
+        var missingBothDeclarations = XDocument.Parse(a.Xml);
+        missingBothDeclarations.Descendants("TALLYMESSAGE")
+            .Where(x => x.Element("LEDGER") is not null).Remove();
+        var missingBoth = a with { Xml = missingBothDeclarations.ToString(), Masters = [] };
+        try
+        {
+            TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [missingBoth, b]);
+            throw new Exception("Two unverified Ledger names were silently treated as valid.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            Check(ex.Message.Contains("2 unverified posting Ledger(s)", StringComparison.Ordinal) &&
+                  ex.Message.Contains("Buyer", StringComparison.Ordinal) &&
+                  ex.Message.Contains("Local Sales", StringComparison.Ordinal),
+                "Consolidation must report ALL missing ledgers together, never one by one.");
+        }
+
+        var originalWithoutBuyerMaster = a with
+        {
+            Xml = missingBuyerDeclaration.ToString(),
+            Masters = [Ledger("Local Sales", "Sales Accounts")]
+        };
         // Branch vouchers may refer to already-live Tally ledgers whose CREATE
         // declaration is absent from the normal prepared XML. The original
         // branch's full Tally master data is used without recreating GST data.
@@ -130,6 +187,12 @@ internal static class TallyConsolidatedPreparedXmlTests
             """;
         var liveMasterCase = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a with { Xml = withoutBuyerDoc.ToString(), SourceLiveMastersXml = fullBuyer }, b ]);
+        var liveOnlyAuthority = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            originalWithoutBuyerMaster with { SourceLiveMastersXml = fullBuyer }, b ]);
+        Check(XDocument.Parse(liveOnlyAuthority.MastersXml).Descendants("LEDGER")
+            .Any(x => (string?)x.Element("NAME") == "Buyer - Karnataka" &&
+                      (string?)x.Element("PARENT") == "Karnataka Debtors"),
+            "Original separately linked Tally's full Master export was not accepted as ledger authority.");
         var detailed = XDocument.Parse(liveMasterCase.MastersXml).Descendants("LEDGER").Single(x =>
             (string?)x.Element("NAME") == "Buyer - Karnataka");
         Check(detailed.Element("MASTERID") is null &&

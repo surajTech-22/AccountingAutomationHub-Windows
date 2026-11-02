@@ -92,6 +92,45 @@ internal static class TallyConsolidatedBranchSourceTests
             TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
                 staleFy, 101, "2025-26", Destination, validSourceCompany) is null,
             "A stale branch Tally FY must be ignored, not used for master readback or block prepared XML.");
+        // Tally discovery FY may be its FIRST books FY or empty; the
+        // original source Tally must remain available for verified masters.
+        var priorBookYearLink = new TallyClientLink
+        {
+            ClientId = 101, CompanyKey = "ka-branch",
+            CompanyName = "Working Company",
+            FinancialYear = "2021-22", BooksFrom = "01-04-2021"
+        };
+        Check(ReferenceEquals(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                priorBookYearLink, 101, "2025-26", Destination,
+                "AAH Prepared Branch CL-KA"), priorBookYearLink) &&
+              TallyConsolidatedBranchSourcePolicy.HasConfirmedSourceBooksCoverage(
+                  priorBookYearLink, "2025-26"),
+            "Original first-books FY caused a valid linked branch master export to be skipped.");
+        var blankDiscoveryFy = new TallyClientLink
+        {
+            ClientId = 101, CompanyKey = "ka-branch",
+            CompanyName = "Working Company",
+            FinancialYear = "", BooksFrom = "01-04-2021"
+        };
+        Check(ReferenceEquals(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                blankDiscoveryFy, 101, "2025-26", Destination,
+                "AAH Prepared Branch CL-KA"), blankDiscoveryFy),
+            "Blank Tally discovery FY with verified books was incorrectly rejected.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            new TallyClientLink {
+                ClientId = 101, CompanyKey = "ka-branch",
+                CompanyName = "Working Company", FinancialYear = "2026-27",
+                BooksFrom = "01-04-2026"
+            }, 101, "2025-26", Destination, "AAH Prepared Branch CL-KA") is null,
+            "Tally branch books beginning after the source FY were accepted.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            new TallyClientLink {
+                ClientId = 101, CompanyKey = "ka-branch",
+                CompanyName = "Working Company", FinancialYear = "2024-25",
+                BooksFrom = "01-04-2021"
+            }, 101, "2025-26", Destination, "AAH Prepared Branch CL-KA") is null,
+            "Unexplained stale Tally discovery FY was incorrectly treated as first-books provenance.");
+
         Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
             ownLink, 102, "2025-26", Destination, validSourceCompany) is null,
             "A source Tally link from another private branch was accepted.");
@@ -171,6 +210,13 @@ internal static class TallyConsolidatedBranchSourceTests
             SourceStatus, "CL-KA", "2025-26", Destination, null),
             "An empty linked Live XML must never be treated as prepared branch accounting.");
 
+        // Optional source company lookup must reuse strict identity resolution,
+        // not just a stale name or Tally first-books-year key.
+        var sourceView = File.ReadAllText(Path.Combine(root!.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
+        Check(sourceView.Contains("sourceLink, null, openCompanies, financialYear", StringComparison.Ordinal) &&
+              sourceView.Contains("sourceLink, selectedSource, openCompanies, financialYear", StringComparison.Ordinal),
+            "The source Tally master path was not wired to the shared verified wrapper.");
         // Exercise the actual Tally Excel-parity XML writer used by normal
         // GenerateLiveXml, rather than a hand-written import envelope fixture.
         // Normal AAH intentionally leaves Journal VOUCHERNUMBER empty and
