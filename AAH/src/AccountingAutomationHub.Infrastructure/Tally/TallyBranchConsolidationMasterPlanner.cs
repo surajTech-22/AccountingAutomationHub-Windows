@@ -136,7 +136,9 @@ public static class TallyBranchConsolidationMasterPlanner
             // Cash ledger is OPTIONAL. Do not conflate its option with compulsory groups.
             if (separateCashLedgers)
             {
-                var cashName = "Cash - " + name;
+                // A separate optional Cash ledger still needs a unique Tally name.
+                // Use the durable non-geographical branch ID, never its state name.
+                var cashName = "Cash (" + branch.BranchId.Trim() + ")";
                 var create = NeedsCreate(cashName, "Ledger", "Cash-in-Hand");
                 cashToCreate.Add(new(branch.BranchId, cashName, create));
             }
