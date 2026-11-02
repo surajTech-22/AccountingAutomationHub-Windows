@@ -71,9 +71,7 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         // A failed live read means no mutations. No cached branch or destination
         // data may authorize a CREATE against a Tally company.
         var open = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
-        if (open.Count(x => IgnoreCase.Equals(x.CompanyKey, destination.CompanyKey) &&
-                            IgnoreCase.Equals(x.Name, destination.Name)) != 1)
-            throw new InvalidOperationException("The exact linked consolidated Tally company is not uniquely open.");
+        TallyBranchConsolidationImportService.RequireUniqueLiveDestination(link, destination, open);
         if (!int.TryParse(financialYear[..Math.Min(4, financialYear.Length)],
             NumberStyles.None, CultureInfo.InvariantCulture, out var firstYear) ||
             firstYear < 1900 || firstYear > 9998)
