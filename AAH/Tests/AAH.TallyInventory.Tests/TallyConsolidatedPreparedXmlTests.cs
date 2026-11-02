@@ -86,21 +86,81 @@ internal static class TallyConsolidatedPreparedXmlTests
                 (string?)x.Element("NAME") == "Tamil Nadu Debtors"),
             "Mandatory branch-named groups disappeared when Ledger names became state-free.");
 
-        // Never silently merge two separate original Ledger accounts into a
-        // single Tally Ledger, which can only belong to one parent Group.
+        // Both branches have the same original names. Only THESE shared
+        // names get branch suffixes; the two compulsory state/branch Groups
+        // keep their original parent classification and all signed amounts.
+        var sameNames = b with {
+            Xml = a.Xml.Replace("KA-INV-1", "TN-INV-1")
+        };
+        var duplicated = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, sameNames]);
+        var duplicatedMasters = XDocument.Parse(duplicated.MastersXml);
+        var duplicatedVouchers = XDocument.Parse(duplicated.VouchersXml);
+        Check(duplicatedMasters.Descendants("LEDGER").Count() == 4 &&
+              duplicatedMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Buyer - Karnataka" &&
+                  (string?)x.Element("PARENT") == "Karnataka Debtors") &&
+              duplicatedMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Buyer - Tamil Nadu" &&
+                  (string?)x.Element("PARENT") == "Tamil Nadu Debtors") &&
+              duplicatedMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Local Sales - Karnataka" &&
+                  (string?)x.Element("PARENT") == "Karnataka Sales") &&
+              duplicatedMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Local Sales - Tamil Nadu" &&
+                  (string?)x.Element("PARENT") == "Tamil Nadu Sales") &&
+              duplicatedVouchers.Descendants("LEDGERNAME").Select(x => x.Value)
+                  .ToHashSet().SetEquals(new[] {
+                    "Buyer - Karnataka", "Local Sales - Karnataka",
+                    "Buyer - Tamil Nadu", "Local Sales - Tamil Nadu"
+                  }) &&
+              duplicatedVouchers.Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(new[] {
+                    "-100.25", "100.25", "-100.25", "100.25"
+                  }.Order()) &&
+              !duplicated.MastersXml.Contains("<MASTERID>") &&
+              !duplicated.VouchersXml.Contains("<MASTERID>"),
+            "Shared source names were not independently mapped to correct branch groups/vouchers.");
+
+        // Partial overlap: a shared party is suffixed, while unrelated
+        // single-branch sales ledgers must NEVER acquire state suffixes.
+        var partlyShared = b with {
+            Xml = Xml("Sales", "1", "TN-INV-1", "Buyer", "Tamil Sales",
+                "-200.10", "200.10", "Sundry Debtors", "Sales Accounts"),
+            Masters = [Ledger("Buyer", "Sundry Debtors"), Ledger("Tamil Sales", "Sales Accounts")]
+        };
+        var partial = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, partlyShared]);
+        var partialMasters = XDocument.Parse(partial.MastersXml);
+        Check(partialMasters.Descendants("LEDGER").Select(x => (string?)x.Element("NAME"))
+                  .ToHashSet().SetEquals(new[] {
+                    "Buyer - Karnataka", "Buyer - Tamil Nadu",
+                    "Local Sales", "Tamil Sales"
+                  }) &&
+              XDocument.Parse(partial.VouchersXml).Descendants("LEDGERNAME")
+                  .Select(x => x.Value).ToHashSet().SetEquals(new[] {
+                    "Buyer - Karnataka", "Buyer - Tamil Nadu",
+                    "Local Sales", "Tamil Sales"
+                  }),
+            "Ledger names unique to one branch were incorrectly suffixed.");
+
+        // A real source account may already be called "Buyer - Karnataka".
+        // It cannot be merged with a generated alias for "Buyer"; fail closed.
+        var aliasCollision = b with {
+            Xml = Xml("Sales", "1", "TN-INV-1", "Buyer",
+                "Buyer - Karnataka", "-200.10", "200.10",
+                "Sundry Debtors", "Sales Accounts"),
+            Masters = [Ledger("Buyer", "Sundry Debtors"),
+                Ledger("Buyer - Karnataka", "Sales Accounts")]
+        };
         try
         {
-            TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
-                a, b with { Xml = a.Xml.Replace("KA-INV-1", "TN-INV-1") }
-            ]);
-            throw new Exception("Identical source Ledger names were silently merged across branch groups.");
+            TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, aliasCollision]);
+            throw new Exception("Generated branch suffix collided with an existing source ledger.");
         }
         catch (InvalidOperationException exception)
         {
-            Check(exception.Message.Contains("globally unique Ledger names", StringComparison.Ordinal) &&
-                  exception.Message.Contains("Buyer", StringComparison.Ordinal) &&
-                  exception.Message.Contains("Local Sales", StringComparison.Ordinal),
-                "Cross-branch source Ledger name conflicts were not reported together.");
+            Check(exception.Message.Contains("after automatic branch suffixing", StringComparison.Ordinal) &&
+                  exception.Message.Contains("Buyer - Karnataka", StringComparison.Ordinal),
+                "An actual generated alias/name collision must remain fail-closed.");
         }
 
         // Formatting, not tax calculation: GST numeric state codes become
@@ -418,6 +478,29 @@ internal static class TallyConsolidatedPreparedXmlTests
                   new[] { "-500.00", "500.00" }.Order()) &&
               bankDoc.Descendants("VOUCHERTYPENAME").Single().Value == "Contra",
             "Interbank reconciliation changed bank-side values or Contra type.");
+        // Bank Ledger names shared across branches must be suffixed not only
+        // in masters but also in the reconciled single common Contra lines.
+        var matchingBankName = incoming with {
+            Xml = incoming.Xml.Replace("Bank TN", "Bank"),
+            Masters = [Ledger("Bank", "Bank Accounts"),
+                Ledger("Clearing TN", "Current Liabilities")]
+        };
+        var sharedBanks = TallyConsolidatedPreparedXmlBuilder.Build(
+            Plan(), [outgoing, matchingBankName]);
+        var sharedBankMaster = XDocument.Parse(sharedBanks.MastersXml);
+        var sharedBankVoucher = XDocument.Parse(sharedBanks.VouchersXml);
+        Check(sharedBanks.InterbankReconciled == 1 &&
+              sharedBankVoucher.Descendants("LEDGERNAME").Select(x => x.Value)
+                  .ToHashSet().SetEquals(new[] { "Bank - Karnataka", "Bank - Tamil Nadu" }) &&
+              sharedBankMaster.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Bank - Karnataka" &&
+                  (string?)x.Element("PARENT") == "Karnataka Banks") &&
+              sharedBankMaster.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Bank - Tamil Nadu" &&
+                  (string?)x.Element("PARENT") == "Tamil Nadu Banks") &&
+              sharedBankVoucher.Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(new[] { "-500.00", "500.00" }.Order()),
+            "Common interbank Contra did not use shared-bank mapping without recalculating sides.");
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             outgoing, incoming with { Xml = incoming.Xml.Replace("500.00", "499.00") }]),
             "mismatched interbank amount");
