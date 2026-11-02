@@ -50,6 +50,8 @@ public partial class App : System.Windows.Application
     private int _updateShutdownRequestInProgress;
     private bool _updateShutdownStartupReady;
     private bool _isExiting;
+    private bool _verifiedUpdaterExit;
+
     private bool _lastBalloonOpensActionCenter;
     private string _lastBalloonTargetPage = string.Empty;
     private bool _runtimeCleaned;
@@ -1309,6 +1311,7 @@ public partial class App : System.Windows.Application
                 else if (++quietSamples >= 3)
                 {
                     WriteShutdownDiagnostic("Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.");
+                    _verifiedUpdaterExit = true;
                     exitStarted = true;
                     ExitApplication();
                     return;
@@ -1684,7 +1687,12 @@ public partial class App : System.Windows.Application
             _singleInstanceMutex = null;
             WriteShutdownDiagnostic("Process exit releasing final single-instance ownership.");
         }
-        finally { base.OnExit(e); }
+        finally
+        {
+            base.OnExit(e);
+            if (_verifiedUpdaterExit && _runtimeCleaned)
+                Environment.Exit(0);
+        }
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
