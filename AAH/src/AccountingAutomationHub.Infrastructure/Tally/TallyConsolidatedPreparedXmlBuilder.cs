@@ -34,6 +34,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
         // ledger names used by each prepared branch. Only a name present in
         // two or more distinct branches receives a destination suffix.
         // This is identity mapping, never an amount/GST recalculation.
+        var parsedBranches = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var ledgerOwners = new Dictionary<string, HashSet<string>>(
             StringComparer.OrdinalIgnoreCase);
         foreach (var originalBranch in prepared)
@@ -42,7 +43,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 throw new InvalidOperationException(
                     "The branch has no prepared Tally XML: " + originalBranch.Branch.DisplayName);
             var originalDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
-                originalBranch.Xml, "ledger name preflight " + originalBranch.Branch.DisplayName);
+                originalBranch.Xml, "ledger name preflight " + originalBranch.Branch.DisplayName,
+                LoadOptions.PreserveWhitespace);
+            parsedBranches.Add(originalBranch.Branch.BranchId, originalDoc);
             var usedNames = originalDoc.Descendants().Where(x =>
                     Is(x, "VOUCHER") && x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
                 .SelectMany(v => v.Descendants().Where(x =>
@@ -91,8 +94,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
         {
             if (string.IsNullOrWhiteSpace(branch.Xml))
                 throw new InvalidOperationException("The branch has no prepared Tally XML: " + branch.Branch.DisplayName);
-            var source = TallyConsolidatedXmlTextSafety.ParseDocument(
-                branch.Xml, "prepared branch " + branch.Branch.DisplayName, LoadOptions.PreserveWhitespace);
+            // Reuse the strict, whitespace-preserving preflight XML parse:
+            // no additional branch XML parsing on the hot collection path.
+            var source = parsedBranches[branch.Branch.BranchId];
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
