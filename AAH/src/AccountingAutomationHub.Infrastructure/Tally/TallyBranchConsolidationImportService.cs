@@ -175,10 +175,43 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         {
             var existing = openCompanies.Where(company =>
                 company.CompanyKey.Trim().Equals(link.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (existing.Length != 1)
+            if (existing.Length == 1)
+            {
+                selected = existing[0];
+            }
+            else if (existing.Length == 0)
+            {
+                // Ordinary 5-second discovery may replace the WPF ComboBox item
+                // with a recomputed key and temporarily clear SelectedItem.
+                // Recover only a UNIQUE target independently proved by a saved
+                // CompanyNumber/GSTIN, with no contradictory BooksFrom or ID.
+                static bool Same(string a, string b) =>
+                    a.Trim().Equals(b.Trim(), StringComparison.OrdinalIgnoreCase);
+                var savedGstin = TallyCompanyInfo.NormalizeGstin(link.Gstin);
+                var savedBooks = TallyCompanyInfo.ParseTallyDate(link.BooksFrom);
+                var candidates = openCompanies.Where(company =>
+                {
+                    var number = !string.IsNullOrWhiteSpace(link.CompanyNumber) &&
+                                 !string.IsNullOrWhiteSpace(company.CompanyNumber) &&
+                                 Same(link.CompanyNumber, company.CompanyNumber);
+                    var gstin = savedGstin.Length > 0 &&
+                                Same(savedGstin, TallyCompanyInfo.NormalizeGstin(company.Gstin));
+                    var numberConflict = !string.IsNullOrWhiteSpace(link.CompanyNumber) &&
+                                         !string.IsNullOrWhiteSpace(company.CompanyNumber) && !number;
+                    var gstinConflict = savedGstin.Length > 0 &&
+                                        TallyCompanyInfo.NormalizeGstin(company.Gstin).Length > 0 && !gstin;
+                    var companyBooks = TallyCompanyInfo.ParseTallyDate(company.BooksFrom);
+                    return (number || gstin) && !numberConflict && !gstinConflict &&
+                           (!savedBooks.HasValue || !companyBooks.HasValue ||
+                            savedBooks.Value.Date == companyBooks.Value.Date) &&
+                           (company.LinkedClientId <= 0 || company.LinkedClientId == link.ClientId);
+                }).ToArray();
+                if (candidates.Length == 1)
+                    selected = candidates[0];
+            }
+            if (selected is null)
                 throw new InvalidOperationException(
-                    "The saved consolidated Tally company is not uniquely selected. Open it in Tally and use the existing Link control.");
-            selected = existing[0];
+                    "The saved consolidated Tally company is not uniquely open. Select the intended company and use the existing Link control; no import was sent.");
         }
 
         if (selected.LinkedClientId > 0 && selected.LinkedClientId != link.ClientId)
