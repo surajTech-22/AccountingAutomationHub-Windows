@@ -12,7 +12,8 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// voucher identity snapshot and a separate post-write Tally readback.
 /// </summary>
 public sealed class TallyConsolidatedVoucherImportService(
-    TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null)
+    TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null,
+    Action? verifiedVoucher = null)
 {
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
     private static readonly string[] PriorMasters =
@@ -215,6 +216,11 @@ public sealed class TallyConsolidatedVoucherImportService(
                 throw new InvalidOperationException("Live Tally DR/CR postings differ from branch XML for " +
                     expected.Number + ". Import stopped; inspect posted voucher before continuing.");
             imported++;
+            // The caller needs an accurate partial-success count if a later
+            // voucher fails. This fires only AFTER exact live MASTERID/DR/CR
+            // readback and never authorizes any resend.
+            try { verifiedVoucher?.Invoke(); }
+            catch { /* diagnostic-only callback */ }
         }
         return new TallyConsolidatedVoucherImportResult(imported, createdMasters,
             "Tally confirmed and read back each consolidated voucher with its original DR/CR entries. " +
