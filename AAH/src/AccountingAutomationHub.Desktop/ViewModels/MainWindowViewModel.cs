@@ -2386,9 +2386,6 @@ public sealed class MainWindowViewModel :
         // connection. Read original master XML only for linked OPEN branch
         // companies, to preserve complete party/GST/bank master definitions.
         var openCompanies = await _tallyHttpService.DiscoverCompaniesAsync();
-        var linkedFolders = _automationService.GetFolders()
-            .Where(x => x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
         foreach (var branch in configured)
         {
             var child = _privateBranchAccounts.GetOrCreate(
@@ -2396,59 +2393,26 @@ public sealed class MainWindowViewModel :
             var identity = new TallyBranchMasterIdentity(
                 child.Id, branch.BranchId, branch.Name, pan, branch.Gstin, financialYear);
             identities.Add(identity);
-            var candidates = new List<string>();
-            foreach (var folder in linkedFolders)
-            {
-                if (folder.ClientId == child.Id)
-                    candidates.Add(Path.Combine(folder.FolderPath, "AAH_TALLY_LIVE_CURRENT.xml"));
-                if (folder.ClientId != parent.Id || !Directory.Exists(folder.FolderPath))
-                    continue;
-                foreach (var direct in Directory.EnumerateDirectories(folder.FolderPath))
-                {
-                    var file = Path.Combine(direct, "AAH_TALLY_LIVE_CURRENT.xml");
-                    if (ClientBranchAutoImportLayout.TryResolve(folder.FolderPath, file, out var owned) &&
-                        owned is not null && owned.ClientId == parent.Id &&
-                        owned.BranchId.Equals(branch.BranchId, StringComparison.OrdinalIgnoreCase))
-                        candidates.Add(file);
-                }
-            }
-            var safeCode = string.Concat(child.ClientCode.Where(c =>
-                !Path.GetInvalidFileNameChars().Contains(c)));
-            candidates.Add(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Accounting Automation Hub", "Live Tally XML", safeCode, financialYear,
-                "AAH_TALLY_LIVE_CURRENT.xml"));
-            var existing = candidates.Where(File.Exists)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (existing.Length == 0)
-            {
-                // Independent branch Tally links are OPTIONAL. The normal live
-                // XML timer never prepares an unlinked branch, so gather its
-                // already-saved vouchers using the SAME original branch export
-                // framework. This is a source-only, local PREPARATION; no live
-                // Tally import, journal/GST regeneration, or group calculations.
-                // The prepared file stays in the private branch's AAH AppData,
-                // never inside a watched Auto Import folder.
-                var staged = await PrepareMissingBranchXmlAsync(child, branch.Name, financialYear);
-                existing = [staged];
-            }
-            if (existing.Length != 1)
-                throw new InvalidOperationException(
-                    "Ambiguous prepared Tally XML for branch '" + branch.Name +
-                    "'; found " + existing.Length +
-                    ". Resolve duplicate source paths before consolidated import.");
-            // Legacy OCR / imported narration may contain forbidden XML C0
-            // controls. Repair only presentation text; protected accounting
-            // amounts, identities and XML attributes must fail closed.
-            var xml = TallyConsolidatedXmlTextSafety.Repair(File.ReadAllText(existing[0])).Xml;
+            // Always prepare a CURRENT read-only snapshot from this branch's
+            // saved ClientId/FY accounting. Previous Live XML files may be empty,
+            // Tally-link-gated or a stale pre-import snapshot even when the
+            // source branch still has its original prepared accounting.
+            // Never choose a watched Automation Folder XML as consolidation
+            // authority or accept the first of multiple stale file paths.
+            // The existing offline stage verifies completeness BEFORE atomically
+            // replacing the owned AppData snapshot. No Tally POST occurs.
+            var sourcePath = await PrepareMissingBranchXmlAsync(
+                child, branch.Name, financialYear);
+            var xml = TallyConsolidatedXmlTextSafety.Repair(
+                File.ReadAllText(sourcePath)).Xml;
+            var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
+            var statusPath = Path.Combine(Path.GetDirectoryName(sourcePath)!,
+                "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
+            var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
             // The original branch's prepared accounting is owned by its AAH
             // private ClientId/FY, not by a separate Tally company. A source
             // Tally link is OPTIONAL. Only the consolidated destination must
             // be linked to Tally for the final import.
-            var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
-            var statusPath = Path.Combine(Path.GetDirectoryName(existing[0])!,
-                "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
-            var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
             // AAH's own ClientId/FY and generated XML are the branch source
             // authority. Its older optional Tally link may belong to another
             // FY/company and must not veto the saved branch's prepared vouchers.
@@ -2467,7 +2431,7 @@ public sealed class MainWindowViewModel :
                 ? Array.Empty<TallyCompanyInfo>()
                 : openCompanies.Where(x =>
                     x.CompanyKey.Equals(sourceLink.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-                    x.Name.Equals(sourceCompany, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    x.Name.Equals(sourceLink.CompanyName, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (sourceCandidates.Length > 1)
                 throw new InvalidOperationException("Ambiguous live source Tally company for branch: " + branch.Name);
             var fullSourceMasterXml = sourceCandidates.Length == 1

@@ -146,15 +146,38 @@ internal static class TallyConsolidatedBranchSourceTests
         Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
             offlineGujaratXml, gujaratStatus, "CL-KA", "2025-26", Destination, null),
             "Gujarat XML cannot be reused as Karnataka's source.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            offlineGujaratXml, gujaratStatus.Replace("CL-GJ", "CL-KA"),
+            "CL-KA", "2025-26", Destination, null),
+            "An offline XML's synthetic destination must match its own branch ClientCode, not just an altered status file.");
+        Check(ReferenceEquals(
+            TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+                ownLink, 101, "2025-26", Destination, "AAH Prepared Branch CL-KA"), ownLink),
+            "A source-owned offline XML must not discard a distinct verified optional branch Tally master link.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            staleFy, 101, "2025-26", Destination, "AAH Prepared Branch CL-KA") is null,
+            "An offline XML bypassed the saved optional Tally link's Client/FY guard.");
+        Check(TallyConsolidatedBranchSourcePolicy.SelectOptionalLiveSourceLink(
+            new TallyClientLink {
+                ClientId = 101, CompanyKey = Destination.CompanyKey,
+                CompanyName = Destination.Name, FinancialYear = "2025-26"
+            }, 101, "2025-26", Destination, "AAH Prepared Branch CL-KA") is null,
+            "An offline XML used the writable consolidated Tally destination as an optional branch source.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            PreparedXml.Replace("<TALLYMESSAGE><VOUCHER ACTION=\"Create\"><DATE>20250501</DATE></VOUCHER></TALLYMESSAGE>", ""),
+            SourceStatus, "CL-KA", "2025-26", Destination, null),
+            "An empty linked Live XML must never be treated as prepared branch accounting.");
 
         var mainWindow = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
             "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
-        Check(mainWindow.Contains("if (existing.Length == 0)", StringComparison.Ordinal) &&
-            mainWindow.Contains("PrepareMissingBranchXmlAsync(child, branch.Name, financialYear)", StringComparison.Ordinal) &&
+        Check(mainWindow.Contains("var sourcePath = await PrepareMissingBranchXmlAsync(", StringComparison.Ordinal) &&
+            mainWindow.Contains("child, branch.Name, financialYear);", StringComparison.Ordinal) &&
+            !mainWindow.Contains("if (existing.Length == 0)", StringComparison.Ordinal) &&
+            !mainWindow.Contains("var candidates = new List<string>();", StringComparison.Ordinal) &&
             mainWindow.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
             mainWindow.Contains("snapshot.Unsupported != 0 || snapshot.MissingLedgers != 0", StringComparison.Ordinal) &&
             mainWindow.Contains("Source: saved offline branch accounting; no Tally posting", StringComparison.Ordinal),
-            "Missing-branch XML must be prepared from saved branch accounting, never fabricated or posted.");
+            "Consolidation must always regenerate source-owned branch XML rather than picking stale, empty or ambiguous linked source snapshots.");
         Check(mainWindow.Contains("DispatcherPriority.ContextIdle, new Action(() =>", StringComparison.Ordinal) &&
             !mainWindow.Contains("Task.Delay(90)", StringComparison.Ordinal) &&
             mainWindow.Contains("currentClient.Id, currentClient.FinancialYear, module);", StringComparison.Ordinal),
