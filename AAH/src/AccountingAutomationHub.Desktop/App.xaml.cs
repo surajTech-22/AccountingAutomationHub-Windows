@@ -729,7 +729,12 @@ public partial class App : System.Windows.Application
         if (_isExiting) return;
         if (_workspaceSelectorInitial)
         {
-            ExitApplication();
+            // The initial Workspace Selector is hosted inside MainWindow.
+            // Its own Close button must obey the same X -> tray contract.
+            // Exiting here killed the only AAH instance, so the GitHub updater
+            // had no listener/tray process to find after release notification.
+            // Keep the selector content intact for the next tray reopen.
+            HandleMainWindowClosing(new CancelEventArgs());
             return;
         }
         _workspaceSelectorVisible = false;
@@ -750,6 +755,17 @@ public partial class App : System.Windows.Application
 
     private void ShowActiveWorkspace()
     {
+        // Reopen the SAME initial selector after its Close -> tray action.
+        // Do not silently skip workspace selection or start an Accounting
+        // client merely because the user reopened the tray menu.
+        if (_workspaceSelectorVisible && _mainWindow is { } selectorHost)
+        {
+            if (!selectorHost.IsVisible) selectorHost.Show();
+            if (selectorHost.WindowState == WindowState.Minimized)
+                selectorHost.WindowState = WindowState.Normal;
+            selectorHost.Activate();
+            return;
+        }
         if (_activeWorkspace == AahWorkspaceKind.Audit) ShowAuditWindow();
         else if (_activeWorkspace == AahWorkspaceKind.FinancialStatementsIncomeTax) ShowFinancialStatementsIncomeTaxWindow();
         else ShowAccountingWindow();
