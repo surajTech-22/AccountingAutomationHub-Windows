@@ -116,6 +116,25 @@ internal static class EntryPoint
                mainWindowSource.Contains("catch (Exception exception)", StringComparison.Ordinal),
             "MainWindow X/Close may still destroy its HWND rather than hide to tray, or fail before close interception.");
         Console.WriteLine("PASS: close-to-tray cancels before preference/placement work; updater tolerates exited launcher but rejects unrelated live PID.");
+        var selectorViewSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "Views", "WorkspaceSelectorView.xaml.cs"));
+        var selectorClose = desktopSource.IndexOf("public void CancelWorkspaceSelectorFromHost()", StringComparison.Ordinal);
+        var selectorNext = desktopSource.IndexOf("private void ShowActiveWorkspace()", selectorClose, StringComparison.Ordinal);
+        var selectorBody = selectorClose > 0 && selectorNext > selectorClose
+            ? desktopSource.Substring(selectorClose, selectorNext - selectorClose) : "";
+        var trayOpen = desktopSource.IndexOf("private void ShowActiveWorkspace()", StringComparison.Ordinal);
+        var trayWindowHandler = desktopSource.IndexOf("public void HandleMainWindowClosing(CancelEventArgs e)", trayOpen, StringComparison.Ordinal);
+        var trayOpenBody = trayOpen > 0 && trayWindowHandler > trayOpen
+            ? desktopSource.Substring(trayOpen, trayWindowHandler - trayOpen) : "";
+        Assert(selectorViewSource.Contains("app.CancelWorkspaceSelectorFromHost();", StringComparison.Ordinal) &&
+               selectorBody.Contains("if (_workspaceSelectorInitial)", StringComparison.Ordinal) &&
+               selectorBody.Contains("HandleMainWindowClosing(new CancelEventArgs());", StringComparison.Ordinal) &&
+               !selectorBody.Contains("ExitApplication();", StringComparison.Ordinal) &&
+               trayOpenBody.Contains("_workspaceSelectorVisible && _mainWindow is", StringComparison.Ordinal) &&
+               trayOpenBody.Contains("selectorHost.Show();", StringComparison.Ordinal),
+            "Initial Workspace Selector X still terminates AAH instead of preserving the tray listener and reopening its selector.");
+        Console.WriteLine("PASS: initial selector Close and native window X both hide to tray; selector restored from existing tray menu.");
+
         var version533 = new Version(4, 0, 0, 533);
         var version534 = new Version(4, 0, 0, 534);
         Assert(Program.IsUpgradeOrRestartRecovery(version533, version534, "v4.0.0.534"),
