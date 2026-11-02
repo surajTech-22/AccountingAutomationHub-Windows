@@ -17,8 +17,8 @@ public partial class PurchaseImportView : UserControl
             return;
         }
 
-        if (DataContext is PurchaseImportViewModel vm && target is "Matched" or "2A Only" or "2B Only" or "Differences")
-            vm.ApplyReconciliationFilter(target);
+        if (DataContext is PurchaseImportViewModel vm)
+            vm.ApplyReconciliationFilter(target is "Matched" or "2A Only" or "2B Only" or "Differences" ? target : null);
 
         RecordsTabs.SelectedIndex = target switch
         {
