@@ -184,6 +184,12 @@ internal static class TallyBranchMasterImportContractTests
                     Name = driftedSelection.Name, CompanyNumber = driftedSelection.CompanyNumber }]),
             "Two indistinguishable live target entries must block consolidated import.");
 
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, driftedSelection, [driftedSelection,
+                new TallyCompanyInfo { CompanyKey = "SECOND-LIVE-COMPANY", Name = "Other Legal Name",
+                    CompanyNumber = "405", BooksFrom = "01-04-2021" }]),
+            "Two live Tally companies with the same strong identifier must require explicit linking.");
+
         // Fresh raw discovery regenerates a CompanyKey from its inferred
         // books-year, while the original coordinator keeps the saved linked key.
         var freshlyDiscovered = new TallyCompanyInfo
