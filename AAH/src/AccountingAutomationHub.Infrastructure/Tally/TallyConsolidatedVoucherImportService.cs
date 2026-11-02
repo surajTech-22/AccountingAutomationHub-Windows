@@ -11,7 +11,8 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// Each prepared branch voucher is CREATE-only, protected by a fresh target
 /// voucher identity snapshot and a separate post-write Tally readback.
 /// </summary>
-public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally)
+public sealed class TallyConsolidatedVoucherImportService(
+    TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null)
 {
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
     private static readonly string[] PriorMasters =
@@ -19,6 +20,28 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
     private static readonly string[] MasterOrder =
         ["UNIT", "STOCKCATEGORY", "STOCKGROUP", "GODOWN",
          "COSTCENTRE", "LEDGER", "STOCKITEM"];
+
+    // Capture the REAL Tally request and reply for the original detailed
+    // AAH_TALLY_DIAGNOSTIC pack. The callback is diagnostic-only; never let a
+    // file/log failure alter an accounting POST or initiate any retry.
+    private async Task<TallyImportResponse> ImportWithEvidenceAsync(
+        string stage, string xml, CancellationToken token)
+    {
+        string response;
+        try
+        {
+            response = await tally.ImportXmlAsync(xml, token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try { diagnosticExchange?.Invoke(stage, xml, "Transport exception: " + ex); }
+            catch { /* never affect live Tally write semantics */ }
+            throw;
+        }
+        try { diagnosticExchange?.Invoke(stage, xml, response); }
+        catch { /* never affect live Tally write semantics */ }
+        return TallyHttpService.ParseImportResponse(response);
+    }
 
     public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(
         TallyClientLink link, TallyCompanyInfo destination,
@@ -142,8 +165,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
             sb.AppendLine(new XElement("TALLYMESSAGE", new XElement(element))
                 .ToString(SaveOptions.DisableFormatting));
             TallyExcelParityXmlWriter.EndAllMastersImport(sb);
-            var response = TallyHttpService.ParseImportResponse(
-                await tally.ImportXmlAsync(sb.ToString(), cancellationToken).ConfigureAwait(false));
+            var response = await ImportWithEvidenceAsync(
+                "Master-" + type + "-" + name, sb.ToString(), cancellationToken).ConfigureAwait(false);
             TallyBranchConsolidationImportService.RequireOneCreate(response, name);
             available = await ReadMasterAuthorityAsync(destination, cancellationToken).ConfigureAwait(false);
             RequireMaster(available, element);
@@ -167,8 +190,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
             sb.AppendLine(new XElement("TALLYMESSAGE", new XElement(expected.Xml))
                 .ToString(SaveOptions.DisableFormatting));
             TallyExcelParityXmlWriter.EndErp9DataImport(sb);
-            var response = TallyHttpService.ParseImportResponse(
-                await tally.ImportXmlAsync(sb.ToString(), cancellationToken).ConfigureAwait(false));
+            var response = await ImportWithEvidenceAsync(
+                "Voucher-" + expected.Number, sb.ToString(), cancellationToken).ConfigureAwait(false);
             if (response.Created != 1 || response.Altered != 0 || response.Deleted != 0 ||
                 response.Ignored != 0 || response.Errors != 0 || response.Exceptions != 0 ||
                 !string.IsNullOrWhiteSpace(response.LineError))
