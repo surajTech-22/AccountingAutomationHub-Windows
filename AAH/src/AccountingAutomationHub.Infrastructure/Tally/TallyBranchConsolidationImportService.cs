@@ -218,9 +218,25 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         var selectedLiveMatches = openCompanies.Where(company =>
             Same(company.CompanyKey, selected.CompanyKey) &&
             Same(company.Name, selected.Name)).ToArray();
-        if (selectedLiveMatches.Length != 1)
+        // When a key has drifted, independent identity must uniquely identify
+        // this ONE open company, not just the currently selected ComboBox entry.
+        // Different Tally books may reuse a GSTIN or company number.
+        var strongLiveMatches = openCompanies.Where(company =>
+        {
+            var number = Has(link.CompanyNumber) && Has(company.CompanyNumber) &&
+                         Same(link.CompanyNumber, company.CompanyNumber);
+            var gstin = Has(savedGstin) && Has(company.Gstin) &&
+                        Same(savedGstin, TallyCompanyInfo.NormalizeGstin(company.Gstin));
+            var liveBooks = TallyCompanyInfo.ParseTallyDate(company.BooksFrom);
+            var dateCompatible = !savedBooks.HasValue || !liveBooks.HasValue ||
+                                 savedBooks.Value.Date == liveBooks.Value.Date;
+            return (number || gstin) && dateCompatible;
+        }).ToArray();
+        if (selectedLiveMatches.Length != 1 || strongLiveMatches.Length != 1 ||
+            !ReferenceEquals(selectedLiveMatches[0], strongLiveMatches[0]))
             throw new InvalidOperationException(
-                "The selected consolidated Tally company is not uniquely open. No XML or import was sent.");
+                "The selected consolidated Tally company is not uniquely open or uniquely identified by the saved link. " +
+                "Use the existing Link control; no XML or import was sent.");
 
         // The original linked CompanyKey is kept as the accounting authority;
         // the actual live company name remains the HTTP transport destination.
