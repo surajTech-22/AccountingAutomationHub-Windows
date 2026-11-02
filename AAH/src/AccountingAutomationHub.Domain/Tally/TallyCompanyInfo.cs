@@ -127,6 +127,8 @@ public sealed class TallyCompanyInfo
             "yyyyMMdd",
             "dd-MMM-yyyy",
             "d-MMM-yyyy",
+            "dd-MM-yyyy",
+            "d-M-yyyy",
             "dd/MM/yyyy",
             "d/M/yyyy",
             "yyyy-MM-dd",
