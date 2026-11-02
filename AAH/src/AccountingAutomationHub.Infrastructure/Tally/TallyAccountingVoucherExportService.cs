@@ -1017,6 +1017,7 @@ public sealed class TallyAccountingVoucherExportService
         // Invoice/Note Date as reference date. Rows without GST Date are retained
         // in the app but are not silently assigned another voucher date.
         var groups = records
+            .Where(PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource)
             .Where(row => row.GstDate is DateTime date && ranges.Any(range => range.Contains(date)))
             .GroupBy(row =>
             {
