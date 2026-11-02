@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.573)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.574)"
         required: true
-        default: "v4.0.0.573"
+        default: "v4.0.0.574"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.573: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.574: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.573]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.574]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.573' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.574' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.573: consolidated-only source ledger equivalence normalizes whitespace around @ for cross-branch duplicate detection while leaving unique individual source account names unchanged. Only repeated ledgers get branch display name suffix, consistently in original voucher references and Tally master NAME; compulsory branch groups remain independent and already-imported groups are explicitly verified from fresh destination Tally MASTERID and parent before preview. Unambiguous IGST CGST SGST UTGST tax ledgers under compulsory Taxes groups get Tally GST duty classification and corresponding duty head; ambiguous GST payable/receivable settlement retains original source metadata. Same-PAN cross-state party GSTIN overrides remain exact per voucher; different-PAN conflicting overrides stop before any posting. Branch GST amounts, DR/CR, journals and normal individual Tally exporter unchanged. SHA256 checksum verified assets, exact commit regression checks and event auto-update release. Unsigned installer."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.574: fixes first consolidated Tally Ledger CREATE failure (Tally Tax Classification 'Not Applicable' does not exist). The original Excel parity source Ledgers include generic optional fields as Not Applicable placeholders. Consolidated-only master generation removes only unresolved placeholder-valued Tax Classification and legacy optional enum fields from destination XML, while retaining real GST duty heads, TAXTYPE, registered party GSTIN, state names, compulsory branch groups and individual branch voucher DR/CR. Prevent old cached/preview XML with phantom Tax Classification from making any Tally HTTP POST. No changes to original individual Tally export. Regression tests cover legacy &#4; placeholders, 67-ledger equivalent wire shape, preserved genuine classifications/GST master metadata, voucher amounts and group hierarchy. All exact-SHA main Windows, consolidated Tally and full-component regressions, installer checksums and auto-update workflow required. Unsigned installer."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
