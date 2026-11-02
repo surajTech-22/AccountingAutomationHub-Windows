@@ -2510,6 +2510,8 @@ public sealed class MainWindowViewModel :
         {
             Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
                      $"matched {result.InterbankReconciled} explicit interbank transfers. " +
+                     $"{plan.Groups.Count(g => !g.Create)} compulsory Groups verified in the linked Tally company; " +
+                     $"{plan.Groups.Count(g => g.Create)} missing compulsory Groups included for master-first CREATE. " +
                      (skippedOptionalSourceLinks == 0 ? "" :
                          $"Ignored {skippedOptionalSourceLinks} unrelated/outdated optional branch Tally link(s). ") +
                      "XML preview saved to: " + destination +
