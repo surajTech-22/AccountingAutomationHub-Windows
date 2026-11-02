@@ -93,6 +93,29 @@ internal static class EntryPoint
             "Different-install AAH process was selected for graceful shutdown.");
         Assert(!Program.IsExactInstallationProcess("explorer", originalExe, originalExe),
             "Non-AAH application could be targeted for shutdown.");
+        Assert(Program.LauncherExitedOrBelongsToInstallation(int.MaxValue, originalExe),
+            "Updater blocked a verified release when the launcher already exited before preflight.");
+        Assert(!Program.LauncherExitedOrBelongsToInstallation(
+                System.Diagnostics.Process.GetCurrentProcess().Id, originalExe),
+            "Updater accepted an active, unrelated/reused launcher PID for a different executable.");
+        Assert(!Program.LauncherExitedOrBelongsToInstallation(0, originalExe),
+            "Updater accepted an invalid launcher PID.");
+        var mainWindowSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "MainWindow.xaml.cs"));
+        var closingStart = desktopSource.IndexOf("public void HandleMainWindowClosing(CancelEventArgs e)", StringComparison.Ordinal);
+        var cancelBeforePreferences = desktopSource.IndexOf("e.Cancel = true;", closingStart, StringComparison.Ordinal);
+        var settingsGuard = desktopSource.IndexOf("if (Preferences is null) return;", closingStart, StringComparison.Ordinal);
+        var closeOverride = mainWindowSource.IndexOf("protected override void OnClosing(CancelEventArgs e)", StringComparison.Ordinal);
+        var closeIntercept = mainWindowSource.IndexOf("app.HandleMainWindowClosing(e);", closeOverride, StringComparison.Ordinal);
+        var placementSave = mainWindowSource.IndexOf("SaveWindowPlacement();", closeOverride, StringComparison.Ordinal);
+        Assert(closingStart >= 0 && cancelBeforePreferences > closingStart &&
+               settingsGuard > cancelBeforePreferences &&
+               desktopSource.Contains("_trayIcon.Visible = true;", StringComparison.Ordinal) &&
+               closeOverride >= 0 && closeIntercept > closeOverride &&
+               placementSave > closeIntercept &&
+               mainWindowSource.Contains("catch (Exception exception)", StringComparison.Ordinal),
+            "MainWindow X/Close may still destroy its HWND rather than hide to tray, or fail before close interception.");
+        Console.WriteLine("PASS: close-to-tray cancels before preference/placement work; updater tolerates exited launcher but rejects unrelated live PID.");
         var version533 = new Version(4, 0, 0, 533);
         var version534 = new Version(4, 0, 0, 534);
         Assert(Program.IsUpgradeOrRestartRecovery(version533, version534, "v4.0.0.534"),
