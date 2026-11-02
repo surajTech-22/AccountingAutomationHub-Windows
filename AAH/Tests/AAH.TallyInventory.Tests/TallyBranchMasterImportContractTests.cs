@@ -47,6 +47,73 @@ internal static class TallyBranchMasterImportContractTests
             new TallyClientLink { ClientId = link.ClientId, CompanyKey = link.CompanyKey, CompanyName = link.CompanyName },
             destination), "blank authoritative Client/FY accepted");
 
+        Check(TallyCompanyInfo.ParseTallyDate("01-04-2021") == new DateTime(2021, 4, 1) &&
+              TallyCompanyInfo.NormalizeFinancialYear("", "01-04-2021") == "2021-22",
+            "Indian DD-MM-YYYY book date was parsed as US MM-DD-YYYY.");
+
+        // Tally's discovery FinancialYear is inferred from the date books began.
+        // It is NOT proof that a company cannot contain a later linked Client/FY.
+        var originalBooksLink = new TallyClientLink
+        {
+            ClientId = 123,
+            CompanyKey = "SAVED-KEY",
+            CompanyName = "Acme Consolidated",
+            CompanyNumber = "1009",
+            FinancialYear = "2025-26",
+            BooksFrom = "01-04-2021"
+        };
+        var selectedLinked = new TallyCompanyInfo
+        {
+            CompanyKey = "SAVED-KEY", Name = "Acme Consolidated",
+            CompanyNumber = "1009", BooksFrom = "01-04-2021",
+            FinancialYear = "2021-22"
+        };
+        Check(TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            originalBooksLink, selectedLinked) == "2025-26",
+            "Books-start year was incorrectly treated as the only import financial year.");
+
+        // Fresh raw discovery regenerates a CompanyKey from its inferred
+        // books-year, while the original coordinator keeps the saved linked key.
+        var freshlyDiscovered = new TallyCompanyInfo
+        {
+            CompanyKey = "DERIVED-BOOKS-KEY", Name = "Acme Consolidated",
+            CompanyNumber = "1009", BooksFrom = "01-04-2021",
+            FinancialYear = "2021-22"
+        };
+        Check(ReferenceEquals(
+            TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+                originalBooksLink, selectedLinked, [freshlyDiscovered]), freshlyDiscovered),
+            "Fresh Tally company identity with a derived key was not matched to the existing link.");
+        Reject(() => TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            originalBooksLink, selectedLinked,
+            [freshlyDiscovered, new TallyCompanyInfo {
+                CompanyKey = "OTHER", Name = "Acme Consolidated",
+                CompanyNumber = "1010" }]), "two same-name live companies passed authority");
+        Reject(() => TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            originalBooksLink, selectedLinked, [new TallyCompanyInfo {
+                CompanyKey = "OTHER", Name = "Acme Consolidated",
+                CompanyNumber = "9999", BooksFrom = "01-04-2021" }]),
+            "different live company number passed as the linked company");
+        Reject(() => TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            originalBooksLink, selectedLinked, [new TallyCompanyInfo {
+                CompanyKey = "OTHER", Name = "Acme Consolidated",
+                CompanyNumber = "1009", BooksFrom = "01-04-2020" }]),
+            "different live BooksFrom passed as the linked company");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            originalBooksLink, new TallyCompanyInfo {
+                CompanyKey = "SAVED-KEY", Name = "Acme Consolidated",
+                BooksFrom = "01-04-2026", FinancialYear = "2026-27" }),
+            "company books opened after the linked FY was accepted");
+        Reject(() => TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            originalBooksLink, selectedLinked, [new TallyCompanyInfo {
+                CompanyKey = "DERIVED-BOOKS-KEY", Name = "Acme Consolidated" }]),
+            "key change with no independent strong identity was accepted");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            originalBooksLink, new TallyCompanyInfo {
+                CompanyKey = "SAVED-KEY", Name = "Acme Consolidated",
+                BooksFrom = "01-04-2021", FinancialYear = "2024-25" }),
+            "contradictory non-book-year FY was accepted");
+
         // Tally can repeat masters in multiple exported Collection snapshots.
         // Repeated identical identities must not trigger an overwrite.
         const string xml = """

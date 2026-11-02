@@ -28,11 +28,108 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             string.IsNullOrWhiteSpace(link.CompanyKey) ||
             string.IsNullOrWhiteSpace(destination.CompanyKey) ||
             !link.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-            !link.CompanyName.Equals(destination.Name, StringComparison.OrdinalIgnoreCase) ||
-            (!string.IsNullOrWhiteSpace(destination.FinancialYear) &&
-             !link.FinancialYear.Equals(destination.FinancialYear, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Confirm the exact linked consolidated Client/FY company; name, company key or reported FY differs.");
+            !link.CompanyName.Trim().Equals(destination.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Confirm the exact linked consolidated Client/FY company; name or company key differs.");
+
+        RequireLinkedFinancialYearCoverage(link.FinancialYear, destination);
         return link.FinancialYear;
+    }
+
+    /// <summary>
+    /// Tally's Company.FinancialYear in the existing discovery path is derived
+    /// from BooksFrom/StartingFrom. It is the company's FIRST book year, not a
+    /// restriction that the company only contains that financial year.
+    /// The selected AAH Client/FY link remains the period authority.
+    /// </summary>
+    private static void RequireLinkedFinancialYearCoverage(string financialYear, TallyCompanyInfo company)
+    {
+        var linkedYear = TallyCompanyInfo.NormalizeFinancialYear(financialYear);
+        if (linkedYear.Length != 7 || linkedYear[4] != '-' ||
+            !int.TryParse(linkedYear[..4], out var startYear) ||
+            startYear < 1900 || startYear > 9998 ||
+            !linkedYear.Equals(
+                $"{startYear:0000}-{(startYear + 1) % 100:00}",
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The saved consolidated Client/FY is invalid.");
+
+        var linkedEnd = new DateTime(startYear + 1, 3, 31);
+        var bookStart = TallyCompanyInfo.ParseTallyDate(company.BooksFrom);
+        var startingFrom = TallyCompanyInfo.ParseTallyDate(company.StartingFrom);
+        if ((bookStart is not null && bookStart.Value.Date > linkedEnd) ||
+            (startingFrom is not null && startingFrom.Value.Date > linkedEnd))
+            throw new InvalidOperationException(
+                "The linked financial year precedes the Tally company's books/start date.");
+
+        var reported = TallyCompanyInfo.NormalizeFinancialYear(company.FinancialYear);
+        var inferredBookYear = TallyCompanyInfo.NormalizeFinancialYear(
+            "", !string.IsNullOrWhiteSpace(company.BooksFrom)
+                ? company.BooksFrom : company.StartingFrom);
+        if (reported.Length > 0 &&
+            !reported.Equals(linkedYear, StringComparison.OrdinalIgnoreCase) &&
+            !reported.Equals(inferredBookYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Tally reported a financial year not explained by its books/start date or the saved Client/FY link.");
+    }
+
+    /// <summary>
+    /// The coordinator preserves the confirmed CompanyKey for the top dropdown.
+    /// A second raw HTTP discovery can derive a DIFFERENT key from the book-start
+    /// FY; verify the exact single live company by independent saved identity
+    /// instead of treating that computed key as a new unlink/relink request.
+    /// No source/client switching or write is allowed on an ambiguous identity.
+    /// </summary>
+    public static TallyCompanyInfo RequireUniqueLiveDestination(
+        TallyClientLink link, TallyCompanyInfo destination,
+        IReadOnlyCollection<TallyCompanyInfo> discovered)
+    {
+        RequireConfirmedDestination(link, destination);
+        ArgumentNullException.ThrowIfNull(discovered);
+        var matchesByName = discovered.Where(company =>
+            company.Name.Trim().Equals(destination.Name.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matchesByName.Length != 1)
+            throw new InvalidOperationException(
+                "The exact linked consolidated Tally company is not uniquely open; no import sent.");
+
+        var live = matchesByName[0];
+        static bool HasValue(string value) => !string.IsNullOrWhiteSpace(value);
+        static bool Same(string a, string b) =>
+            a.Trim().Equals(b.Trim(), StringComparison.OrdinalIgnoreCase);
+        var expectedNumber = HasValue(link.CompanyNumber)
+            ? link.CompanyNumber : destination.CompanyNumber;
+        var expectedGstin = HasValue(link.Gstin)
+            ? TallyCompanyInfo.NormalizeGstin(link.Gstin)
+            : TallyCompanyInfo.NormalizeGstin(destination.Gstin);
+        var actualGstin = TallyCompanyInfo.NormalizeGstin(live.Gstin);
+        if ((HasValue(expectedNumber) && HasValue(live.CompanyNumber) &&
+             !Same(expectedNumber, live.CompanyNumber)) ||
+            (HasValue(expectedGstin) && HasValue(actualGstin) &&
+             !Same(expectedGstin, actualGstin)))
+            throw new InvalidOperationException(
+                "Live Tally company number or GSTIN differs from the saved consolidated link.");
+
+        var savedBookDate = TallyCompanyInfo.ParseTallyDate(link.BooksFrom) ??
+                            TallyCompanyInfo.ParseTallyDate(destination.BooksFrom);
+        var liveBookDate = TallyCompanyInfo.ParseTallyDate(live.BooksFrom);
+        if (savedBookDate is not null && liveBookDate is not null &&
+            savedBookDate.Value.Date != liveBookDate.Value.Date)
+            throw new InvalidOperationException(
+                "Live Tally BooksFrom differs from the linked consolidated company.");
+
+        var sameKey = Same(link.CompanyKey, live.CompanyKey);
+        var independentlyConfirmed =
+            (HasValue(expectedNumber) && HasValue(live.CompanyNumber) &&
+             Same(expectedNumber, live.CompanyNumber)) ||
+            (HasValue(expectedGstin) && HasValue(actualGstin) &&
+             Same(expectedGstin, actualGstin)) ||
+            (savedBookDate is not null && liveBookDate is not null &&
+             savedBookDate.Value.Date == liveBookDate.Value.Date);
+        if (!sameKey && !independentlyConfirmed)
+            throw new InvalidOperationException(
+                "Tally regenerated the company key without a matching saved company number, GSTIN or BooksFrom. Confirm the existing link; no import sent.");
+
+        RequireLinkedFinancialYearCoverage(link.FinancialYear, live);
+        return live;
     }
 
     public async Task<TallyBranchMasterImportResult> ImportMastersAsync(
@@ -50,9 +147,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
 
         // Check Tally itself, not a remembered dropdown item or branch company.
         var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
-        if (live.Count(x => x.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-                            x.Name.Equals(destination.Name, StringComparison.OrdinalIgnoreCase)) != 1)
-            throw new InvalidOperationException("The linked consolidated Tally company is not uniquely open; no master sent.");
+        RequireUniqueLiveDestination(confirmedLink, destination, live);
 
         // Read live masters immediately before planning. Local SQLite name matches
         // are never permission to ALTER/overwrite a foreign Tally master.
@@ -139,9 +234,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         ArgumentNullException.ThrowIfNull(destination);
         var financialYear = RequireConfirmedDestination(confirmedLink, destination);
         var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
-        if (live.Count(x => x.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-                            x.Name.Equals(destination.Name, StringComparison.OrdinalIgnoreCase)) != 1)
-            throw new InvalidOperationException("Selected consolidated Tally company is not uniquely open.");
+        RequireUniqueLiveDestination(confirmedLink, destination, live);
         var fresh = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
             .ConfigureAwait(false));
         var baseTypes = fresh.Where(x => x.Type == "Voucher Type")

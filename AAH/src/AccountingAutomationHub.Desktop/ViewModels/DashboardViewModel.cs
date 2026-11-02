@@ -252,7 +252,29 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(IsTallyAutoSyncSelected));
         OnPropertyChanged(nameof(IsTallyAutoSyncFull));
         OnPropertyChanged(nameof(IsTallySessionAutomationVisible));
-        RefreshTallyCommandStates();
+        if (active)
+        {
+            // This is the SAME Dashboard card embedded in Consolidated Tally
+            // Import. Its default messages can predate the Client/FY link and
+            // incorrectly tell a linked client to reopen or relink Tally.
+            TallyExportStatus =
+                "Use Generate Consolidated XML and Export Consolidated to Tally below. " +
+                "Normal Export Selected is disabled for the consolidated parent.";
+            if (_clientContext.CurrentClient is not null &&
+                _tallyCoordinator.GetCurrentClientLink() is not null)
+            {
+                if (TallyReportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase) ||
+                    TallyReportStatus.StartsWith("Link and open", StringComparison.OrdinalIgnoreCase))
+                    TallyReportStatus = "Linked company available. Select a live report and click Refresh Report.";
+                if (TallyStatisticsStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                    TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
+            }
+        }
+        else if (TallyExportStatus.StartsWith("Use Generate Consolidated XML", StringComparison.Ordinal))
+        {
+            TallyExportStatus = "Select the branch's source periods and use the normal Tally export.";
+        }
+        RefreshTallySection();
     }
 
     public void SetPrivateBranchDashboard(bool isPrivate)
@@ -2696,6 +2718,22 @@ public sealed class DashboardViewModel :
         {
             ApplyEmptyTallySection();
             return;
+        }
+
+        // Tally can be linked AFTER the consolidated page was first opened.
+        // Correct stale pre-link copy on the original embedded Dashboard card
+        // whenever the coordinator reports the confirmed parent Client/FY link.
+        if (_isConsolidatedTallyScope && link is not null)
+        {
+            if (TallyReportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase) ||
+                TallyReportStatus.StartsWith("Link and open", StringComparison.OrdinalIgnoreCase))
+                TallyReportStatus = "Linked company available. Select a live report and click Refresh Report.";
+            if (TallyStatisticsStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
+            if (TallyExportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                TallyExportStatus =
+                    "Use Generate Consolidated XML and Export Consolidated to Tally; " +
+                    "normal parent Export Selected is disabled.";
         }
 
         TallyClientLink? metricLink = link;
