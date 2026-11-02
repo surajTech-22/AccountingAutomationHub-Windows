@@ -23,12 +23,14 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
     public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(
         TallyClientLink link, TallyCompanyInfo destination,
         TallyConsolidatedPreparedXmlResult prepared,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? accountingFinancialYear = null)
     {
         ArgumentNullException.ThrowIfNull(link);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(prepared);
-        var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(link, destination);
+        var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            link, destination, accountingFinancialYear);
 
         var masterDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
             prepared.MastersXml, "staged consolidated masters");
@@ -71,7 +73,8 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         // A failed live read means no mutations. No cached branch or destination
         // data may authorize a CREATE against a Tally company.
         var open = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
-        TallyBranchConsolidationImportService.RequireUniqueLiveDestination(link, destination, open);
+        TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            link, destination, open, financialYear);
         if (!int.TryParse(financialYear[..Math.Min(4, financialYear.Length)],
             NumberStyles.None, CultureInfo.InvariantCulture, out var firstYear) ||
             firstYear < 1900 || firstYear > 9998)
