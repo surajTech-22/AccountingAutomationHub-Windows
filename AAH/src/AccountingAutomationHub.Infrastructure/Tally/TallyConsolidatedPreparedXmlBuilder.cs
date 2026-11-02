@@ -355,12 +355,12 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     continue;
                 }
 
-                RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
-                // An override such as Amazon Karnataka GSTIN on a Gujarat
-                // branch voucher remains the original transaction registration
-                // (never silently replaced by the Ledger's default GSTIN).
+                // Verify before mapping PARTYLEDGERNAME so the original
+                // branch's exact source Ledger remains the authority.
+                // Do not replace a voucher's GSTIN with the Ledger default.
                 TallyConsolidatedGstMasterPolicy.VerifyVoucherPartyRegistration(
                     v, originalLedgerXml, anchor);
+                RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
                 TallyConsolidatedStateNamePolicy.NormalizeVoucher(v);
                 vouchers.Add((branch, v));
             }
