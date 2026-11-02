@@ -84,7 +84,7 @@ internal static class TallyConsolidatedPreparedXmlTests
         // ledgers carried placeholder <TAXCLASSIFICATIONNAME> Not Applicable.
         // Tally rejects the first (Amazon): Created=0, Exceptions=1,
         // "Tax Classification 'Not Applicable' does not exist!".
-        // Verify the sentinel is never emitted in the consolidated copy,
+        // Verify the sentinel value is disabled but its XML label remains,
         // including the original illegal ERP9 '&#4;' text encoding.
         const string legacySentinels =
             "<TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>" +
@@ -104,16 +104,16 @@ internal static class TallyConsolidatedPreparedXmlTests
         var cleanedBuyer = XDocument.Parse(cleaned.MastersXml).Descendants("LEDGER")
             .Single(x => (string?)x.Element("NAME") == "Buyer");
         Check(cleanedBuyer.Element("PARENT")?.Value == "Karnataka Debtors" &&
-              !cleanedBuyer.Elements().Any(x => new[] {
+              new[] {
                   "TAXCLASSIFICATIONNAME", "GSTTYPE", "APPROPRIATEFOR",
                   "SERVICECATEGORY", "EXCISELEDGERCLASSIFICATION",
                   "EXCISEDUTYTYPE", "EXCISENATUREOFPURCHASE",
                   "LEDGERFBTCATEGORY"
-              }.Contains(x.Name.LocalName)) &&
+              }.All(name => cleanedBuyer.Element(name)?.Value == string.Empty) &&
               !cleaned.MastersXml.Contains("Not Applicable", StringComparison.OrdinalIgnoreCase) &&
               XDocument.Parse(cleaned.VouchersXml).Descendants("AMOUNT")
                   .Select(x => x.Value).Order().SequenceEqual(sourceAmounts),
-            "Nonexistent Tax Classification placeholders were sent to consolidated Tally or source voucher amounts changed.");
+            "Placeholder labels were removed/not disabled, or branch voucher amounts changed.");
 
         // Do not remove genuine original tax-classification references:
         // only the special 'Not Applicable' placeholders lack a Master.
@@ -128,6 +128,52 @@ internal static class TallyConsolidatedPreparedXmlTests
                   .Single(x => (string?)x.Element("NAME") == "Buyer")
                   .Element("TAXCLASSIFICATIONNAME")?.Value == "Original Valid Category",
             "A genuine source Tax Classification was stripped instead of preserving original metadata.");
+
+        // The uploaded Mitansh GST-only master/voucher XML retains legacy
+        // VATDEALERTYPE/ISVATDUTYPAID. Keep the labels but disable VAT values
+        // only in the consolidated destination copy, without changing GSTIN
+        // or DR/CR and without changing a genuine non-GST VAT source.
+        var gstVatBranchXml = a.Xml
+            .Replace("<PARENT>Sundry Debtors</PARENT></LEDGER>",
+                "<PARENT>Sundry Debtors</PARENT>" +
+                "<PARTYGSTIN>29ABCDE1234F1Z5</PARTYGSTIN>" +
+                "<GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>" +
+                "<VATDEALERTYPE>Regular</VATDEALERTYPE></LEDGER>")
+            .Replace("<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>",
+                "<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>" +
+                "<GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>" +
+                "<ISVATDUTYPAID>Yes</ISVATDUTYPAID>");
+        var gstVatCopy = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = gstVatBranchXml }, b
+        ]);
+        var vatLedger = XDocument.Parse(gstVatCopy.MastersXml).Descendants("LEDGER")
+            .Single(x => (string?)x.Element("NAME") == "Buyer");
+        var vatVoucher = XDocument.Parse(gstVatCopy.VouchersXml).Descendants("VOUCHER")
+            .Single(x => (string?)x.Element("VOUCHERNUMBER") == "KA-1");
+        Check(vatLedger.Element("VATDEALERTYPE")?.Value == string.Empty &&
+              vatLedger.Element("PARTYGSTIN")?.Value == "29ABCDE1234F1Z5" &&
+              vatLedger.Element("GSTREGISTRATIONTYPE")?.Value == "Regular" &&
+              vatVoucher.Element("ISVATDUTYPAID")?.Value == "No" &&
+              vatVoucher.Element("GSTREGISTRATIONTYPE")?.Value == "Regular" &&
+              XDocument.Parse(gstVatCopy.VouchersXml).Descendants("AMOUNT")
+                  .Select(x => x.Value).Order().SequenceEqual(sourceAmounts),
+            "GST consolidation removed VAT labels, left VAT activated, or modified GST/DR/CR.");
+
+        var legacyVatBranchXml = a.Xml
+            .Replace("<PARENT>Sundry Debtors</PARENT></LEDGER>",
+                "<PARENT>Sundry Debtors</PARENT><VATDEALERTYPE>Regular</VATDEALERTYPE></LEDGER>")
+            .Replace("<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>",
+                "<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><ISVATDUTYPAID>Yes</ISVATDUTYPAID>");
+        var legacyVatCopy = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = legacyVatBranchXml }, b
+        ]);
+        Check(XDocument.Parse(legacyVatCopy.MastersXml).Descendants("LEDGER")
+                  .Single(x => (string?)x.Element("NAME") == "Buyer")
+                  .Element("VATDEALERTYPE")?.Value == "Regular" &&
+              XDocument.Parse(legacyVatCopy.VouchersXml).Descendants("VOUCHER")
+                  .Single(x => (string?)x.Element("VOUCHERNUMBER") == "KA-1")
+                  .Element("ISVATDUTYPAID")?.Value == "Yes",
+            "A non-GST source VAT setting was changed without GST evidence.");
 
         Check(masterDoc.Descendants("GROUP").Any(x =>
                 (string?)x.Element("NAME") == "Karnataka Debtors") &&
@@ -228,10 +274,10 @@ internal static class TallyConsolidatedPreparedXmlTests
         var gstCleanLedger = XDocument.Parse(gstClean.MastersXml)
             .Descendants("LEDGER").Single(x =>
                 (string?)x.Element("NAME") == "Input IGST @ 18% - Karnataka");
-        Check(gstCleanLedger.Element("TAXCLASSIFICATIONNAME") is null &&
+        Check(gstCleanLedger.Element("TAXCLASSIFICATIONNAME")?.Value == string.Empty &&
               gstCleanLedger.Element("TAXTYPE")?.Value == "GST" &&
               gstCleanLedger.Element("GSTDUTYHEAD")?.Value == "Integrated Tax",
-            "Removing invalid optional classification damaged real GST duty-head metadata.");
+            "Disabling invalid optional classification damaged real GST duty-head metadata.");
 
         Check(spacingVouchers.Descendants("AMOUNT").Select(x => x.Value)
               .Order().SequenceEqual(new[] { "-50.00", "50.00", "-25.00", "25.00" }.Order()),

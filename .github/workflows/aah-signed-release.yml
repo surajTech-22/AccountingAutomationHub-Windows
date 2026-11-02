@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.576)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.577)"
         required: true
-        default: "v4.0.0.576"
+        default: "v4.0.0.577"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.576: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.577: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.576]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.577]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.576' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.577' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.576: fix verified in-place update when an original AAH PID no longer has a shutdown listener but exits during another sibling's graceful cleanup. Before deferring a reported shutdown failure, recensus every same-install AAH process with verified executable path; if none remain, perform an additional independent census and continue the existing transactional in-place installer. Refuse replacement when any matching process is still live. Keep v575 verified only-after-idle WPF process termination and updater mutex duplicate prevention, master-first Tally/branch changes, original DR/CR values and Windows accounting data unchanged. CI tests validate stale timeout, live-process deferral, exact path, rollback, Tally, Windows, all components, checksum-verified updater and release. Existing stalled v573/v574 may require one safe in-place recovery to activate these improvements. Unsigned installer."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.577: consolidated GST Tally XML keeps legacy VATDEALERTYPE, ISVATDUTYPAID and optional classification labels but disables outdated VAT or Not Applicable values, preventing unwanted classifications. Original GSTIN, GST duties, party identities, valid classification values, branch accounting DR/CR and master-first verification stay unchanged. v576 safe process-exit and SHA256 updater verification retained. CI validates consolidated Tally cases, full components and Windows publish; no data migration or forced closing of active Tally. Unsigned SHA256-verified release."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or

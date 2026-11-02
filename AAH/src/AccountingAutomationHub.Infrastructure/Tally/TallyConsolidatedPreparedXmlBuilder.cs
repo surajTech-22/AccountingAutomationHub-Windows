@@ -361,6 +361,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 TallyConsolidatedGstMasterPolicy.VerifyVoucherPartyRegistration(
                     v, originalLedgerXml, anchor);
                 RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
+                TallyConsolidatedGstMasterPolicy.DisableLegacyVatOnGstVoucher(v);
                 TallyConsolidatedStateNamePolicy.NormalizeVoucher(v);
                 vouchers.Add((branch, v));
             }
@@ -436,9 +437,10 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 TallyConsolidatedGstMasterPolicy.ApplyKnownDutyHead(ledger, parent, original);
                 // The individual branch exporter includes placeholder
                 // Tax Classification / legacy GST enum values that Tally
-                // cannot resolve as Master names. Strip ONLY placeholders
-                // in the consolidated destination copy, before any POST.
+                // cannot resolve as Master names. Preserve their labels with
+                // inactive empty values in the destination copy before POST.
                 TallyConsolidatedGstMasterPolicy.RemoveUnresolvedSourcePlaceholders(ledger);
+                TallyConsolidatedGstMasterPolicy.DisableLegacyVatOnGstLedger(ledger);
                 TallyConsolidatedStateNamePolicy.NormalizeLedger(ledger);
                 foreach (var nameTag in ledger.Descendants().Where(x =>
                     Is(x, "NAME") && x.Parent is not null && Is(x.Parent, "NAME.LIST") &&
