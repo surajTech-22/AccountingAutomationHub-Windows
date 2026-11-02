@@ -448,6 +448,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
             Set(merged, "VOUCHERTYPENAME", "Contra");
             Set(merged, "VOUCHERNUMBER", "IBT-" + transferId);
             merged.SetAttributeValue("VCHTYPE", "Contra");
+            TallyConsolidatedStateNamePolicy.NormalizeVoucher(merged);
             vouchers.Add((sourcePair[0].Branch, merged));
             reconciled++;
         }
