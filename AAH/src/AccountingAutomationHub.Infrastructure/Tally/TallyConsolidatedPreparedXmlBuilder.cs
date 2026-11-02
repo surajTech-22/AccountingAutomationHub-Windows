@@ -34,7 +34,14 @@ public static class TallyConsolidatedPreparedXmlBuilder
         var vouchers = new List<(TallyPreparedBranchXml Branch, XElement Voucher)>();
         var explicitlyMatched = new Dictionary<string, List<(TallyPreparedBranchXml Branch, XElement Voucher)>>(StringComparer.OrdinalIgnoreCase);
         var seenVoucherAnchors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var mappedLedgerMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Tally has ONE namespace for Ledger names, irrespective of parent
+        // Group. Keep branch grouping mandatory but do not manufacture
+        // '- Karnataka'/'- Gujarat' suffixes on Ledger names. If the
+        // same source name would require two distinct branch parents, refuse
+        // the ambiguous merge before ANY posting and report all collisions.
+        var mappedLedgerMasters = new Dictionary<string, (string Branch, string Parent)>(
+            StringComparer.OrdinalIgnoreCase);
+        var stateFreeNameConflicts = new List<string>();
         var mappedStockMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var commonInventoryMasters = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
         var sourceVoucherCount = 0;
@@ -203,15 +210,19 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 if (!ledgerAuthority.TryGetValue(sourceName.Trim(), out var masters) || masters.Length != 1)
                     throw new InvalidOperationException("Voucher references an unverified branch ledger: " +
                         branch.Branch.DisplayName + "/" + sourceName);
-                // Optional cash uses the exact already-planned branch Cash
-                // ledger; all other accounts remain branch-qualified.
+                // Optional separate cash uses the exact already-planned
+                // branch-ID-qualified Ledger (not a state name); every other
+                // Ledger retains the ORIGINAL accounting name.
                 var cash = plan.CashLedgers.SingleOrDefault(x =>
                     x.BranchId.Equals(branch.Branch.BranchId, StringComparison.OrdinalIgnoreCase));
                 if (cash is not null &&
                     masters[0].Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase))
                     return cash.Name;
-                // Never merge taxes, parties, bank accounts or other ledgers by name.
-                return sourceName.Trim() + " - " + branch.Branch.DisplayName.Trim();
+                // Preserve the original branch Ledger spelling. Only its
+                // compulsory parent Group carries the branch/state name.
+                // Cross-branch collisions with different group ownership are
+                // rejected as a complete list below, never silently merged.
+                return sourceName.Trim();
             }
 
             // Report every unresolved posting ledger before rewriting ANY source
@@ -289,6 +300,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 }
 
                 RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
+                TallyConsolidatedStateNamePolicy.NormalizeVoucher(v);
                 vouchers.Add((branch, v));
             }
 
@@ -310,8 +322,18 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 // master-first plan. Do not duplicate or recreate it in source XML.
                 if (cashPlanned) continue;
                 var parent = AccountingParent(original);
-                if (!mappedLedgerMasters.Add(destinationLedger))
-                    throw new InvalidOperationException("Two branch ledgers map to one consolidated ledger: " + destinationLedger);
+                if (mappedLedgerMasters.TryGetValue(destinationLedger, out var mapped))
+                {
+                    // A shared spelling does NOT authorize merging postings
+                    // into a single Tally Ledger under an arbitrary branch
+                    // group. Do not insert duplicate CREATE masters either.
+                    stateFreeNameConflicts.Add("'" + destinationLedger + "': " +
+                        mapped.Branch + " / " + mapped.Parent + " and " +
+                        branch.Branch.DisplayName + " / " + parent);
+                    continue;
+                }
+                mappedLedgerMasters.Add(destinationLedger,
+                    (branch.Branch.DisplayName.Trim(), parent));
                 if (!originalLedgerXml.TryGetValue(original, out var sourceDeclarations) ||
                     sourceDeclarations.Length == 0)
                     throw new InvalidOperationException("Neither prepared branch XML nor fresh original-company Tally export " +
@@ -346,6 +368,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 ledger.SetAttributeValue("ACTION", "Create");
                 Set(ledger, "NAME", destinationLedger);
                 Set(ledger, "PARENT", parent);
+                TallyConsolidatedStateNamePolicy.NormalizeLedger(ledger);
                 foreach (var nameTag in ledger.Descendants().Where(x =>
                     Is(x, "NAME") && x.Parent is not null && Is(x.Parent, "NAME.LIST") &&
                     x.Value.Trim().Equals(original, StringComparison.OrdinalIgnoreCase)))
@@ -353,6 +376,18 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 masterMessages.Add(new XElement("TALLYMESSAGE", ledger));
             }
         }
+        if (stateFreeNameConflicts.Count > 0)
+            throw new InvalidOperationException(
+                "Consolidated Tally requires globally unique Ledger names even under " +
+                "different mandatory state/branch Groups. State suffixes are disabled. " +
+                stateFreeNameConflicts.Count + " conflicting shared Ledger name(s): " +
+                string.Join(" | ", stateFreeNameConflicts.Take(20)) +
+                (stateFreeNameConflicts.Count > 20 ? " | ..." : "") +
+                ". Neither branch-specific accounting groups nor two different Ledger " +
+                "masters with the same name can coexist in Tally. Resolve each as an " +
+                "explicit shared Ledger (with agreed common grouping and branch tracking), " +
+                "or give the separate accounts genuinely different source Ledger names. " +
+                "No vouchers or masters were posted.");
 
         // Interbank is the ONE exception: reconcile two explicitly linked branch
         // bank sides into a common Contra without calculating or rewriting values.
@@ -394,7 +429,10 @@ public static class TallyConsolidatedPreparedXmlBuilder
                         CultureInfo.InvariantCulture, out var amount) || amount == 0)
                     throw new InvalidOperationException("Interbank bank-side amount or ledger is not verifiable.");
                 var side = new XElement(candidates[0]);
-                Set(side, "LEDGERNAME", Value(side, "LEDGERNAME") + " - " + branch.Branch.DisplayName.Trim());
+                // The consolidated bank Ledger uses its original source
+                // spelling. Cross-branch bank account name collisions are
+                // protected by the same global name/parent preflight.
+                Set(side, "LEDGERNAME", Value(side, "LEDGERNAME"));
                 sides.Add(side);
                 amounts.Add(amount);
             }
@@ -410,6 +448,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
             Set(merged, "VOUCHERTYPENAME", "Contra");
             Set(merged, "VOUCHERNUMBER", "IBT-" + transferId);
             merged.SetAttributeValue("VCHTYPE", "Contra");
+            TallyConsolidatedStateNamePolicy.NormalizeVoucher(merged);
             vouchers.Add((sourcePair[0].Branch, merged));
             reconciled++;
         }
