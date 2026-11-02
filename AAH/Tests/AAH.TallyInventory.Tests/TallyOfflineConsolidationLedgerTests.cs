@@ -16,7 +16,8 @@ internal static class TallyOfflineConsolidationLedgerTests
         var exporter = typeof(TallyAccountingVoucherExportService);
         var ledgerType = exporter.GetNestedType("RequiredLedger", BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Original RequiredLedger model was removed.");
-        var ctor = ledgerType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Single();
+        var ctor = ledgerType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Single(candidate => candidate.GetParameters().Any(p => p.Name == "Gstin"));
         var append = exporter.GetMethod("AppendRequiredAccountingMasters",
             BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Original branch master writer was removed.");
