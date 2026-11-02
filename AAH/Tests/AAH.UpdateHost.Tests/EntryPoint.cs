@@ -167,6 +167,27 @@ internal static class EntryPoint
             "WPF startup readiness still depends solely on ContextIdle and can be starved.");
         Console.WriteLine("PASS: exact-install-only multi-process closure, no unrelated processes, newer/same-version recovery, downgrade rejection and Loaded readiness.");
 
+        // A verified PID lacking a shutdown listener may exit in parallel
+        // with another same-path sibling's cleanup. Old v575 treated the
+        // first false result as final even if no AAH process remained and
+        // refused the verified installer. A NEW exact-path process census,
+        // not the stale request result, determines whether it is safe.
+        Assert(!Program.ShouldDeferAfterFreshProcessCensus(
+                new[] { false, true }, 0) &&
+               Program.ShouldDeferAfterFreshProcessCensus(
+                   new[] { false, true }, 1) &&
+               !Program.ShouldDeferAfterFreshProcessCensus(
+                   new[] { true }, 0),
+            "Updater abandoned replacement after all AAH processes exited, or ignored an active one.");
+        var updaterSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AAH.UpdateHost", "Program.cs"));
+        Assert(updaterSource.Contains("GetSameInstallationProcesses(installedExe)", StringComparison.Ordinal) &&
+               updaterSource.Contains("ShouldDeferAfterFreshProcessCensus(results, stillRunning.Count)", StringComparison.Ordinal) &&
+               updaterSource.Contains("foreach (var process in stillRunning) process.Dispose();", StringComparison.Ordinal),
+            "Updater does not recensus verified live processes after a listener-timeout race.");
+        Console.WriteLine("PASS: after listener timeout, fresh same-install PID census decides installer gate.");
+
+
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
         Assert(Program.PublisherIdentityCompatible("AAA", "aaa"),

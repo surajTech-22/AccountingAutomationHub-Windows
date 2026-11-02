@@ -482,8 +482,31 @@ internal static class Program
                     await RequestVerifiedUpdateExitWithRetryAsync(process)));
                 if (results.Any(x => !x))
                 {
-                    Log("Shutdown deferred: at least one AAH instance remains busy.");
-                    return false;
+                    // The user's v575 failure was a race: a PID without a
+                    // shutdown listener returned false, then exited during
+                    // another sibling's graceful drain/recovery. The old
+                    // updater kept that stale false result and refused to
+                    // replace files even though EVERY AAH PID was gone.
+                    // Never trust the earlier result over a NEW, path-verified
+                    // census of every AAH process from this installation.
+                    var stillRunning = GetSameInstallationProcesses(installedExe);
+                    try
+                    {
+                        if (ShouldDeferAfterFreshProcessCensus(results, stillRunning.Count))
+                        {
+                            Log("Shutdown deferred: " + stillRunning.Count +
+                                " exact-install AAH process(es) still running: " +
+                                string.Join(",", stillRunning.Select(p => p.Id)) +
+                                ". No program files were changed.");
+                            return false;
+                        }
+                        Log("A prior shutdown request returned false but every exact-install " +
+                            "AAH process has since exited; rechecking before application replacement.");
+                    }
+                    finally
+                    {
+                        foreach (var process in stillRunning) process.Dispose();
+                    }
                 }
             }
             finally
@@ -504,6 +527,20 @@ internal static class Program
             return false;
         }
         finally { foreach (var p in remaining) p.Dispose(); }
+    }
+
+    /// <summary>
+    /// A listener timeout is an observation, not the ultimate process state.
+    /// Only a new exact-installation census may override a stale timeout.
+    /// Never proceed while any matching AAH process remains running.
+    /// </summary>
+    internal static bool ShouldDeferAfterFreshProcessCensus(
+        IReadOnlyCollection<bool> shutdownResults, int verifiedRemainingProcessCount)
+    {
+        if (verifiedRemainingProcessCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(verifiedRemainingProcessCount));
+        return shutdownResults.Any(success => !success) &&
+               verifiedRemainingProcessCount > 0;
     }
 
     internal static bool LauncherExitedOrBelongsToInstallation(int launcherPid, string installedExe)
