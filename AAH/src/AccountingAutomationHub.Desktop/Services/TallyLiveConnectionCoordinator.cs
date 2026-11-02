@@ -2084,8 +2084,8 @@ public sealed class TallyLiveConnectionCoordinator :
         // Diagnostics are delivered as a single ZIP. Keep only one previous Hub-created
         // ZIP for this client before creating the new current pack; remove old extracted/
         // staging folders. Unrelated files/folders under AAH_TALLY_REPORTS are untouched.
-        CleanupOldDiagnosticArtifacts(root, safeClient);
-
+        // Do not delete the last verified ZIP before its replacement is
+        // complete. A failed disk write must preserve earlier evidence.
         var folder = Path.Combine(root, $"{DateTime.Now:yyyyMMdd-HHmmss}-{safeClient}-{result.FromDate:yyyyMMdd}-{result.ToDate:yyyyMMdd}");
         Directory.CreateDirectory(folder);
 
@@ -2317,12 +2317,19 @@ Tally-style report availability
         // ZIP is complete, delete the extracted staging folder as well so the client
         // directory contains only the newest diagnostic ZIP.
         var zipPath = Path.Combine(root, $"AAH_TALLY_DIAGNOSTIC_{DateTime.Now:yyyyMMdd-HHmmss}_{safeClient}.zip");
+        if (File.Exists(zipPath))
+            zipPath = Path.Combine(root,
+                $"AAH_TALLY_DIAGNOSTIC_{DateTime.Now:yyyyMMdd-HHmmss}_{Guid.NewGuid():N}_{safeClient}.zip");
         ZipFile.CreateFromDirectory(folder, zipPath, CompressionLevel.Fastest, false);
-        DeleteDiagnosticDirectory(folder);
+        // Only after a complete archive exists is it safe to retire previous
+        // AAH-owned diagnostic archives. Keep the current one on same-second runs.
+        CleanupOldDiagnosticArtifacts(root, safeClient, zipPath);
+        try { DeleteDiagnosticDirectory(folder); }
+        catch (IOException) { /* ZIP is valid; staging cleanup retries next time. */ }
         return zipPath;
     }
 
-    private static void CleanupOldDiagnosticArtifacts(string root, string safeClient)
+    private static void CleanupOldDiagnosticArtifacts(string root, string safeClient, string currentZipPath)
     {
         // Fix63 cumulative retention repair: before creating the new diagnostic keep
         // only one previous completed bundle. The new current ZIP then makes the
