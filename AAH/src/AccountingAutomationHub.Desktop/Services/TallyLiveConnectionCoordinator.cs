@@ -2009,6 +2009,48 @@ public sealed class TallyLiveConnectionCoordinator :
         if (source.ResponsePath.Length > 0) target.ResponsePath = source.ResponsePath;
     }
 
+    /// <summary>
+    /// Consolidated Tally reuses the EXISTING detailed AAH_TALLY_DIAGNOSTIC ZIP
+    /// in the parent's linked Automation Folder. This is diagnostic-only:
+    /// it never triggers an additional Tally read, import, or voucher retry.
+    /// </summary>
+    public async Task<string> SaveConsolidatedDiagnosticPackAsync(
+        ClientProfile parent, TallyCompanyInfo destination,
+        string operationStatus, int preparedVouchers, int verifiedImported,
+        IReadOnlyDictionary<string, string>? consolidatedEvidence = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(destination);
+        var current = _clientContext.CurrentClient;
+        if (current is null || current.Id != parent.Id ||
+            !current.FinancialYear.Equals(parent.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Consolidated diagnostics require the same active parent Client/FY.");
+        if (preparedVouchers < 0 || verifiedImported < 0 || verifiedImported > preparedVouchers)
+            throw new InvalidOperationException("Invalid consolidated diagnostic voucher counts.");
+        var (from, to) = FinancialYearDates(parent.FinancialYear);
+        var result = new TallyVoucherExportResult
+        {
+            FromDate = from, ToDate = to,
+            Selected = preparedVouchers, Ready = preparedVouchers,
+            ReadyCreates = preparedVouchers, Imported = verifiedImported,
+            TallyCreated = verifiedImported,
+            Status = "Consolidated Tally (existing wrapper): " + operationStatus
+        };
+        // No app-log fallback: the user explicitly needs the linked AutoFolder.
+        // Missing/unavailable links produce a visible error instead of a
+        // misleading success or a ZIP silently written elsewhere.
+        var path = await GenerateDiagnosticPackAsync(
+            parent, destination, result, Array.Empty<string>(), cancellationToken,
+            allowAppLogFallback: false, consolidatedEvidence: consolidatedEvidence);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            throw new IOException("Detailed Tally diagnostic ZIP was not saved in the linked client AutoFolder.");
+        LastDiagnosticReportPath = path;
+        Changed?.Invoke(this, EventArgs.Empty);
+        return path;
+    }
+
     // Throttle unresolved auto-only conflict diagnostics; accepted writes always
     // earn their own report. Never add Tally network reads for diagnostics.
     private DateTime _lastAutoConflictDiagnosticUtc = DateTime.MinValue;
@@ -2019,7 +2061,8 @@ public sealed class TallyLiveConnectionCoordinator :
         TallyVoucherExportResult result,
         IReadOnlyCollection<string> responsePaths,
         CancellationToken cancellationToken,
-        bool allowAppLogFallback = false)
+        bool allowAppLogFallback = false,
+        IReadOnlyDictionary<string, string>? consolidatedEvidence = null)
     {
         var linked = _automationService.GetFolders()
             .Where(folder => folder.ClientId == client.Id &&
@@ -2171,6 +2214,18 @@ public sealed class TallyLiveConnectionCoordinator :
                 copied.Add(requestName);
             }
             number++;
+        }
+
+        // Consolidated XML and exact request/response evidence are additional
+        // members of the ORIGINAL diagnostic ZIP, not a second report format.
+        // They are never placed as loose watched Auto Import XML files.
+        if (consolidatedEvidence is not null)
+        {
+            foreach (var artifact in consolidatedEvidence)
+            {
+                var evidenceName = "AAH_TALLY_Consolidated-" + SafeFilePart(artifact.Key);
+                File.WriteAllText(Path.Combine(folder, evidenceName), artifact.Value, Encoding.UTF8);
+            }
         }
 
         // The automatic ZIP includes the durable AutoImport timeline, so a Tally
