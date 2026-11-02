@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AccountingAutomationHub.Application.Masters;
 using AccountingAutomationHub.Application.Purchases;
 using AccountingAutomationHub.Domain.Purchases;
@@ -444,11 +445,55 @@ public sealed class SqlitePurchaseRecordRepository :
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
         using var reader = command.ExecuteReader();
         var records = new List<PurchaseImportRecord>();
+        var originalJson = new Dictionary<long, string>();
         while (reader.Read())
-            records.Add(ReadPurchaseRecord(reader));
+        {
+            var row = ReadPurchaseRecord(reader);
+            records.Add(row);
+            originalJson[row.PersistentId] = ReadString(reader, "RecordJson");
+        }
+        reader.Close();
+        // GSTIN identifies a supplier. Normalize every saved invoice, 2B,
+        // debit-note and RCM line using the newest substantive document name.
+        // Persist NAME ONLY; do not change financial data or IsUserEdited.
+        var changed = GstinLatestPartyNameConsistency.NormalizePurchase(records);
+        PersistLatestSupplierNames(connection, clientId, financialYear, changed, originalJson);
         return records;
     }
 
+
+    private static void PersistLatestSupplierNames(
+        SqliteConnection connection, long clientId, string financialYear,
+        IReadOnlyList<PurchaseImportRecord> changed, IReadOnlyDictionary<long, string> originalJson)
+    {
+        if (changed.Count == 0) return;
+        using var transaction = connection.BeginTransaction();
+        foreach (var row in changed)
+        {
+            if (row.PersistentId <= 0) continue;
+            JsonObject? json;
+            try { json = JsonNode.Parse(originalJson.GetValueOrDefault(row.PersistentId, "")) as JsonObject; }
+            catch { json = null; }
+            json ??= JsonSerializer.SerializeToNode(row) as JsonObject ?? new JsonObject();
+            json["SupplierName"] = row.SupplierName;
+            using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE PurchaseRecords SET SupplierName=$Name, RecordJson=$Json, UpdatedUtc=$Utc
+                WHERE Id=$Id AND ClientId=$ClientId AND FinancialYear=$FY
+                  AND UPPER(TRIM(SupplierGstin))=$Gstin;
+                """;
+            update.Parameters.AddWithValue("$Name", row.SupplierName);
+            update.Parameters.AddWithValue("$Json", json.ToJsonString());
+            update.Parameters.AddWithValue("$Utc", DateTime.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$Id", row.PersistentId);
+            update.Parameters.AddWithValue("$ClientId", clientId);
+            update.Parameters.AddWithValue("$FY", financialYear.Trim());
+            update.Parameters.AddWithValue("$Gstin", row.SupplierGstin.Trim().ToUpperInvariant());
+            update.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
 
     public int SaveManualImport(
         long clientId,
