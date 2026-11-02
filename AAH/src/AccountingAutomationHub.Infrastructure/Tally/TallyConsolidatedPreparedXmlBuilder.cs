@@ -38,7 +38,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
         var mappedStockMasters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var commonInventoryMasters = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
         var sourceVoucherCount = 0;
-        var sourceBoundAlters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rawSourceAltersConverted = 0;
 
         foreach (var branch in prepared.OrderBy(x => x.Branch.BranchId, StringComparer.OrdinalIgnoreCase))
         {
@@ -49,6 +49,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
+            // Boundary rule: accept branch accounting facts, never any
+            // company-owned object IDs or Alter version from its XML.
+            RemoveForeignTallyIdentity(source.Root!);
             // Branch-prepared XML deliberately omits Ledgers already live in
             // that branch's Tally company. Fill those master definitions only
             // from the original branch's freshly exported Tally masters, never
@@ -57,6 +60,10 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 ? null : TallyConsolidatedXmlTextSafety.ParseDocument(
                     branch.SourceLiveMastersXml, "live source masters " + branch.Branch.DisplayName,
                     LoadOptions.PreserveWhitespace);
+            // Source Tally's MASTERID/GUID/ALTERID and voucher IDs have no
+            // meaning in consolidated books. Drop them at the ingestion
+            // boundary, BEFORE inspecting or selecting any source master.
+            if (liveSource?.Root is not null) RemoveForeignTallyIdentity(liveSource.Root);
             var originalLedgerXml = source.Descendants().Where(x => Is(x, "LEDGER") &&
                     x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
                 .Concat(liveSource?.Descendants().Where(x => Is(x, "LEDGER")) ?? [])
@@ -81,12 +88,11 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     continue;
                 var preparedCreates = declarations.Where(x =>
                     x.Parent is not null && Is(x.Parent, "TALLYMESSAGE") &&
-                    Field(x, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase) &&
-                    !x.DescendantsAndSelf().Any(y => Is(y, "MASTERID") || Is(y, "GUID") || Is(y, "ALTERID"))).ToArray();
+                    Field(x, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase)).ToArray();
                 var candidates = preparedCreates.Length > 0 ? preparedCreates
-                    : declarations.Where(x => liveSource is not null &&
+                    : declarations.Where(x => liveSource?.Root is not null &&
                         x.Ancestors().Contains(liveSource.Root) &&
-                        Value(x, "MASTERID").Length > 0).ToArray();
+                        Value(x, "PARENT").Length > 0).ToArray();
                 // Conflicting or incomplete declarations cannot become a
                 // second guessed party/tax/bank master.
                 if (candidates.Length != 1) continue;
@@ -102,8 +108,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     Name = ledgerName,
                     Parent = parentName,
                     Type = "Ledger",
-                    Source = preparedCreates.Length > 0 ? "Original branch prepared CREATE" : "Live Tally",
-                    TallyMasterId = preparedCreates.Length > 0 ? "" : Value(declared, "MASTERID")
+                    Source = preparedCreates.Length > 0 ? "Original branch prepared CREATE" : "Verified source Tally master"
+                    // Deliberately NEVER copy or compare a branch TallyMasterId.
                 }];
             }
             // Inventory masters and units are reused, never regenerated from an
@@ -121,6 +127,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     throw new InvalidOperationException("Unverified inventory master or foreign ALTER: " + kind);
                 var key = kind + "|" + name;
                 var copy = new XElement(rawMaster);
+                RemoveForeignTallyIdentity(copy);
+                copy.SetAttributeValue("ACTION", "Create"); // new destination identity
                 if (commonInventoryMasters.TryGetValue(key, out var existing))
                 {
                     if (!XNode.DeepEquals(existing, copy))
@@ -146,9 +154,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 if (!mappedStockMasters.Add(newName))
                     throw new InvalidOperationException("Duplicate branch stock master destination: " + newName);
                 var stock = new XElement(definitions[0]);
-                if (Field(stock, "ACTION").Equals("Alter", StringComparison.OrdinalIgnoreCase) ||
-                    stock.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")))
-                    throw new InvalidOperationException("Foreign stock MASTERID/ALTER cannot be imported into consolidated Tally.");
+                RemoveForeignTallyIdentity(stock);
                 stock.SetAttributeValue("NAME", newName);
                 stock.SetAttributeValue("ACTION", "Create");
                 Set(stock, "NAME", newName);
@@ -235,32 +241,17 @@ public static class TallyConsolidatedPreparedXmlBuilder
             {
                 var v = new XElement(raw);
                 var sourceAction = Field(v, "ACTION");
+                // "Alter" is only an operation in the BRANCH'S Tally company.
+                // The consolidated books get the raw postings, not that Alter
+                // request, ID, GUID or version. AAH's independent document
+                // anchor (date/type/reference) supplies source deduplication.
+                if (!sourceAction.Equals("Create", StringComparison.OrdinalIgnoreCase) &&
+                    !sourceAction.Equals("Alter", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Unsupported raw branch voucher action: " + sourceAction);
                 if (sourceAction.Equals("Alter", StringComparison.OrdinalIgnoreCase))
-                {
-                    var id = Field(v, "TAGVALUE");
-                    if (!Field(v, "TAGNAME").Equals("MASTER ID", StringComparison.OrdinalIgnoreCase) ||
-                        id.Length == 0 || !id.All(char.IsDigit) ||
-                        !sourceBoundAlters.Add(branch.Branch.BranchId + "|" + id))
-                        throw new InvalidOperationException(
-                            "Unverified or repeated original branch Tally MASTERID; cannot rebase source voucher.");
-                    // The original MASTERID is authority only inside its branch
-                    // company. The consolidated target is a different company.
-                    // Stage CREATE for review; no XML stage is allowed to post
-                    // until the target's separate duplicate/version gate runs.
-                    foreach (var attribute in v.Attributes().Where(x =>
-                        x.Name.LocalName is "TAGNAME" or "TAGVALUE" or "GUID").ToArray())
-                        attribute.Remove();
-                    foreach (var identity in v.Elements().Where(x =>
-                        Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID")).ToArray())
-                        identity.Remove();
-                    v.SetAttributeValue("ACTION", "Create");
-                }
-                else if (!sourceAction.Equals("Create", StringComparison.OrdinalIgnoreCase) ||
-                         Field(v, "TAGNAME").Length > 0 || Field(v, "TAGVALUE").Length > 0 ||
-                         v.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")) ||
-                         v.Attributes().Any(x => x.Name.LocalName.Equals("GUID", StringComparison.OrdinalIgnoreCase)))
-                    throw new InvalidOperationException(
-                        "Branch voucher has a foreign or ambiguous Tally identity; final XML blocked.");
+                    rawSourceAltersConverted++;
+                RemoveForeignTallyIdentity(v);
+                v.SetAttributeValue("ACTION", "Create"); // new target voucher, no branch ID
                 var originalNumber = Value(v, "VOUCHERNUMBER");
                 var refValue = Value(v, "REFERENCE");
                 var date = Value(v, "DATE");
@@ -334,12 +325,8 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 var sourceLedger = preparedDeclaration ?? sourceDeclarations
                     .OrderByDescending(x => x.Descendants().Count()).First();
                 var liveParent = Value(sourceLedger, "PARENT");
-                var authority = ledgerAuthority[original][0];
-                var foreignSourceId = Value(sourceLedger, "MASTERID");
-                if (authority.TallyMasterId.Trim().Length > 0 &&
-                    foreignSourceId.Length > 0 &&
-                    !foreignSourceId.Equals(authority.TallyMasterId.Trim(), StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("Original branch Ledger MASTERID changed before consolidation: " + original);
+                // Source metadata authority is ledger name, classification and
+                // complete business fields, never a foreign source MASTERID.
                 if (preparedDeclaration is null &&
                     (sourceLedger.Descendants().Count() <= 7) &&
                     (liveParent.Equals("Duties & Taxes", StringComparison.OrdinalIgnoreCase) ||
@@ -351,16 +338,10 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 if (!liveParent.Equals(ledgerAuthority[original][0].Parent, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Branch Ledger parent differs from source Master authority: " + original);
                 var ledger = new XElement(sourceLedger);
-                // Foreign branch MASTERID / GUID / ALTERID are never applied to
-                // the new consolidated Tally company.
-                foreach (var item in ledger.Elements().Where(x =>
-                    Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID")).ToArray())
-                    item.Remove();
-                foreach (var attribute in ledger.Attributes().Where(x =>
-                    x.Name.LocalName is "MASTERID" or "GUID" or "ALTERID" or "TAGNAME" or "TAGVALUE").ToArray())
-                    attribute.Remove();
-                if (ledger.Descendants().Any(x => Is(x, "MASTERID") || Is(x, "GUID")))
-                    throw new InvalidOperationException("Nested foreign identity in Ledger master needs manual review.");
+                // Strip foreign source identifiers at every depth. The
+                // destination master-first import will create/find its own
+                // Ledger and read back its new MASTERID from consolidated Tally.
+                RemoveForeignTallyIdentity(ledger);
                 ledger.SetAttributeValue("NAME", destinationLedger);
                 ledger.SetAttributeValue("ACTION", "Create");
                 Set(ledger, "NAME", destinationLedger);
@@ -444,7 +425,11 @@ public static class TallyConsolidatedPreparedXmlBuilder
             var source = TallyConsolidatedXmlTextSafety.ParseDocument(
                 planXml, "planned consolidated master definitions");
             foreach (var message in source.Descendants().Where(x => Is(x, "TALLYMESSAGE")))
-                masterBuilder.AppendLine(message.ToString(SaveOptions.DisableFormatting));
+            {
+                var rawPlannedMaster = new XElement(message);
+                RemoveForeignTallyIdentity(rawPlannedMaster);
+                masterBuilder.AppendLine(rawPlannedMaster.ToString(SaveOptions.DisableFormatting));
+            }
         }
         foreach (var m in commonInventoryMasters.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
             masterBuilder.AppendLine(new XElement("TALLYMESSAGE", m.Value).ToString(SaveOptions.DisableFormatting));
@@ -457,14 +442,57 @@ public static class TallyConsolidatedPreparedXmlBuilder
         foreach (var (_, voucher) in vouchers)
             voucherBuilder.AppendLine(new XElement("TALLYMESSAGE", voucher).ToString(SaveOptions.DisableFormatting));
         TallyExcelParityXmlWriter.EndErp9DataImport(voucherBuilder);
+        // Positive assertion on FINAL wire payloads (includes inventory and
+        // interbank) prevents a new feature from leaking foreign IDs later.
+        RequireNoForeignTallyIdentity(masterBuilder.ToString(), "consolidated masters");
+        RequireNoForeignTallyIdentity(voucherBuilder.ToString(), "consolidated vouchers");
         return new TallyConsolidatedPreparedXmlResult(
             masterBuilder.ToString(), voucherBuilder.ToString(),
             expected.Length, sourceVoucherCount, vouchers.Count, reconciled,
             "Original branch amounts, entries, tax values and journals were not recalculated. " +
             "XML is staged only; live Tally duplicate/readback checks are still mandatory.")
         {
-            RebasedBranchAlterCount = sourceBoundAlters.Count
+            RebasedBranchAlterCount = rawSourceAltersConverted
         };
+    }
+
+    private static readonly HashSet<string> ForeignTallyIdentifiers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "MASTERID", "ALTERID", "GUID", "OLDMASTERID", "OLDGUID",
+        "VOUCHERID", "VOUCHERKEY", "VCHKEY", "REMOTEID", "UNIQUEREMOTEID",
+        "TALLYGUID", "TAGNAME", "TAGVALUE"
+    };
+
+    private static bool IsForeignTallyIdentifier(string name) =>
+        ForeignTallyIdentifiers.Contains(name);
+
+    /// <summary>
+    /// Branch company identities cannot be assigned in another Tally company.
+    /// Preserve raw dates, amounts, original references, tax and party metadata.
+    /// Deliberately does NOT remove VOUCHERNUMBER: it is a document/numbering
+    /// label that RewriteVoucher replaces with a new branch-qualified target
+    /// number for existing destination duplicate/readback gates.
+    /// </summary>
+    private static void RemoveForeignTallyIdentity(XElement source)
+    {
+        foreach (var element in source.DescendantsAndSelf().Where(x =>
+                     IsForeignTallyIdentifier(x.Name.LocalName)).ToArray())
+            element.Remove();
+        foreach (var attr in source.DescendantsAndSelf()
+                     .SelectMany(x => x.Attributes())
+                     .Where(x => IsForeignTallyIdentifier(x.Name.LocalName)).ToArray())
+            attr.Remove();
+    }
+
+    internal static void RequireNoForeignTallyIdentity(string xml, string scope)
+    {
+        var doc = TallyConsolidatedXmlTextSafety.ParseDocument(xml, scope);
+        var forbidden = doc.Descendants().FirstOrDefault(x =>
+            IsForeignTallyIdentifier(x.Name.LocalName) ||
+            x.Attributes().Any(a => IsForeignTallyIdentifier(a.Name.LocalName)));
+        if (forbidden is not null)
+            throw new InvalidOperationException(
+                "Foreign branch Tally identity leaked into " + scope + ": " + forbidden.Name.LocalName);
     }
 
     private static void RewriteVoucher(

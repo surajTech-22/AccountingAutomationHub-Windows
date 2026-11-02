@@ -242,10 +242,16 @@ internal static class TallyConsolidatedPreparedXmlTests
         Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a with { Xml = a.Xml.Replace(@"<LEDGER NAME=""Buyer"" ACTION=""Create"">",
                 @"<LEDGER NAME=""Not Buyer"" ACTION=""Create"">") }, b ]), "missing source ledger master");
-        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+        // The branch Alter operation is NOT the consolidated company.
+        // Even an old source Alter without a valid branch Tally MASTERID must
+        // be converted from its raw voucher postings into target CREATE.
+        var rawAlterWithoutId = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             a with { Xml = Xml("Sales", "1", "KA-INV-1", "Buyer", "Local Sales",
-                "-100.25", "100.25", "Sundry Debtors", "Sales Accounts", altered: true) }, b]),
-            "foreign Tally Alter must never be replayed");
+                "-100.25", "100.25", "Sundry Debtors", "Sales Accounts", altered: true) }, b]);
+        Check(rawAlterWithoutId.RebasedBranchAlterCount == 1 &&
+              XDocument.Parse(rawAlterWithoutId.VouchersXml).Descendants("VOUCHER")
+                  .All(v => (string?)v.Attribute("ACTION") == "Create"),
+              "Original branch Alter was incorrectly treated as destination Tally authority.");
 
         // A branch's live Tally MASTERID is source provenance, NEVER the
         // consolidated destination MASTERID. Rebase only in the offline XML.
@@ -261,6 +267,59 @@ internal static class TallyConsolidatedPreparedXmlTests
               rebasedVoucher.Attribute("TAGVALUE") is null &&
               rebasedVoucher.Attribute("TAGNAME") is null,
               "Foreign Tally MASTERID was reused in consolidated destination XML.");
+        // The source number, reference, amounts and GST are business data.
+        // Every source company ID/value is foreign and MUST be erased,
+        // including nested IDs on the voucher, posting, source ledger and
+        // inventory master XML. Two different branch IDs produce the SAME
+        // consolidated XML.
+        string SourceIdentities(string sourceXml, string id)
+        {
+            var doc = XDocument.Parse(sourceXml);
+            var voucher = doc.Descendants("VOUCHER").Single();
+            voucher.SetAttributeValue("ACTION", "Alter");
+            voucher.SetAttributeValue("TAGNAME", "MASTER ID");
+            voucher.SetAttributeValue("TAGVALUE", id);
+            voucher.SetAttributeValue("GUID", "branch-voucher-" + id);
+            voucher.Add(new XElement("MASTERID", id), new XElement("ALTERID", "88" + id),
+                new XElement("VOUCHERID", "voucher-" + id), new XElement("REMOTEID", "remote-" + id));
+            voucher.Descendants("ALLLEDGERENTRIES.LIST").First()
+                .Add(new XElement("VCHKEY", "key-" + id));
+            foreach (var ledger in doc.Descendants("LEDGER"))
+            {
+                ledger.SetAttributeValue("ALTERID", "22" + id);
+                ledger.Add(new XElement("MASTERID", id),
+                    new XElement("GUID", "branch-ledger-" + id));
+            }
+            return doc.ToString(SaveOptions.DisableFormatting);
+        }
+        var foreign1 = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = SourceIdentities(a.Xml, "99123") }, b ]);
+        var foreign2 = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = SourceIdentities(a.Xml, "99456") }, b ]);
+        Check(foreign1.MastersXml == foreign2.MastersXml &&
+              foreign1.VouchersXml == foreign2.VouchersXml &&
+              foreign1.RebasedBranchAlterCount == 1 &&
+              XDocument.Parse(foreign1.VouchersXml).Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(sourceAmounts) &&
+              !foreign1.MastersXml.Contains("branch-ledger-") &&
+              !foreign1.VouchersXml.Contains("branch-voucher-") &&
+              !foreign1.VouchersXml.Contains("voucher-99123") &&
+              !foreign1.VouchersXml.Contains("key-99123"),
+              "Source Tally identity affected the consolidated voucher/master content.");
+
+        var sourceInventory = WithStock(a.Xml)
+            .Replace(@"<STOCKITEM NAME=""Rice"" ACTION=""Create"">",
+                     @"<STOCKITEM NAME=""Rice"" ACTION=""Alter"" MASTERID=""815"">")
+            .Replace("<BASEUNITS>QTL</BASEUNITS>",
+                     "<MASTERID>815</MASTERID><GUID>stock-guid-815</GUID><BASEUNITS>QTL</BASEUNITS>");
+        var foreignStock = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = sourceInventory }, b with { Xml = WithStock(b.Xml) }]);
+        Check(!foreignStock.MastersXml.Contains("stock-guid-815") &&
+              !foreignStock.MastersXml.Contains("MASTERID") &&
+              XDocument.Parse(foreignStock.MastersXml).Descendants("STOCKITEM")
+                  .Any(x => (string?)x.Attribute("ACTION") == "Create"),
+              "Branch stock MASTERID/Alter was imported instead of a new destination stock identity.");
+
         var customMasters = new MasterRecord[] {
             Ledger("Buyer", "Sundry Debtors"),
             Ledger("Local Sales", "Regional Sales"),

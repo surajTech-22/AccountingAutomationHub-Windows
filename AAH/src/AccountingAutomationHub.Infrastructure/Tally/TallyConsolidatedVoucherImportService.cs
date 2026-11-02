@@ -32,6 +32,15 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(
             link, destination, accountingFinancialYear);
 
+        // Source company ID fields must never reach the destination Tally,
+        // including nested inventory/ledger identities in master XML.
+        // Destination creates/matches masters independently and reads back its
+        // OWN MASTERID before a single voucher is posted.
+        TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+            prepared.MastersXml, "staged consolidated master import");
+        TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+            prepared.VouchersXml, "staged consolidated voucher import");
+
         var masterDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
             prepared.MastersXml, "staged consolidated masters");
         var voucherDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
