@@ -34,10 +34,10 @@ public static class TallyConsolidatedGstMasterPolicy
     // "Not Applicable". Posting this placeholder causes Exceptions=1,
     // Created=0 before even the first Ledger can be created.
     //
-    // Consolidated master wire-format only: omit placeholder-valued
-    // OPTIONAL fields instead of asking Tally to resolve phantom masters.
-    // Genuine original values are preserved exactly; tax duty head,
-    // TAXTYPE, GSTIN, party and branch group metadata are not altered.
+    // Consolidated master wire-format only: disable placeholder-valued
+    // OPTIONAL fields by retaining their XML labels with empty values.
+    // Do not ask Tally to create phantom classifications. Genuine original
+    // values and GST/party/branch metadata remain unchanged.
     private static readonly HashSet<string> PlaceholderFields = new(
         StringComparer.OrdinalIgnoreCase)
     {
@@ -53,7 +53,38 @@ public static class TallyConsolidatedGstMasterPolicy
             PlaceholderFields.Contains(x.Name.LocalName) &&
             x.Value.Trim().TrimStart('\u0004').Trim()
                 .Equals("Not Applicable", StringComparison.OrdinalIgnoreCase)).ToArray())
-            field.Remove();
+            field.Value = string.Empty; // Keep the label, disable the nonexistent reference.
+    }
+
+    /// <summary>
+    /// GST consolidation is not a VAT enrollment request. Keep each existing
+    /// VATDEALERTYPE label in the destination copy, but leave its old VAT value
+    /// inactive when this source Ledger explicitly carries a GST registration.
+    /// The original branch XML and GST fields remain untouched.
+    /// </summary>
+    public static void DisableLegacyVatOnGstLedger(XElement ledger)
+    {
+        ArgumentNullException.ThrowIfNull(ledger);
+        if (Value(ledger, "GSTREGISTRATIONTYPE").Length == 0 &&
+            Value(ledger, "PARTYGSTIN").Length == 0)
+            return;
+        foreach (var vat in ledger.Elements().Where(x => Is(x, "VATDEALERTYPE")))
+            vat.Value = string.Empty;
+    }
+
+    /// <summary>
+    /// For explicitly GST-marked vouchers, preserve the ISVATDUTYPAID label
+    /// but set its obsolete VAT-only flag to No. Never touch signed DR/CR,
+    /// GST registration, GSTIN or other original accounting values.
+    /// </summary>
+    public static void DisableLegacyVatOnGstVoucher(XElement voucher)
+    {
+        ArgumentNullException.ThrowIfNull(voucher);
+        if (Value(voucher, "GSTREGISTRATIONTYPE").Length == 0 &&
+            Value(voucher, "PARTYGSTIN").Length == 0)
+            return;
+        foreach (var vat in voucher.Elements().Where(x => Is(x, "ISVATDUTYPAID")))
+            vat.Value = "No";
     }
 
     public static void ApplyKnownDutyHead(XElement ledger, string consolidatedParent, string originalName)
