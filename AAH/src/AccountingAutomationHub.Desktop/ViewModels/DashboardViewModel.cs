@@ -252,7 +252,29 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(IsTallyAutoSyncSelected));
         OnPropertyChanged(nameof(IsTallyAutoSyncFull));
         OnPropertyChanged(nameof(IsTallySessionAutomationVisible));
-        RefreshTallyCommandStates();
+        if (active)
+        {
+            // This is the SAME Dashboard card embedded in Consolidated Tally
+            // Import. Its default messages can predate the Client/FY link and
+            // incorrectly tell a linked client to reopen or relink Tally.
+            TallyExportStatus =
+                "Use Generate Consolidated XML and Export Consolidated to Tally below. " +
+                "Normal Export Selected is disabled for the consolidated parent.";
+            if (_clientContext.CurrentClient is not null &&
+                _tallyCoordinator.GetCurrentClientLink() is not null)
+            {
+                if (TallyReportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase) ||
+                    TallyReportStatus.StartsWith("Link and open", StringComparison.OrdinalIgnoreCase))
+                    TallyReportStatus = "Linked company available. Select a live report and click Refresh Report.";
+                if (TallyStatisticsStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                    TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
+            }
+        }
+        else if (TallyExportStatus.StartsWith("Use Generate Consolidated XML", StringComparison.Ordinal))
+        {
+            TallyExportStatus = "Select the branch's source periods and use the normal Tally export.";
+        }
+        RefreshTallySection();
     }
 
     public void SetPrivateBranchDashboard(bool isPrivate)
