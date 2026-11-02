@@ -906,6 +906,51 @@ public sealed class TallyAccountingVoucherExportService
     /// live preview maintained after Purchase/Sales/Journal/GST refreshes; the
     /// explicit Tally Export action still performs live duplicate checks and sends.
     /// </summary>
+    /// <summary>
+    /// Read-only, source-data change request for consolidated import.
+    /// It reads exactly the saved AAH categories consumed by GenerateLiveXml;
+    /// unlike GenerateLiveXml it never prepares vouchers, contacts Tally or
+    /// modifies an individual company link. Inserting, deleting, editing,
+    /// renaming or reclassifying any source record changes the fingerprint.
+    /// </summary>
+    public string ComputeOfflineConsolidationSourceFingerprint(ClientProfile client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        // Serializing the full persisted source models avoids relying on UpdatedUtc
+        // being populated by every legacy import/migration path. A stable sort
+        // ensures SQLite row ordering does not produce spurious cache misses.
+        static string[] Stable<T>(IEnumerable<T> source) =>
+            source.Select(row => System.Text.Json.JsonSerializer.Serialize(row))
+                .OrderBy(value => value, StringComparer.Ordinal).ToArray();
+
+        var contents = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Schema = "AAH-BRANCH-XML-SOURCE-V2",
+            client.Id,
+            client.ClientCode,
+            client.FinancialYear,
+            client.Gstin,
+            client.Pan,
+            client.State,
+            client.AdditionalGstins,
+            Purchases = Stable(_purchaseRepository.GetRecords(client.Id, client.FinancialYear)),
+            Sales = Stable(_salesRepository.GetRecords(client.Id, client.FinancialYear)),
+            CashEntries = Stable(_bankingRepository.GetCashEntries(client.Id, client.FinancialYear)),
+            BankAccounts = Stable(_bankingRepository.GetAccounts(client.Id, client.FinancialYear)),
+            Journals = Stable(_journalRepository.GetVouchers(client.Id, client.FinancialYear)),
+            JournalSettings = _journalRepository.GetSettings(client.Id, client.FinancialYear),
+            Masters = Stable(_masterRepository.Get(client.Id, client.FinancialYear, false)),
+            StockItems = Stable(_stockMasterRepository.GetStockItems(client.Id, client.FinancialYear)),
+            StockItemUnits = Stable(_stockMasterRepository.GetStockItemUnitProfiles(client.Id, client.FinancialYear)),
+            Units = Stable(_stockMasterRepository.GetUnits(client.Id, client.FinancialYear)),
+            StockGroups = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Stock Group")),
+            StockCategories = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Stock Category")),
+            Godowns = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Godown")),
+            CostCentres = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Cost Centre"))
+        });
+        return TallyConsolidatedBranchXmlSnapshotCache.Sha256(contents);
+    }
+
     public TallyLiveAccountingXmlSnapshot GenerateLiveXml(
         ClientProfile client,
         TallyCompanyInfo company,
