@@ -20,9 +20,9 @@ internal static class TallyConsolidatedPreparedXmlTests
         <BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC>
         <REQUESTDATA>
           <TALLYMESSAGE><LEDGER NAME="{debitName}" ACTION="Create">
-            <NAME>{debitName}</NAME><PARENT>{debitParent}</PARENT></LEDGER></TALLYMESSAGE>
+            <NAME>{debitName}</NAME><PARENT>{System.Security.SecurityElement.Escape(debitParent)}</PARENT></LEDGER></TALLYMESSAGE>
           <TALLYMESSAGE><LEDGER NAME="{creditName}" ACTION="Create">
-            <NAME>{creditName}</NAME><PARENT>{creditParent}</PARENT></LEDGER></TALLYMESSAGE>
+            <NAME>{creditName}</NAME><PARENT>{System.Security.SecurityElement.Escape(creditParent)}</PARENT></LEDGER></TALLYMESSAGE>
           <TALLYMESSAGE><VOUCHER ACTION="{(altered ? "Alter" : "Create")}" VCHTYPE="{type}">
             <DATE>20250505</DATE><VOUCHERNUMBER>{number}</VOUCHERNUMBER>
             <VOUCHERTYPENAME>{type}</VOUCHERTYPENAME><REFERENCE>{reference}</REFERENCE>
@@ -142,6 +142,62 @@ internal static class TallyConsolidatedPreparedXmlTests
                   }),
             "Ledger names unique to one branch were incorrectly suffixed.");
 
+        // Same tax Ledger with different whitespace around '@' is ONE
+        // cross-branch name. Both masters and all voucher posting references
+        // must use one canonical spelling plus the owning branch name.
+        var kaTax = Prepared(Karnataka,
+            Xml("Journal", "98", "KA-GST-98", "Buyer", "Input IGST @ 18%",
+                "-50.00", "50.00", "Sundry Debtors", "Duties & Taxes"),
+            Ledger("Buyer", "Sundry Debtors"), Ledger("Input IGST @ 18%", "Duties & Taxes"));
+        var tnTax = Prepared(TamilNadu,
+            Xml("Journal", "99", "TN-GST-99", "Tamil Buyer", "Input IGST @18%",
+                "-25.00", "25.00", "Sundry Debtors", "Duties & Taxes"),
+            Ledger("Tamil Buyer", "Sundry Debtors"), Ledger("Input IGST @18%", "Duties & Taxes"));
+        var spacing = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [kaTax, tnTax]);
+        var spacingMasters = XDocument.Parse(spacing.MastersXml);
+        var spacingVouchers = XDocument.Parse(spacing.VouchersXml);
+        foreach (var (name, parent) in new[] {
+                     ("Input IGST @ 18% - Karnataka", "Karnataka Taxes"),
+                     ("Input IGST @ 18% - Tamil Nadu", "Tamil Nadu Taxes") })
+        {
+            var taxLedger = spacingMasters.Descendants("LEDGER").Single(x =>
+                (string?)x.Element("NAME") == name);
+            Check((string?)taxLedger.Element("PARENT") == parent &&
+                  (string?)taxLedger.Element("TAXTYPE") == "GST" &&
+                  (string?)taxLedger.Element("GSTDUTYHEAD") == "Integrated Tax" &&
+                  (string?)taxLedger.Element("ISBEHAVEASDUTY") == "Yes" &&
+                  spacingVouchers.Descendants("LEDGERNAME").Any(x => x.Value == name),
+                "Equivalent GST tax Ledger spacing did not preserve original branch/group or GST Duty Head.");
+        }
+        Check(spacingVouchers.Descendants("AMOUNT").Select(x => x.Value)
+              .Order().SequenceEqual(new[] { "-50.00", "50.00", "-25.00", "25.00" }.Order()),
+            "GST ledger identity normalization recalculated original amounts.");
+
+        // GST settlement and generic tax-group members are NOT presumed
+        // to be a tax duty. Only original IGST/CGST/SGST/UTGST heads are
+        // eligible for the corrected Tally GST ledger classification.
+        var kaSettlement = Prepared(Karnataka,
+            Xml("Journal", "90", "SET-90", "Buyer", "GST Payable / Receivable",
+                "-10.00", "10.00", "Sundry Debtors", "Duties & Taxes"),
+            Ledger("Buyer", "Sundry Debtors"),
+            Ledger("GST Payable / Receivable", "Duties & Taxes"));
+        var settlement = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [kaSettlement, b]);
+        var settlementMaster = XDocument.Parse(settlement.MastersXml)
+            .Descendants("LEDGER").Single(x => (string?)x.Element("NAME") == "GST Payable / Receivable");
+        Check(settlementMaster.Element("GSTDUTYHEAD") is null &&
+              settlementMaster.Element("ISBEHAVEASDUTY") is null,
+            "GST settlement ledger was silently assigned a guessed IGST/CGST/SGST head.");
+
+        // An explicit original GST duty head is authoritative. An
+        // inconsistent one is rejected instead of being overwritten.
+        var invalidHead = XDocument.Parse(kaTax.Xml);
+        invalidHead.Descendants("LEDGER").Single(x =>
+            (string?)x.Element("NAME") == "Input IGST @ 18%")
+            .Add(new XElement("TAXTYPE", "GST"), new XElement("GSTDUTYHEAD", "Central Tax"));
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            kaTax with { Xml = invalidHead.ToString() }, tnTax
+        ]), "conflicting original source tax duty head was overwritten");
+
         // A real source account may already be called "Buyer - Karnataka".
         // It cannot be merged with a generated alias for "Buyer"; fail closed.
         var aliasCollision = b with {
@@ -186,6 +242,29 @@ internal static class TallyConsolidatedPreparedXmlTests
               normalizedVoucher.Descendants("AMOUNT").Select(x => x.Value)
                   .Order().SequenceEqual(new[] { "-100.25", "100.25" }.Order()),
             "GST state normalization altered source registration, voucher PoS or DR/CR.");
+
+        // Same PAN across a party Ledger's default and one voucher
+        // registration is valid (e.g. the same Amazon entity in two states).
+        // The voucher-level registration must survive verbatim. A DIFFERENT
+        // PAN cannot be silently attached to this same source party Ledger.
+        var withPartyGstin = XDocument.Parse(a.Xml);
+        withPartyGstin.Descendants("LEDGER").Single(x => (string?)x.Element("NAME") == "Buyer")
+            .Add(new XElement("PARTYGSTIN", "29ABCDE1234F1Z5"));
+        withPartyGstin.Descendants("VOUCHER").Single()
+            .Add(new XElement("PARTYLEDGERNAME", "Buyer"),
+                 new XElement("PARTYGSTIN", "24ABCDE1234F1Z5"));
+        var safeOverride = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = withPartyGstin.ToString() }, b ]);
+        Check(XDocument.Parse(safeOverride.VouchersXml)
+                  .Descendants("VOUCHER").Single(x =>
+                      (string?)x.Element("REFERENCE") == "KA-INV-1")
+                  .Element("PARTYGSTIN")?.Value == "24ABCDE1234F1Z5",
+            "Source voucher GST registration override was overwritten by Ledger's default GSTIN.");
+        withPartyGstin.Descendants("VOUCHER").Single()
+            .Element("PARTYGSTIN")!.Value = "24ZZZZZ9999Z1Z9";
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = withPartyGstin.ToString() }, b
+        ]), "different legal PAN was silently joined to original party Ledger");
 
         // Existing AAH accounting export uses empty VOUCHERNUMBER when the
         // original Tally type assigns numbering automatically. Its REFERENCE,

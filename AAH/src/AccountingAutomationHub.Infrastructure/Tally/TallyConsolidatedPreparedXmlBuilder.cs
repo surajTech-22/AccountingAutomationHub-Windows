@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Xml.Linq;
 using AccountingAutomationHub.Domain.Masters;
@@ -34,6 +35,16 @@ public static class TallyConsolidatedPreparedXmlBuilder
         // ledger names used by each prepared branch. Only a name present in
         // two or more distinct branches receives a destination suffix.
         // This is identity mapping, never an amount/GST recalculation.
+        // Name-equivalent source ledgers can vary only in whitespace around
+        // '@' (e.g. Input IGST @18% vs Input IGST @ 18%). This equivalence
+        // is for consolidated identity mapping ONLY, not a branch rename.
+        static string EquivalentLedgerName(string original)
+        {
+            var clean = original.Trim();
+            return Regex.Replace(Regex.Replace(clean, @"\s*@\s*", " @ "),
+                @"\s+", " ").Trim();
+        }
+
         var parsedBranches = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var ledgerOwners = new Dictionary<string, HashSet<string>>(
             StringComparer.OrdinalIgnoreCase);
@@ -56,8 +67,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 .Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (var sourceName in usedNames)
             {
-                if (!ledgerOwners.TryGetValue(sourceName, out var owners))
-                    ledgerOwners[sourceName] = owners = new HashSet<string>(
+                var equivalentName = EquivalentLedgerName(sourceName);
+                if (!ledgerOwners.TryGetValue(equivalentName, out var owners))
+                    ledgerOwners[equivalentName] = owners = new HashSet<string>(
                         StringComparer.OrdinalIgnoreCase);
                 owners.Add(originalBranch.Branch.BranchId);
             }
@@ -69,8 +81,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
         string MapBranchLedger(TallyBranchMasterIdentity owner, string originalName)
         {
             var clean = originalName.Trim();
-            return duplicateAcrossBranches.Contains(clean)
-                ? clean + " - " + owner.DisplayName.Trim()
+            var equivalentName = EquivalentLedgerName(clean);
+            return duplicateAcrossBranches.Contains(equivalentName)
+                ? equivalentName + " - " + owner.DisplayName.Trim()
                 : clean;
         }
 
@@ -342,6 +355,11 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     continue;
                 }
 
+                // Verify before mapping PARTYLEDGERNAME so the original
+                // branch's exact source Ledger remains the authority.
+                // Do not replace a voucher's GSTIN with the Ledger default.
+                TallyConsolidatedGstMasterPolicy.VerifyVoucherPartyRegistration(
+                    v, originalLedgerXml, anchor);
                 RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
                 TallyConsolidatedStateNamePolicy.NormalizeVoucher(v);
                 vouchers.Add((branch, v));
@@ -411,6 +429,11 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 ledger.SetAttributeValue("ACTION", "Create");
                 Set(ledger, "NAME", destinationLedger);
                 Set(ledger, "PARENT", parent);
+                // Only definite IGST/CGST/SGST source tax ledgers under
+                // mandatory branch Taxes groups are given Tally's GST duty
+                // classification. Settlement/receivable/RCM clearing ledgers
+                // without a single duty head remain source-owned.
+                TallyConsolidatedGstMasterPolicy.ApplyKnownDutyHead(ledger, parent, original);
                 TallyConsolidatedStateNamePolicy.NormalizeLedger(ledger);
                 foreach (var nameTag in ledger.Descendants().Where(x =>
                     Is(x, "NAME") && x.Parent is not null && Is(x.Parent, "NAME.LIST") &&
