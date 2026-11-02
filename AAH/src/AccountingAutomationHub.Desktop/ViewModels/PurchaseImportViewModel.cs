@@ -3360,6 +3360,9 @@ public sealed class PurchaseImportViewModel :
         IEnumerable<PurchaseImportRecord> records,
         IEnumerable<PurchaseImportIssue> issues)
     {
+        // Any direct import/edit/reset invalidates the cached paint fingerprint.
+        // WarmFromPreparedSnapshot sets it again only after its own successful repaint.
+        _lastWarmPurchaseFingerprint = string.Empty;
         var materialized = records.ToArray();
         foreach (var row in materialized)
             PurchaseTreatmentPolicy.ApplyAccountingShape(row);
