@@ -124,6 +124,66 @@ internal static class TallyBranchMasterImportContractTests
                 CompanyNumber = "9999", BooksFrom = "01-04-2021"
             }]), "Unrelated live destination passed after saved-name-drift repair");
 
+        // The normal Tally header can retain the original saved Client/FY key
+        // while a refreshed dropdown derives a new key for the SAME live company.
+        // Consolidated wraps the verified link; it does not create another link.
+        var driftedSelection = new TallyCompanyInfo
+        {
+            CompanyKey = "DERIVED-CONSOLIDATED-KEY",
+            Name = renamedSelected.Name,
+            CompanyNumber = renamedSelected.CompanyNumber,
+            BooksFrom = renamedSelected.BooksFrom,
+            FinancialYear = renamedSelected.FinancialYear
+        };
+        var wrapped = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, driftedSelection, [driftedSelection]);
+        Check(wrapped.CompanyKey == renamedLinked.CompanyKey &&
+              wrapped.Name == driftedSelection.Name &&
+              !ReferenceEquals(wrapped, driftedSelection),
+            "Consolidated wrapper did not preserve saved link authority with the live Tally destination.");
+        Check(TallyBranchConsolidationImportService.RequireConfirmedDestination(
+                renamedLinked, wrapped) == "2025-26",
+            "Wrapped destination was not accepted by the original master-first guard.");
+        Check(ReferenceEquals(
+                TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+                    renamedLinked, wrapped, [driftedSelection]), driftedSelection),
+            "Wrapped destination was not verified by fresh live Tally identity.");
+        Check(ReferenceEquals(TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                renamedLinked, renamedSelected, [renamedSelected]), renamedSelected),
+            "Existing same-key normal Tally link must not be copied or changed.");
+        Check(ReferenceEquals(TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                renamedLinked, null, [renamedSelected]), renamedSelected),
+            "An unselected but uniquely open saved Tally link should work without relinking.");
+
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked,
+            new TallyCompanyInfo { CompanyKey = "WRONG", Name = "Other Company",
+                CompanyNumber = "9999", BooksFrom = "01-04-2021" },
+            [new TallyCompanyInfo { CompanyKey = "WRONG", Name = "Other Company",
+                CompanyNumber = "9999", BooksFrom = "01-04-2021" }]),
+            "A different Tally company was accepted as consolidated merely because it was selected.");
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name },
+            [new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name }]),
+            "Name match without independent strong company identity must never authorize import.");
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name,
+                CompanyNumber = "405", BooksFrom = "01-04-2020" },
+            [new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name,
+                CompanyNumber = "405", BooksFrom = "01-04-2020" }]),
+            "A different Tally BooksFrom must not reuse a linked CompanyKey.");
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name,
+                CompanyNumber = "405", LinkedClientId = 444 },
+            [new TallyCompanyInfo { CompanyKey = "WRONG", Name = renamedSelected.Name,
+                CompanyNumber = "405", LinkedClientId = 444 }]),
+            "A company already linked to another client cannot become consolidated.");
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, driftedSelection, [driftedSelection,
+                new TallyCompanyInfo { CompanyKey = driftedSelection.CompanyKey,
+                    Name = driftedSelection.Name, CompanyNumber = driftedSelection.CompanyNumber }]),
+            "Two indistinguishable live target entries must block consolidated import.");
+
         // Fresh raw discovery regenerates a CompanyKey from its inferred
         // books-year, while the original coordinator keeps the saved linked key.
         var freshlyDiscovered = new TallyCompanyInfo
