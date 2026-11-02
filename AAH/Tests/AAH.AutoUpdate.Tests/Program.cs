@@ -167,6 +167,42 @@ try
 finally { try { Directory.Delete(stageRoot, recursive: true); } catch { } }
 Pass("cross-process staging lock and immutable per-attempt executable paths");
 
+// The original app may receive replayed notifications while an UpdateHost
+// is already waiting for graceful shutdown. Such notifications must not
+// stage/launch a competing update host. Test the REAL named mutex behavior
+// from a separate thread instead of merely asserting its source spelling.
+if (OperatingSystem.IsWindows())
+{
+    using var entered = new ManualResetEventSlim(false);
+    using var release = new ManualResetEventSlim(false);
+    var thread = new Thread(() =>
+    {
+        using var mutex = new Mutex(true, @"Local\AccountingAutomationHub.GitHubUpdate.v1");
+        try
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(20));
+        }
+        finally { mutex.ReleaseMutex(); }
+    }) { IsBackground = true };
+    thread.Start();
+    try
+    {
+        Require(entered.Wait(TimeSpan.FromSeconds(5)), "test host mutex was not acquired");
+        Require(GitHubAutoUpdateService.IsUpdateInProgress(),
+            "listener allowed concurrent update host while another owns mutex");
+    }
+    finally
+    {
+        release.Set();
+        Require(thread.Join(TimeSpan.FromSeconds(5)), "test host mutex was not released");
+    }
+    Require(!GitHubAutoUpdateService.IsUpdateInProgress(),
+        "listener indefinitely treated a completed host as active");
+}
+Pass("release replay respects the existing updater's cross-process mutex");
+
+
 // Cache cleanup must remove past updater copies, not workspace/data folders.
 var cache = Path.Combine(Path.GetTempPath(), "AAH-GitHub-Cache-Test-" + Guid.NewGuid().ToString("N"));
 try

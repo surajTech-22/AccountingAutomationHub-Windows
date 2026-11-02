@@ -50,6 +50,29 @@ internal static class GitHubAutoUpdateService
     private static readonly SemaphoreSlim CheckGate = new(1, 1);
     private static int _duplicateInstallationNotified;
 
+    // A verified update host has exclusive ownership of this installation.
+    // Avoid a second updater launch when release events replay.
+    internal static bool IsUpdateInProgress()
+    {
+        try
+        {
+            using var mutex = Mutex.OpenExisting(@"Local\AccountingAutomationHub.GitHubUpdate.v1");
+            try
+            {
+                if (!mutex.WaitOne(0)) return true;
+                mutex.ReleaseMutex();
+                return false;
+            }
+            catch (AbandonedMutexException)
+            {
+                mutex.ReleaseMutex();
+                return false;
+            }
+        }
+        catch (WaitHandleCannotBeOpenedException) { return false; }
+        catch (UnauthorizedAccessException) { return true; }
+    }
+
     internal static void Start(bool isLanClient)
     {
         if (isLanClient || Interlocked.Exchange(ref _started, 1) != 0) return;
@@ -237,6 +260,7 @@ internal static class GitHubAutoUpdateService
         var tag = release.GetProperty("tag_name").GetString();
         var installedVersion = Assembly.GetEntryAssembly()?.GetName().Version;
         if (tag is null || installedVersion is null || !IsNewer(tag, installedVersion)) return;
+        if (IsUpdateInProgress()) { Log("Another verified updater is already active; suppressing repeat launch."); return; }
 
         var assets = release.GetProperty("assets");
         if (assets.ValueKind != JsonValueKind.Array) return;
@@ -321,6 +345,14 @@ internal static class GitHubAutoUpdateService
             // left untouched; Windows will refuse overwriting its executable.
             File.Move(incoming, path);
             CleanupStaleUpdaterFolders(cacheRoot, tag);
+            if (IsUpdateInProgress())
+            {
+                Log("Existing verified updater became active during staging; no competing updater launched.");
+                Interlocked.Exchange(ref _updateLaunched, 0);
+                try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                return;
+            }
             var psi = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
