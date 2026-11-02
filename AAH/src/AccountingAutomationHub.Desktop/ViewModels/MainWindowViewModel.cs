@@ -2528,9 +2528,46 @@ public sealed class MainWindowViewModel :
                 CompanyKey = "AAH-OFFLINE-BRANCH-" + branchClient.Id,
                 FinancialYear = financialYear
             };
+            var safeCode = string.Concat(branchClient.ClientCode.Where(c =>
+                !Path.GetInvalidFileNameChars().Contains(c)));
+            var folder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Accounting Automation Hub", "Live Tally XML", safeCode, financialYear);
+            var path = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT.xml");
+            var status = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
+
+            // Every consolidation explicitly rechecks AAH's persisted branch
+            // accounting sources before selecting an XML. An unchanged, verified
+            // snapshot is returned as-is; original XML and timestamp are not
+            // rewritten. Older snapshots without a source and content digest
+            // are rebuilt once, using the existing INDIVIDUAL exporter.
+            var fingerprint = _branchXmlPreparationService
+                .ComputeOfflineConsolidationSourceFingerprint(branchClient);
+            if (TallyConsolidatedBranchXmlSnapshotCache.TryRead(
+                path, status, branchClient.ClientCode, financialYear,
+                fingerprint, out var cachedXml, out var cachedStatus))
+            {
+                // Fail closed against a write arriving during the cache read.
+                if (fingerprint.Equals(_branchXmlPreparationService
+                        .ComputeOfflineConsolidationSourceFingerprint(branchClient),
+                        StringComparison.Ordinal))
+                    return (cachedXml, cachedStatus);
+            }
+
+            // On ANY branch input change, call the original individual-account
+            // voucher/XML generator with the existing FY and offline mode. Do
+            // not recalculate or merge DR/CR/GST in this consolidated wrapper.
+            fingerprint = _branchXmlPreparationService
+                .ComputeOfflineConsolidationSourceFingerprint(branchClient);
             var snapshot = _branchXmlPreparationService.GenerateLiveXml(
                 branchClient, sourceCompany, from, to,
                 offlineConsolidatedBranchSource: true);
+            if (!fingerprint.Equals(_branchXmlPreparationService
+                    .ComputeOfflineConsolidationSourceFingerprint(branchClient),
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Branch '" + branchName +
+                    "' accounting changed during Live XML preparation. Retry after the source transaction completes.");
             if (snapshot.Ready == 0)
                 throw new InvalidOperationException(
                     "Branch '" + branchName + "' has no original, ready voucher entries in its saved FY books. " +
@@ -2548,14 +2585,7 @@ public sealed class MainWindowViewModel :
             // This is not a second voucher generator or a GST/DR/CR recalculation.
             TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
                 snapshot.Xml, snapshot.Ready, branchClient.ClientCode);
-            var safeCode = string.Concat(branchClient.ClientCode.Where(c =>
-                !Path.GetInvalidFileNameChars().Contains(c)));
-            var folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Accounting Automation Hub", "Live Tally XML", safeCode, financialYear);
             Directory.CreateDirectory(folder);
-            var path = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT.xml");
-            var status = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
             // Stage to temporary files and commit with atomic replacements.
             // Reopening Consolidated reuses the exact same owned source.
             var tempXml = path + ".tmp";
@@ -2568,6 +2598,8 @@ public sealed class MainWindowViewModel :
                 "Generated: " + preparedAt.ToString("yyyy-MM-dd HH:mm:ss",
                     System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
                 "Ready in XML: " + snapshot.Ready + Environment.NewLine;
+            statusText = TallyConsolidatedBranchXmlSnapshotCache.StampStatus(
+                statusText, fingerprint, snapshot.Xml);
             File.WriteAllText(tempXml, snapshot.Xml, System.Text.Encoding.UTF8);
             File.WriteAllText(tempStatus, statusText, System.Text.Encoding.UTF8);
             File.Move(tempXml, path, overwrite: true);
