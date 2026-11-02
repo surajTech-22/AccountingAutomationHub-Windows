@@ -80,6 +80,55 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
 
+        // Live Mitansh consolidated failure: all 67 actual source
+        // ledgers carried placeholder <TAXCLASSIFICATIONNAME> Not Applicable.
+        // Tally rejects the first (Amazon): Created=0, Exceptions=1,
+        // "Tax Classification 'Not Applicable' does not exist!".
+        // Verify the sentinel is never emitted in the consolidated copy,
+        // including the original illegal ERP9 '&#4;' text encoding.
+        const string legacySentinels =
+            "<TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>" +
+            "<GSTTYPE> Not Applicable</GSTTYPE>" +
+            "<APPROPRIATEFOR> Not Applicable</APPROPRIATEFOR>" +
+            "<SERVICECATEGORY> Not Applicable</SERVICECATEGORY>" +
+            "<EXCISELEDGERCLASSIFICATION> Not Applicable</EXCISELEDGERCLASSIFICATION>" +
+            "<EXCISEDUTYTYPE> Not Applicable</EXCISEDUTYTYPE>" +
+            "<EXCISENATUREOFPURCHASE> Not Applicable</EXCISENATUREOFPURCHASE>" +
+            "<LEDGERFBTCATEGORY> Not Applicable</LEDGERFBTCATEGORY>";
+        var legacyTemplate = a.Xml.Replace(
+            "<PARENT>Sundry Debtors</PARENT></LEDGER>",
+            "<PARENT>Sundry Debtors</PARENT>" + legacySentinels + "</LEDGER>");
+        var cleaned = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = legacyTemplate }, b
+        ]);
+        var cleanedBuyer = XDocument.Parse(cleaned.MastersXml).Descendants("LEDGER")
+            .Single(x => (string?)x.Element("NAME") == "Buyer");
+        Check(cleanedBuyer.Element("PARENT")?.Value == "Karnataka Debtors" &&
+              !cleanedBuyer.Elements().Any(x => new[] {
+                  "TAXCLASSIFICATIONNAME", "GSTTYPE", "APPROPRIATEFOR",
+                  "SERVICECATEGORY", "EXCISELEDGERCLASSIFICATION",
+                  "EXCISEDUTYTYPE", "EXCISENATUREOFPURCHASE",
+                  "LEDGERFBTCATEGORY"
+              }.Contains(x.Name.LocalName)) &&
+              !cleaned.MastersXml.Contains("Not Applicable", StringComparison.OrdinalIgnoreCase) &&
+              XDocument.Parse(cleaned.VouchersXml).Descendants("AMOUNT")
+                  .Select(x => x.Value).Order().SequenceEqual(sourceAmounts),
+            "Nonexistent Tax Classification placeholders were sent to consolidated Tally or source voucher amounts changed.");
+
+        // Do not remove genuine original tax-classification references:
+        // only the special 'Not Applicable' placeholders lack a Master.
+        var actualClassification = a.Xml.Replace(
+            "<PARENT>Sundry Debtors</PARENT></LEDGER>",
+            "<PARENT>Sundry Debtors</PARENT>" +
+            "<TAXCLASSIFICATIONNAME>Original Valid Category</TAXCLASSIFICATIONNAME></LEDGER>");
+        var classified = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = actualClassification }, b
+        ]);
+        Check(XDocument.Parse(classified.MastersXml).Descendants("LEDGER")
+                  .Single(x => (string?)x.Element("NAME") == "Buyer")
+                  .Element("TAXCLASSIFICATIONNAME")?.Value == "Original Valid Category",
+            "A genuine source Tax Classification was stripped instead of preserving original metadata.");
+
         Check(masterDoc.Descendants("GROUP").Any(x =>
                 (string?)x.Element("NAME") == "Karnataka Debtors") &&
               masterDoc.Descendants("GROUP").Any(x =>
@@ -169,6 +218,21 @@ internal static class TallyConsolidatedPreparedXmlTests
                   spacingVouchers.Descendants("LEDGERNAME").Any(x => x.Value == name),
                 "Equivalent GST tax Ledger spacing did not preserve original branch/group or GST Duty Head.");
         }
+        var gstSourceWithSentinel = XDocument.Parse(kaTax.Xml);
+        gstSourceWithSentinel.Descendants("LEDGER").Single(x =>
+            (string?)x.Element("NAME") == "Input IGST @ 18%")
+            .Add(new XElement("TAXCLASSIFICATIONNAME", " Not Applicable"));
+        var gstClean = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            kaTax with { Xml = gstSourceWithSentinel.ToString() }, tnTax
+        ]);
+        var gstCleanLedger = XDocument.Parse(gstClean.MastersXml)
+            .Descendants("LEDGER").Single(x =>
+                (string?)x.Element("NAME") == "Input IGST @ 18% - Karnataka");
+        Check(gstCleanLedger.Element("TAXCLASSIFICATIONNAME") is null &&
+              gstCleanLedger.Element("TAXTYPE")?.Value == "GST" &&
+              gstCleanLedger.Element("GSTDUTYHEAD")?.Value == "Integrated Tax",
+            "Removing invalid optional classification damaged real GST duty-head metadata.");
+
         Check(spacingVouchers.Descendants("AMOUNT").Select(x => x.Value)
               .Order().SequenceEqual(new[] { "-50.00", "50.00", "-25.00", "25.00" }.Order()),
             "GST ledger identity normalization recalculated original amounts.");

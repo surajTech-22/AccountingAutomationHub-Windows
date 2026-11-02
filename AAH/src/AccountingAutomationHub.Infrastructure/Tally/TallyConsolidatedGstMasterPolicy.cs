@@ -26,6 +26,36 @@ public static class TallyConsolidatedGstMasterPolicy
         else field.Value = value;
     }
 
+    // The original individual Excel-parity XML generator writes blank
+    // enumerated fields as "&#4; Not Applicable". The source-safe parser
+    // decodes this to an ordinary string for the consolidated Ledger copy.
+    // Tally treats TAXCLASSIFICATIONNAME as a reference to an EXISTING tax
+    // classification master; there is no master literally called
+    // "Not Applicable". Posting this placeholder causes Exceptions=1,
+    // Created=0 before even the first Ledger can be created.
+    //
+    // Consolidated master wire-format only: omit placeholder-valued
+    // OPTIONAL fields instead of asking Tally to resolve phantom masters.
+    // Genuine original values are preserved exactly; tax duty head,
+    // TAXTYPE, GSTIN, party and branch group metadata are not altered.
+    private static readonly HashSet<string> PlaceholderFields = new(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        "TAXCLASSIFICATIONNAME", "GSTTYPE", "APPROPRIATEFOR",
+        "SERVICECATEGORY", "EXCISELEDGERCLASSIFICATION",
+        "EXCISEDUTYTYPE", "EXCISENATUREOFPURCHASE", "LEDGERFBTCATEGORY"
+    };
+
+    public static void RemoveUnresolvedSourcePlaceholders(XElement ledger)
+    {
+        ArgumentNullException.ThrowIfNull(ledger);
+        foreach (var field in ledger.Elements().Where(x =>
+            PlaceholderFields.Contains(x.Name.LocalName) &&
+            x.Value.Trim().TrimStart('\u0004').Trim()
+                .Equals("Not Applicable", StringComparison.OrdinalIgnoreCase)).ToArray())
+            field.Remove();
+    }
+
     public static void ApplyKnownDutyHead(XElement ledger, string consolidatedParent, string originalName)
     {
         ArgumentNullException.ThrowIfNull(ledger);
