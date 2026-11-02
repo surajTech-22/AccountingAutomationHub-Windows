@@ -2413,10 +2413,6 @@ public sealed class MainWindowViewModel :
             // private ClientId/FY, not by a separate Tally company. A source
             // Tally link is OPTIONAL. Only the consolidated destination must
             // be linked to Tally for the final import.
-            var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
-            var statusPath = Path.Combine(Path.GetDirectoryName(existing[0])!,
-                "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
-            var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
             // AAH's own ClientId/FY and generated XML are the branch source
             // authority. Its older optional Tally link may belong to another
             // FY/company and must not veto the saved branch's prepared vouchers.
