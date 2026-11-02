@@ -535,8 +535,13 @@ internal static class Program
     /// Never proceed while any matching AAH process remains running.
     /// </summary>
     internal static bool ShouldDeferAfterFreshProcessCensus(
-        IReadOnlyCollection<bool> shutdownResults, int verifiedRemainingProcessCount) =>
-        verifiedRemainingProcessCount > 0;
+        IReadOnlyCollection<bool> shutdownResults, int verifiedRemainingProcessCount)
+    {
+        if (verifiedRemainingProcessCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(verifiedRemainingProcessCount));
+        return shutdownResults.Any(success => !success) &&
+               verifiedRemainingProcessCount > 0;
+    }
 
     internal static bool LauncherExitedOrBelongsToInstallation(int launcherPid, string installedExe)
     {
