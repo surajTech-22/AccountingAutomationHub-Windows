@@ -2302,6 +2302,29 @@ public sealed class MainWindowViewModel :
             link, _tallyCoordinator.SelectedCompany, _tallyCoordinator.OpenCompanies.ToArray(),
             accountingFinancialYear);
 
+    // Do not create another diagnostic format. Route every consolidated
+    // operation to the ORIGINAL coordinator's comprehensive AAH_TALLY_DIAGNOSTIC
+    // ZIP in the parent's linked AutoFolder/AAH_TALLY_REPORTS directory.
+    // A logging failure never causes a Tally mutation or a voucher resend.
+    private async Task<string> SaveConsolidatedExistingDiagnosticsAsync(
+        ClientProfile parent, TallyCompanyInfo company, string outcome,
+        int preparedVouchers, int verifiedImported,
+        IReadOnlyDictionary<string, string>? artifacts = null)
+    {
+        try
+        {
+            var path = await _tallyCoordinator.SaveConsolidatedDiagnosticPackAsync(
+                parent, company, outcome, preparedVouchers, verifiedImported, artifacts);
+            return "Detailed Tally diagnostics saved: " + path;
+        }
+        catch (Exception exception)
+        {
+            AutomationDiagnosticLog.Write("CONSOLIDATED-TALLY-DIAGNOSTIC-ERROR",
+                exception.ToString(), parent.ClientCode);
+            return "Detailed Tally diagnostics NOT saved in linked AutoFolder: " + exception.Message;
+        }
+    }
+
     /// <summary>
     /// Consolidated master stage only. Always reuse the current Dashboard
     /// Tally link and the already constructed Tally HTTP transport.
@@ -2353,9 +2376,23 @@ public sealed class MainWindowViewModel :
                 scope.Id, branch.BranchId, branch.Name, pan,
                 branch.Gstin, parent.FinancialYear);
         }).ToArray();
-        return await _consolidatedMasterImporter.ImportMastersAsync(
-            link, destination, identities, separateVoucherTypes, separateCashLedgers,
-            accountingFinancialYear: financialYear);
+        try
+        {
+            var imported = await _consolidatedMasterImporter.ImportMastersAsync(
+                link, destination, identities, separateVoucherTypes, separateCashLedgers,
+                accountingFinancialYear: financialYear);
+            var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
+                parent, destination, "Consolidated branch master verification: " + imported.Status,
+                0, 0);
+            return imported with { Status = imported.Status + " " + diagnostic };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
+                parent, destination, "Consolidated branch master import stopped: " + exception,
+                0, 0);
+            throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
+        }
     }
 
     /// <summary>
@@ -2506,6 +2543,16 @@ public sealed class MainWindowViewModel :
             child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
         File.WriteAllText(mastersPath, result.MastersXml, System.Text.Encoding.UTF8);
         File.WriteAllText(vouchersPath, result.VouchersXml, System.Text.Encoding.UTF8);
+        // Keep the existing Downloads previews for manual inspection, but save
+        // the SAME established detailed Tally ZIP under the parent's AutoFolder.
+        var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
+            parent, company, "Consolidated XML PREVIEW ONLY; no Tally posting. " +
+            result.Status, result.FinalVouchers, 0,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Prepared-Masters.xml"] = result.MastersXml,
+                ["Prepared-Vouchers.xml"] = result.VouchersXml
+            });
         return result with
         {
             Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
@@ -2515,7 +2562,8 @@ public sealed class MainWindowViewModel :
                      (skippedOptionalSourceLinks == 0 ? "" :
                          $"Ignored {skippedOptionalSourceLinks} unrelated/outdated optional branch Tally link(s). ") +
                      "XML preview saved to: " + destination +
-                     ". No Tally import was sent; duplicate/version/readback gate still required."
+                     ". No Tally import was sent; duplicate/version/readback gate still required. " +
+                     diagnostic
         };
     }
 
@@ -2647,9 +2695,43 @@ public sealed class MainWindowViewModel :
         // A selection that changed while preparing XML must fail at the destination
         // / original Tally envelope and live readback gates, never redirect vouchers.
         var company = ResolveConsolidatedLinkedDestination(link, financialYear);
-        var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService);
-        return await importer.ImportAsync(link, company, prepared,
-            accountingFinancialYear: financialYear);
+        var evidence = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Prepared-Masters.xml"] = prepared.MastersXml,
+            ["Prepared-Vouchers.xml"] = prepared.VouchersXml
+        };
+        var exchangeNumber = 0;
+        var verifiedVoucherCount = 0;
+        var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
+            (stage, requestXml, responseXml) =>
+            {
+                // These are the actual original Tally POSTs and responses, not
+                // another exporter or any new network diagnostic requests.
+                var prefix = (++exchangeNumber).ToString("D4",
+                    System.Globalization.CultureInfo.InvariantCulture) + "-" + stage;
+                evidence[prefix + "-Request.xml"] = requestXml;
+                evidence[prefix + (responseXml.StartsWith("Transport exception:", StringComparison.Ordinal)
+                    ? "-Error.txt" : "-Response.xml")] = responseXml;
+            },
+            () => verifiedVoucherCount++);
+        try
+        {
+            var result = await importer.ImportAsync(link, company, prepared,
+                accountingFinancialYear: financialYear);
+            var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
+                current, company, "Consolidated voucher import: " + result.Status,
+                prepared.FinalVouchers, result.ImportedVouchers, evidence);
+            return result with { Status = result.Status + " " + diagnostic };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // An ambiguous Tally acknowledgement must remain blocked, while
+            // its exact in-flight request/response is preserved for inspection.
+            var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
+                current, company, "Consolidated voucher import STOPPED: " + exception,
+                prepared.FinalVouchers, verifiedVoucherCount, evidence);
+            throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
+        }
     }
 
     private void RebuildWorkspaceNavigation(

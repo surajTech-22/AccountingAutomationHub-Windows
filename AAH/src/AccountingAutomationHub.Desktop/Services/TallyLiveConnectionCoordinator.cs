@@ -2009,6 +2009,48 @@ public sealed class TallyLiveConnectionCoordinator :
         if (source.ResponsePath.Length > 0) target.ResponsePath = source.ResponsePath;
     }
 
+    /// <summary>
+    /// Consolidated Tally reuses the EXISTING detailed AAH_TALLY_DIAGNOSTIC ZIP
+    /// in the parent's linked Automation Folder. This is diagnostic-only:
+    /// it never triggers an additional Tally read, import, or voucher retry.
+    /// </summary>
+    public async Task<string> SaveConsolidatedDiagnosticPackAsync(
+        ClientProfile parent, TallyCompanyInfo destination,
+        string operationStatus, int preparedVouchers, int verifiedImported,
+        IReadOnlyDictionary<string, string>? consolidatedEvidence = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(destination);
+        var current = _clientContext.CurrentClient;
+        if (current is null || current.Id != parent.Id ||
+            !current.FinancialYear.Equals(parent.FinancialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Consolidated diagnostics require the same active parent Client/FY.");
+        if (preparedVouchers < 0 || verifiedImported < 0 || verifiedImported > preparedVouchers)
+            throw new InvalidOperationException("Invalid consolidated diagnostic voucher counts.");
+        var (from, to) = FinancialYearDates(parent.FinancialYear);
+        var result = new TallyVoucherExportResult
+        {
+            FromDate = from, ToDate = to,
+            Selected = preparedVouchers, Ready = preparedVouchers,
+            ReadyCreates = preparedVouchers, Imported = verifiedImported,
+            TallyCreated = verifiedImported,
+            Status = "Consolidated Tally (existing wrapper): " + operationStatus
+        };
+        // No app-log fallback: the user explicitly needs the linked AutoFolder.
+        // Missing/unavailable links produce a visible error instead of a
+        // misleading success or a ZIP silently written elsewhere.
+        var path = await GenerateDiagnosticPackAsync(
+            parent, destination, result, Array.Empty<string>(), cancellationToken,
+            allowAppLogFallback: false, consolidatedEvidence: consolidatedEvidence);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            throw new IOException("Detailed Tally diagnostic ZIP was not saved in the linked client AutoFolder.");
+        LastDiagnosticReportPath = path;
+        Changed?.Invoke(this, EventArgs.Empty);
+        return path;
+    }
+
     // Throttle unresolved auto-only conflict diagnostics; accepted writes always
     // earn their own report. Never add Tally network reads for diagnostics.
     private DateTime _lastAutoConflictDiagnosticUtc = DateTime.MinValue;
@@ -2019,7 +2061,8 @@ public sealed class TallyLiveConnectionCoordinator :
         TallyVoucherExportResult result,
         IReadOnlyCollection<string> responsePaths,
         CancellationToken cancellationToken,
-        bool allowAppLogFallback = false)
+        bool allowAppLogFallback = false,
+        IReadOnlyDictionary<string, string>? consolidatedEvidence = null)
     {
         var linked = _automationService.GetFolders()
             .Where(folder => folder.ClientId == client.Id &&
@@ -2041,8 +2084,8 @@ public sealed class TallyLiveConnectionCoordinator :
         // Diagnostics are delivered as a single ZIP. Keep only one previous Hub-created
         // ZIP for this client before creating the new current pack; remove old extracted/
         // staging folders. Unrelated files/folders under AAH_TALLY_REPORTS are untouched.
-        CleanupOldDiagnosticArtifacts(root, safeClient);
-
+        // Do not delete the last verified ZIP before its replacement is
+        // complete. A failed disk write must preserve earlier evidence.
         var folder = Path.Combine(root, $"{DateTime.Now:yyyyMMdd-HHmmss}-{safeClient}-{result.FromDate:yyyyMMdd}-{result.ToDate:yyyyMMdd}");
         Directory.CreateDirectory(folder);
 
@@ -2173,6 +2216,18 @@ public sealed class TallyLiveConnectionCoordinator :
             number++;
         }
 
+        // Consolidated XML and exact request/response evidence are additional
+        // members of the ORIGINAL diagnostic ZIP, not a second report format.
+        // They are never placed as loose watched Auto Import XML files.
+        if (consolidatedEvidence is not null)
+        {
+            foreach (var artifact in consolidatedEvidence)
+            {
+                var evidenceName = "AAH_TALLY_Consolidated-" + SafeFilePart(artifact.Key);
+                File.WriteAllText(Path.Combine(folder, evidenceName), artifact.Value, Encoding.UTF8);
+            }
+        }
+
         // The automatic ZIP includes the durable AutoImport timeline, so a Tally
         // native crash after IMPORTRESULT can be aligned to final-authority reads.
         // No new network requests and no change to manual export diagnostics.
@@ -2262,18 +2317,26 @@ Tally-style report availability
         // ZIP is complete, delete the extracted staging folder as well so the client
         // directory contains only the newest diagnostic ZIP.
         var zipPath = Path.Combine(root, $"AAH_TALLY_DIAGNOSTIC_{DateTime.Now:yyyyMMdd-HHmmss}_{safeClient}.zip");
+        if (File.Exists(zipPath))
+            zipPath = Path.Combine(root,
+                $"AAH_TALLY_DIAGNOSTIC_{DateTime.Now:yyyyMMdd-HHmmss}_{Guid.NewGuid():N}_{safeClient}.zip");
         ZipFile.CreateFromDirectory(folder, zipPath, CompressionLevel.Fastest, false);
-        DeleteDiagnosticDirectory(folder);
+        // Only after a complete archive exists is it safe to retire previous
+        // AAH-owned diagnostic archives. Keep the current one on same-second runs.
+        CleanupOldDiagnosticArtifacts(root, safeClient, zipPath);
+        try { DeleteDiagnosticDirectory(folder); }
+        catch (IOException) { /* ZIP is valid; staging cleanup retries next time. */ }
         return zipPath;
     }
 
-    private static void CleanupOldDiagnosticArtifacts(string root, string safeClient)
+    private static void CleanupOldDiagnosticArtifacts(string root, string safeClient, string currentZipPath)
     {
-        // Fix63 cumulative retention repair: before creating the new diagnostic keep
-        // only one previous completed bundle. The new current ZIP then makes the
-        // promised maximum of two (Current + Previous), never three.
+        // Keep the complete newly created ZIP and one previous verified ZIP.
+        // A failed new archive never deletes the preceding diagnostic.
         foreach (var oldZip in Directory.EnumerateFiles(
                      root, $"AAH_TALLY_DIAGNOSTIC_*_{safeClient}.zip", SearchOption.TopDirectoryOnly)
+                 .Where(path => !Path.GetFullPath(path).Equals(
+                     Path.GetFullPath(currentZipPath), StringComparison.OrdinalIgnoreCase))
                  .OrderByDescending(File.GetLastWriteTimeUtc).Skip(1))
         {
             try { File.Delete(oldZip); }
