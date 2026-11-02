@@ -345,6 +345,11 @@ internal static class GitHubAutoUpdateService
             // left untouched; Windows will refuse overwriting its executable.
             File.Move(incoming, path);
             CleanupStaleUpdaterFolders(cacheRoot, tag);
+            if (IsUpdateInProgress())
+            {
+                Log("Existing verified updater became active during staging; no competing updater launched.");
+                return;
+            }
             var psi = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
