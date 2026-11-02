@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using AccountingAutomationHub.Domain.Purchases;
 using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Tally;
 
@@ -221,6 +222,45 @@ internal static class TallyConsolidatedBranchSourceTests
             !mainWindow.Contains("Task.Delay(90)", StringComparison.Ordinal) &&
             mainWindow.Contains("currentClient.Id, currentClient.FinancialYear, module);", StringComparison.Ordinal),
             "A fixed module navigation delay or missing visible-module cache priority was reintroduced.");
+
+        // Karnataka 02-Nov regression: exactly 36 GSTR-2B-only rows are
+        // reconciliation evidence, NOT 36 missing Purchase ledgers.
+        var twoBOnly = Enumerable.Range(1, 36).Select(i => new PurchaseImportRecord
+        {
+            PersistentId = i,
+            ReconciliationStatus = "2B Only",
+            Destination = "2B Only",
+            GstApplicability = PurchaseTreatmentPolicy.NotIncludedInPurchase,
+            DocumentNumber = "2B-" + i,
+            GstDate = new DateTime(2026, 2, 1)
+        }).ToArray();
+        foreach (var row in twoBOnly) PurchaseTreatmentPolicy.ApplyAccountingShape(row);
+        Check(twoBOnly.All(row => !PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource(row)),
+            "36 unpromoted 2B-only rows must remain reconciliation-only.");
+        var promoted = twoBOnly[0];
+        promoted.Destination = "Purchase";
+        promoted.GstApplicability = PurchaseTreatmentPolicy.IncludedInPurchase;
+        PurchaseTreatmentPolicy.ApplyAccountingShape(promoted);
+        Check(PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource(promoted),
+            "Explicitly included 2B invoice must become a valid Purchase voucher source.");
+        Check(twoBOnly.Count(PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource) == 1,
+            "Only the promoted 2B invoice should be exported.");
+        Check(PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource(
+            new PurchaseImportRecord { Destination = "RCM" }) &&
+            PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource(
+                new PurchaseImportRecord { Destination = "Debit Note Reverse" }) &&
+            !PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource(
+                new PurchaseImportRecord { Destination = "Reconciliation Only" }),
+            "Normal RCM / notes must remain eligible; non-accounting destinations must not.");
+        var voucherExporter = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
+            "AccountingAutomationHub.Infrastructure", "Tally", "TallyAccountingVoucherExportService.cs"));
+        Check(voucherExporter.Contains(".Where(PurchaseTreatmentPolicy.IsTallyPurchaseVoucherSource)", StringComparison.Ordinal),
+            "Shared Tally branch/normal exporter must filter 2B evidence BEFORE ledger validation.");
+        var purchaseUi = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "ViewModels", "PurchaseImportViewModel.cs"));
+        Check(purchaseUi.Contains("FilterReconciliationRows(materialized)", StringComparison.Ordinal) &&
+            purchaseUi.Contains("_lastWarmPurchaseFingerprint == fingerprint", StringComparison.Ordinal),
+            "Private branch 2B filter must survive identical and changed module snapshots.");
 
         Console.WriteLine("PASS: offline branch XML preparation, owned source checks, fast module opening and no live Tally posting.");
     }
