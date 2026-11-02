@@ -72,6 +72,31 @@ public static class TallyConsolidatedBranchXmlSnapshotCache
         }
     }
 
+    /// <summary>
+    /// A consolidated build collects several independent branch source snapshots.
+    /// A branch may change while another branch is being loaded, even when its own
+    /// cache read/generation was individually consistent. Check ALL branch inputs
+    /// before and after combining them, and fail closed rather than export a
+    /// mixed-time collection of otherwise individually valid XML files.
+    /// </summary>
+    public static void RequireUnchangedSources<TClient>(
+        IEnumerable<(TClient Client, string BranchName, string Fingerprint)> sources,
+        Func<TClient, string> computeFingerprint)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(computeFingerprint);
+        foreach (var source in sources)
+        {
+            if (source.Fingerprint.Length != 64 ||
+                !source.Fingerprint.Equals(
+                    computeFingerprint(source.Client), StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Branch '" + source.BranchName +
+                    "' accounting changed during consolidated XML collection. " +
+                    "Retry to prepare all branches from consistent saved sources.");
+        }
+    }
+
     public static string StampStatus(string existingStatus, string sourceFingerprint, string xml) =>
         existingStatus.TrimEnd('\r', '\n') + Environment.NewLine +
         FingerprintLabel + sourceFingerprint + Environment.NewLine +
