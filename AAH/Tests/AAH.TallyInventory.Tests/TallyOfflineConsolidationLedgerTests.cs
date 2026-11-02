@@ -61,7 +61,7 @@ internal static class TallyOfflineConsolidationLedgerTests
         var ledger = offline.Descendants("LEDGER").Single();
         Check((string?)ledger.Attribute("ACTION") == "Create" &&
               (string?)ledger.Element("PARENT") == "Sundry Creditors" &&
-              ledger.Descendants("GSTIN").Any(x => x.Value == "29ABCDE1234F1Z5"),
+              ledger.Descendants("PARTYGSTIN").Any(x => x.Value == "29ABCDE1234F1Z5"),
             "Bound source party master or its original branch GST metadata is missing.");
         Check(!ledger.Descendants().Any(x => x.Name.LocalName is "MASTERID" or "ALTERID" or "GUID"),
             "A foreign branch company identity was copied into the offline template.");
