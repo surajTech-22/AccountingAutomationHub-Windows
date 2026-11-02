@@ -20,6 +20,20 @@ public static class PurchaseTreatmentPolicy
     public const string RcmNextMonth = "Claimed in Next Month";
     public const string RcmReversed = "Reversed";
 
+    /// <summary>Reconciliation-only 2B rows are never voucher sources until included.</summary>
+    public static bool IsTallyPurchaseVoucherSource(PurchaseImportRecord row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        var destination = row.Destination.Trim();
+        var isPostingDestination =
+            destination.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ||
+            destination.Equals("RCM", StringComparison.OrdinalIgnoreCase) ||
+            destination.Equals(DebitNoteDestination, StringComparison.OrdinalIgnoreCase) ||
+            destination.Equals(DebitNoteReverseDestination, StringComparison.OrdinalIgnoreCase);
+        return isPostingDestination &&
+            !(row.IsTwoBOnlyEvidence && IsTwoBNotIncluded(row.GstApplicability));
+    }
+
     public static bool IsRcm(PurchaseImportRecord row) =>
         row.Destination.Equals("RCM", StringComparison.OrdinalIgnoreCase);
 
