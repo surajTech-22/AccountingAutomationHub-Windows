@@ -1,0 +1,29 @@
+name: AAH resend v4.0.0.561 update signal
+
+on:
+  push:
+    branches:
+      - notify/aah-v4-0-0-561-resend-20261102
+
+permissions:
+  contents: read
+
+jobs:
+  resend-published-release-event:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify released version before notifying
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(curl --fail --silent --show-error --retry 3 --max-time 30             "https://api.github.com/repos/surajTech-22/AccountingAutomationHub-Windows/releases/latest" | jq -r .tag_name)"
+          if [[ "$latest" != "v4.0.0.561" ]]; then
+            echo "Refusing to announce unexpected latest release: $latest" >&2
+            exit 1
+          fi
+      - name: Resend established AAH release-event notification
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 --max-time 30             --request POST --header 'Content-Type: text/plain'             --data-binary 'v4.0.0.561'             'https://ntfy.sh/aah-surajtech22-windows-release-signal-v1'
+          echo 'PASS: v4.0.0.561 release event resent to existing AAH subscribers.'
