@@ -1066,7 +1066,8 @@ public sealed class MainWindowViewModel :
     // The current private branch / Consolidated ClientId alone owns this link.
     public string TallyLinkActionLabel =>
         _clientContext.CurrentClient is { } current &&
-        _tallyRepository.GetLinkForClient(current.Id) is not null ? "Linked" : "Link";
+        _tallyRepository.GetLinkForClient(current.Id) is not null &&
+        !_tallyCoordinator.IsCurrentSelectionPending() ? "Linked" : "Link";
 
     public string TallyLinkActionTooltip =>
         "Link the selected Tally CompanyKey only to the active Client/FY accounting scope.";
@@ -2290,6 +2291,15 @@ public sealed class MainWindowViewModel :
     }
 
     /// <summary>
+    /// Only a scope wrapper: preserve the normal Dashboard's saved parent link,
+    /// open-company selection and Tally transport. Never create a new link or
+    /// regenerate CompanyKey from a renamed / different first-book-year company.
+    /// </summary>
+    private TallyCompanyInfo ResolveConsolidatedLinkedDestination(TallyClientLink link) =>
+        TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            link, _tallyCoordinator.SelectedCompany, _tallyCoordinator.OpenCompanies.ToArray());
+
+    /// <summary>
     /// Consolidated master stage only. Always reuse the current Dashboard
     /// Tally link and the already constructed Tally HTTP transport.
     /// Never select a branch's own Tally link for the consolidated destination.
@@ -2313,10 +2323,9 @@ public sealed class MainWindowViewModel :
             throw new InvalidOperationException("Separate branch books are not enabled for this client.");
 
         var link = _tallyCoordinator.GetCurrentClientLink();
-        var destination = _tallyCoordinator.SelectedCompany;
-        if (link is null || destination is null || link.ClientId != parentClientId ||
-            !link.CompanyKey.Equals(destination.CompanyKey, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Confirm the consolidated Tally company in the existing Dashboard Tally Link first.");
+        if (link is null || link.ClientId != parentClientId)
+            throw new InvalidOperationException("Confirm the parent Client/FY Tally Link first.");
+        var destination = ResolveConsolidatedLinkedDestination(link);
 
         var parent = _clientRepository.GetById(parentClientId);
         if (parent is null || parent.IsArchived || parent.FinancialYear != financialYear)
@@ -2364,10 +2373,9 @@ public sealed class MainWindowViewModel :
         if (_tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected)
             throw new InvalidOperationException("Verify the existing Dashboard Tally Link.");
         var link = _tallyCoordinator.GetCurrentClientLink();
-        var company = _tallyCoordinator.SelectedCompany;
-        if (link is null || company is null || link.ClientId != parentId ||
-            !link.CompanyKey.Equals(company.CompanyKey, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Consolidated Tally company is not confirmed.");
+        if (link is null || link.ClientId != parentId)
+            throw new InvalidOperationException("Confirm the parent Client/FY Tally Link first.");
+        var company = ResolveConsolidatedLinkedDestination(link);
 
         var parent = _clientRepository.GetById(parentId)
             ?? throw new InvalidOperationException("Parent Client/FY is missing.");
@@ -2553,14 +2561,17 @@ public sealed class MainWindowViewModel :
             parentId, financialYear, separateTypes, separateCash);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
-        var company = _tallyCoordinator.SelectedCompany;
         if (current is null || current.Id != parentId ||
             !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
-            link is null || company is null || link.ClientId != parentId ||
+            link is null || link.ClientId != parentId ||
             _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
             _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
             throw new InvalidOperationException(
                 "The verified consolidated workspace or original Dashboard Tally link changed.");
+        // Re-resolve the same saved parent link immediately before posting.
+        // A selection that changed while preparing XML must fail at the destination
+        // / original Tally envelope and live readback gates, never redirect vouchers.
+        var company = ResolveConsolidatedLinkedDestination(link);
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService);
         return await importer.ImportAsync(link, company, prepared);
     }
