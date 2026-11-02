@@ -51,9 +51,12 @@ public static class TallyConsolidatedBranchXmlSnapshotCache
                 return false;
             // A valid checksum alone is insufficient; assert original branch
             // ownership, Tally envelope and exactly the original ready count.
-            TallyConsolidatedBranchSourcePolicy.Validate(candidateXml, candidateStatus,
+            var xmlCompany = TallyConsolidatedBranchSourcePolicy.Validate(candidateXml, candidateStatus,
                 clientCode, financialYear, new AccountingAutomationHub.Domain.Tally.TallyCompanyInfo
                 { Name = "AAH private-branch source validation" }, null);
+            if (!xmlCompany.Equals("AAH Prepared Branch " + clientCode,
+                    StringComparison.OrdinalIgnoreCase))
+                return false;
             TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
                 candidateXml, ready, clientCode);
             xml = candidateXml;
