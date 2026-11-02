@@ -2432,7 +2432,16 @@ public sealed class MainWindowViewModel :
             if (savedSourceLink is not null && sourceLink is null)
                 skippedOptionalSourceLinks++;
 
-            var masters = _masterRepository.Get(child.Id, financialYear, false).ToArray();
+            // Pass only the raw source ledger/group classification. Private
+            // branch TallyMasterId/GUID/ALTERID must never cross into the
+            // consolidated builder or influence its new destination IDs.
+            var masters = _masterRepository.Get(child.Id, financialYear, false)
+                .Select(m => new MasterRecord
+                {
+                    Name = m.Name, Parent = m.Parent, Type = m.Type,
+                    IsArchived = m.IsArchived, Source = "Raw branch classification"
+                })
+                .ToArray();
             // A separate branch Tally company is NOT required. If one is
             // explicitly linked and open, its full Master export can supply
             // source-defined GST/party/bank attributes without reconstruction.
