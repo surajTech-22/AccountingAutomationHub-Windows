@@ -243,6 +243,54 @@ internal static class TallyBranchMasterImportContractTests
                 BooksFrom = "01-04-2021", FinancialYear = "2024-25" }),
             "contradictory non-book-year FY was accepted");
 
+        // 02-Nov live screenshot regression: Tally's saved link FY comes from
+        // company discovery, which can be blank or the company's FIRST books FY.
+        // The selected consolidated AAH parent FY is 2025-26 in both cases.
+        var linkWithoutTallyYear = new TallyClientLink
+        {
+            ClientId = renamedLinked.ClientId,
+            CompanyKey = renamedLinked.CompanyKey,
+            CompanyName = renamedLinked.CompanyName,
+            CompanyNumber = renamedLinked.CompanyNumber,
+            BooksFrom = renamedLinked.BooksFrom,
+            FinancialYear = ""
+        };
+        var linkWithFirstBooksYear = new TallyClientLink
+        {
+            ClientId = renamedLinked.ClientId,
+            CompanyKey = renamedLinked.CompanyKey,
+            CompanyName = renamedLinked.CompanyName,
+            CompanyNumber = renamedLinked.CompanyNumber,
+            BooksFrom = renamedLinked.BooksFrom,
+            FinancialYear = "2021-22"
+        };
+        foreach (var discoveredLink in new[] { linkWithoutTallyYear, linkWithFirstBooksYear })
+        {
+            var exact = TallyBranchConsolidationImportService.RequireConfirmedDestination(
+                discoveredLink, renamedSelected, "2025-26");
+            Check(exact == "2025-26", "Tally's stored discovery year incorrectly replaced selected AAH Client/FY.");
+            var resolved = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                discoveredLink, renamedSelected, [renamedSelected], "2025-26");
+            Check(TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+                discoveredLink, resolved, [renamedSelected], "2025-26") == renamedSelected,
+                "Consolidated FY was not propagated through the live destination preflight.");
+            var recovered = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                discoveredLink, null, [driftedSelection], "2025-26");
+            Check(recovered.CompanyKey == discoveredLink.CompanyKey,
+                "Blank dropdown selection with Tally FY drift failed to recover verified saved company.");
+        }
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            linkWithoutTallyYear, renamedSelected),
+            "A missing FY without the explicit consolidated parent scope was accepted.");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            linkWithoutTallyYear, renamedSelected, "2020-21"),
+            "A FY preceding Tally books was accepted.");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            linkWithoutTallyYear, new TallyCompanyInfo {
+                CompanyKey = "UNRELATED", Name = renamedSelected.Name,
+                CompanyNumber = renamedSelected.CompanyNumber }, "2025-26"),
+            "The parent FY parameter bypassed the immutable company identity check.");
+
         // Tally can repeat masters in multiple exported Collection snapshots.
         // Repeated identical identities must not trigger an overwrite.
         const string xml = """
@@ -339,6 +387,15 @@ internal static class TallyBranchMasterImportContractTests
         Check(source.Contains("offlineConsolidatedBranchSource: true", StringComparison.Ordinal) &&
               source.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal),
             "Offline-only exception not restricted to private branch source preparation.");
+        Check(source.Contains("ResolveConsolidatedLinkedDestination(link, financialYear)", StringComparison.Ordinal) &&
+              source.Contains("accountingFinancialYear: financialYear", StringComparison.Ordinal),
+            "Every consolidated UI entry point must forward the selected parent FY.");
+        var voucherWriterSource = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
+            "AccountingAutomationHub.Infrastructure", "Tally", "TallyConsolidatedVoucherImportService.cs"));
+        Check(voucherWriterSource.Contains("destination, accountingFinancialYear", StringComparison.Ordinal) &&
+              voucherWriterSource.Contains("destination, open, financialYear", StringComparison.Ordinal),
+            "Voucher writer must preserve Client/FY through preflight and fresh Tally readback.");
+
 
         Console.WriteLine("PASS: canonical offline Tally groups, source Cash template and protected real export.");
         Console.WriteLine("PASS: consolidated import live MASTERID, parent, duplicate and Tally-ack contracts.");

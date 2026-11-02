@@ -2295,9 +2295,11 @@ public sealed class MainWindowViewModel :
     /// open-company selection and Tally transport. Never create a new link or
     /// regenerate CompanyKey from a renamed / different first-book-year company.
     /// </summary>
-    private TallyCompanyInfo ResolveConsolidatedLinkedDestination(TallyClientLink link) =>
+    private TallyCompanyInfo ResolveConsolidatedLinkedDestination(
+        TallyClientLink link, string accountingFinancialYear) =>
         TallyBranchConsolidationImportService.ResolveLinkedDestination(
-            link, _tallyCoordinator.SelectedCompany, _tallyCoordinator.OpenCompanies.ToArray());
+            link, _tallyCoordinator.SelectedCompany, _tallyCoordinator.OpenCompanies.ToArray(),
+            accountingFinancialYear);
 
     /// <summary>
     /// Consolidated master stage only. Always reuse the current Dashboard
@@ -2325,7 +2327,7 @@ public sealed class MainWindowViewModel :
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (link is null || link.ClientId != parentClientId)
             throw new InvalidOperationException("Confirm the parent Client/FY Tally Link first.");
-        var destination = ResolveConsolidatedLinkedDestination(link);
+        var destination = ResolveConsolidatedLinkedDestination(link, financialYear);
 
         var parent = _clientRepository.GetById(parentClientId);
         if (parent is null || parent.IsArchived || parent.FinancialYear != financialYear)
@@ -2351,7 +2353,8 @@ public sealed class MainWindowViewModel :
                 branch.Gstin, parent.FinancialYear);
         }).ToArray();
         return await _consolidatedMasterImporter.ImportMastersAsync(
-            link, destination, identities, separateVoucherTypes, separateCashLedgers);
+            link, destination, identities, separateVoucherTypes, separateCashLedgers,
+            accountingFinancialYear: financialYear);
     }
 
     /// <summary>
@@ -2375,7 +2378,7 @@ public sealed class MainWindowViewModel :
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (link is null || link.ClientId != parentId)
             throw new InvalidOperationException("Confirm the parent Client/FY Tally Link first.");
-        var company = ResolveConsolidatedLinkedDestination(link);
+        var company = ResolveConsolidatedLinkedDestination(link, financialYear);
 
         var parent = _clientRepository.GetById(parentId)
             ?? throw new InvalidOperationException("Parent Client/FY is missing.");
@@ -2447,7 +2450,8 @@ public sealed class MainWindowViewModel :
         }
 
         var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
-            link, company, identities, separateTypes, separateCash);
+            link, company, identities, separateTypes, separateCash,
+            accountingFinancialYear: financialYear);
         var result = TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);
 
         var safeClient = string.Concat(parent.ClientCode.Where(c =>
@@ -2571,9 +2575,10 @@ public sealed class MainWindowViewModel :
         // Re-resolve the same saved parent link immediately before posting.
         // A selection that changed while preparing XML must fail at the destination
         // / original Tally envelope and live readback gates, never redirect vouchers.
-        var company = ResolveConsolidatedLinkedDestination(link);
+        var company = ResolveConsolidatedLinkedDestination(link, financialYear);
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService);
-        return await importer.ImportAsync(link, company, prepared);
+        return await importer.ImportAsync(link, company, prepared,
+            accountingFinancialYear: financialYear);
     }
 
     private void RebuildWorkspaceNavigation(
