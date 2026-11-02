@@ -48,6 +48,22 @@ public sealed class TallyConsolidatedVoucherImportService(TallyHttpService tally
         RequireDestination(masterDoc, destination.Name);
         RequireDestination(voucherDoc, destination.Name);
         var masters = Messages(masterDoc).Select(x => x.Elements().Single()).ToArray();
+        // Fail BEFORE any Tally request for legacy preview XML: its original
+        // generic Ledger parity template may include an unresolved tax
+        // classification named 'Not Applicable'. Tally rejects that object
+        // with Exceptions=1; retrying would skip/duplicate partial masters.
+        var badClassification = masters
+            .Where(x => Is(x, "LEDGER"))
+            .FirstOrDefault(x => x.Elements().Any(field =>
+                Is(field, "TAXCLASSIFICATIONNAME") &&
+                field.Value.Trim().TrimStart('\u0004').Trim()
+                    .Equals("Not Applicable", StringComparison.OrdinalIgnoreCase)));
+        if (badClassification is not null)
+            throw new InvalidOperationException(
+                "Prepared consolidated ledger '" + MasterName(badClassification) +
+                "' still contains the unresolved Tax Classification 'Not Applicable'. " +
+                "Regenerate consolidated XML with the corrected AAH release and verify " +
+                "Tally's existing masters before retrying; no Tally POST was sent.");
         var vouchers = Messages(voucherDoc).Select(x => x.Elements().Single()).ToArray();
         if (vouchers.Length == 0 || vouchers.Length != prepared.FinalVouchers ||
             !vouchers.All(x => Is(x, "VOUCHER")))
