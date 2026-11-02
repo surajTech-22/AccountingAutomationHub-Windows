@@ -58,6 +58,7 @@ internal static class Program
 
     private static void Main()
     {
+        Run("GSTIN latest name reuses newest supplier/customer across existing entries", GstinLatestPartyNameTests.Run);
         Run("missing recovery excludes verified, deleted and rebound identities", () =>
         {
             var service = typeof(TallyAccountingVoucherExportService);
