@@ -416,6 +416,14 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             branches, fresh, true, separateVoucherTypes, separateCashLedgers,
             separateVoucherTypes ? baseTypes : null);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
+        // Generate Consolidated XML is read-only: already existing branch
+        // Groups are not repeated in the master CREATE file. Explicitly
+        // verify EVERY reused compulsory Group against live destination
+        // MASTERID and its correct original accounting parent. Missing
+        // Groups remain in plan.GroupXml for master-first CREATE, never
+        // silently treated as already imported.
+        foreach (var group in plan.Groups.Where(g => !g.Create))
+            RequireMaster(fresh, "Group", group.Name, group.Parent);
         return plan;
     }
 
