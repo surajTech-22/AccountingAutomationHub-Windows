@@ -2401,14 +2401,12 @@ public sealed class MainWindowViewModel :
             // authority or accept the first of multiple stale file paths.
             // The existing offline stage verifies completeness BEFORE atomically
             // replacing the owned AppData snapshot. No Tally POST occurs.
-            var sourcePath = await PrepareMissingBranchXmlAsync(
+            // Pass the working branch exporter's ACTUAL in-memory XML directly
+            // to the consolidated wrapper. Persisting its diagnostic copy must
+            // never become a second, stale source authority.
+            var (xml, statusText) = await PrepareMissingBranchXmlAsync(
                 child, branch.Name, financialYear);
-            var xml = TallyConsolidatedXmlTextSafety.Repair(
-                File.ReadAllText(sourcePath)).Xml;
             var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
-            var statusPath = Path.Combine(Path.GetDirectoryName(sourcePath)!,
-                "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
-            var statusText = File.Exists(statusPath) ? File.ReadAllText(statusPath) : "";
             // The original branch's prepared accounting is owned by its AAH
             // private ClientId/FY, not by a separate Tally company. A source
             // Tally link is OPTIONAL. Only the consolidated destination must
@@ -2477,7 +2475,7 @@ public sealed class MainWindowViewModel :
     /// accounting records, or reuse the consolidated Tally company's identity
     /// as a pretend branch link.
     /// </summary>
-    private async Task<string> PrepareMissingBranchXmlAsync(
+    private async Task<(string Xml, string StatusText)> PrepareMissingBranchXmlAsync(
         ClientProfile branchClient, string branchName, string financialYear)
     {
         if (_privateBranchAccounts.FindByChild(branchClient.Id) is null ||
@@ -2510,11 +2508,11 @@ public sealed class MainWindowViewModel :
                     " unsupported, " + snapshot.ConflictsBlocked +
                     " conflicts). Resolve branch source records first; no partial XML exported.");
 
-            // Validate BEFORE writing so a failed/incomplete builder can never
-            // replace a previously verified source. Preserve Tally ledger names,
-            // dates, amounts, GST and voucher type entries unchanged.
-            TallyConsolidatedXmlTextSafety.ParseDocument(
-                snapshot.Xml, "offline prepared branch " + branchClient.ClientCode);
+            // Verify the REAL output of the existing normal branch exporter:
+            // it must contain exactly the ready vouchers as Tally messages.
+            // This is not a second voucher generator or a GST/DR/CR recalculation.
+            TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
+                snapshot.Xml, snapshot.Ready, branchClient.ClientCode);
             var safeCode = string.Concat(branchClient.ClientCode.Where(c =>
                 !Path.GetInvalidFileNameChars().Contains(c)));
             var folder = Path.Combine(
@@ -2528,19 +2526,18 @@ public sealed class MainWindowViewModel :
             var tempXml = path + ".tmp";
             var tempStatus = status + ".tmp";
             var preparedAt = DateTime.Now;
-            File.WriteAllText(tempXml, snapshot.Xml, System.Text.Encoding.UTF8);
-            File.WriteAllText(tempStatus,
-                "Accounting Automation Hub - Live Tally XML" + Environment.NewLine +
+            var statusText = "Accounting Automation Hub - Live Tally XML" + Environment.NewLine +
                 "Source: saved offline branch accounting; no Tally posting" + Environment.NewLine +
                 "Client: " + branchClient.ClientCode + " | FY " + financialYear + Environment.NewLine +
                 "Tally company: " + sourceCompany.Name + Environment.NewLine +
                 "Generated: " + preparedAt.ToString("yyyy-MM-dd HH:mm:ss",
                     System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
-                "Ready in XML: " + snapshot.Ready + Environment.NewLine,
-                System.Text.Encoding.UTF8);
+                "Ready in XML: " + snapshot.Ready + Environment.NewLine;
+            File.WriteAllText(tempXml, snapshot.Xml, System.Text.Encoding.UTF8);
+            File.WriteAllText(tempStatus, statusText, System.Text.Encoding.UTF8);
             File.Move(tempXml, path, overwrite: true);
             File.Move(tempStatus, status, overwrite: true);
-            return path;
+            return (snapshot.Xml, statusText);
         }).ConfigureAwait(false);
     }
 

@@ -78,6 +78,40 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
 
+        // Existing AAH accounting export uses empty VOUCHERNUMBER when the
+        // original Tally type assigns numbering automatically. Its REFERENCE,
+        // including GST-owned journal references, is the stable source key.
+        var autoNumbered = XDocument.Parse(a.Xml);
+        autoNumbered.Descendants("VOUCHERNUMBER").Single().Value = "";
+        var autoPrepared = a with { Xml = autoNumbered.ToString() };
+        var autoA = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [autoPrepared, b]);
+        var autoB = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [autoPrepared, b]);
+        var autoVoucher = XDocument.Parse(autoA.VouchersXml).Descendants("VOUCHER")
+            .Single(x => (string?)x.Element("REFERENCE") == "KA-INV-1");
+        var automaticNumber = (string?)autoVoucher.Element("VOUCHERNUMBER") ?? "";
+        Check(automaticNumber.StartsWith("AAH-", StringComparison.Ordinal) &&
+              automaticNumber.Length == 28 &&
+              automaticNumber == (string?)XDocument.Parse(autoB.VouchersXml)
+                  .Descendants("VOUCHER")
+                  .Single(x => (string?)x.Element("REFERENCE") == "KA-INV-1")
+                  .Element("VOUCHERNUMBER") &&
+              autoVoucher.Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(new[] { "-100.25", "100.25" }.Order()) &&
+              (string?)autoVoucher.Element("REFERENCE") == "KA-INV-1",
+            "Auto-numbered original branch voucher must retain reference and original DR/CR amounts with a deterministic target number.");
+        var noIdentity = XDocument.Parse(autoPrepared.Xml);
+        noIdentity.Descendants("REFERENCE").Single().Value = "";
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(
+            Plan(), [a with { Xml = noIdentity.ToString() }, b]),
+            "Original voucher with neither number nor reference must remain fail-closed.");
+        var repeated = XDocument.Parse(autoPrepared.Xml);
+        var originalMessage = repeated.Descendants("TALLYMESSAGE")
+            .Single(x => x.Element("VOUCHER") is not null);
+        originalMessage.AddAfterSelf(new XElement(originalMessage));
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(
+            Plan(), [a with { Xml = repeated.ToString() }, b]),
+            "Two blank-number vouchers with identical branch/date/type/reference must not silently coalesce.");
+
         // Branch vouchers may refer to already-live Tally ledgers whose CREATE
         // declaration is absent from the normal prepared XML. The original
         // branch's full Tally master data is used without recreating GST data.

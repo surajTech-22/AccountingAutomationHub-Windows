@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using AccountingAutomationHub.Domain.Masters;
@@ -200,23 +201,30 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     throw new InvalidOperationException(
                         "Branch voucher has a foreign or ambiguous Tally identity; final XML blocked.");
                 var originalNumber = Value(v, "VOUCHERNUMBER");
+                var refValue = Value(v, "REFERENCE");
                 var date = Value(v, "DATE");
                 var type = Value(v, "VOUCHERTYPENAME");
-                if (originalNumber.Length == 0 || type.Length == 0 ||
+                // The ORIGINAL AAH exporter deliberately leaves VOUCHERNUMBER
+                // blank for Tally auto-numbered purchases, sales and GST journals.
+                // A source REFERENCE is the durable document identity in that
+                // existing flow. Never reject those already-prepared DR/CR lines
+                // solely for having no Tally-owned voucher number.
+                if (type.Length == 0 ||
+                    (originalNumber.Length == 0 && refValue.Length == 0) ||
                     !DateTime.TryParseExact(date, "yyyyMMdd", CultureInfo.InvariantCulture,
                         DateTimeStyles.None, out var voucherDate))
-                    throw new InvalidOperationException("Prepared voucher lacks a stable number, valid date or type.");
+                    throw new InvalidOperationException("Prepared voucher lacks a stable source number/reference, valid date or type.");
                 if (plan.FinancialYear.Length < 4 ||
                     !int.TryParse(plan.FinancialYear[..4], NumberStyles.None,
                         CultureInfo.InvariantCulture, out var startYear) ||
                     voucherDate < new DateTime(startYear, 4, 1) ||
                     voucherDate >= new DateTime(startYear + 1, 4, 1))
                     throw new InvalidOperationException("Prepared branch voucher is outside the consolidated financial year.");
-                var anchor = branch.Branch.BranchId + "|" + date + "|" + type + "|" + originalNumber;
+                var anchor = branch.Branch.BranchId + "|" + date + "|" + type + "|" +
+                    (originalNumber.Length > 0 ? "NO:" + originalNumber : "REF:" + refValue);
                 if (!seenVoucherAnchors.Add(anchor))
-                    throw new InvalidOperationException("Duplicate voucher within one branch's prepared XML: " + anchor);
+                    throw new InvalidOperationException("Duplicate source voucher identity within one branch's prepared XML: " + anchor);
                 sourceVoucherCount++;
-                var refValue = Value(v, "REFERENCE");
                 if (refValue.StartsWith(InterbankReferencePrefix, StringComparison.OrdinalIgnoreCase))
                 {
                     var transferId = refValue[InterbankReferencePrefix.Length..].Trim();
@@ -228,7 +236,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     continue;
                 }
 
-                RewriteVoucher(v, branch.Branch, plan, LedgerName, branch.Masters);
+                RewriteVoucher(v, branch.Branch, plan, LedgerName, anchor);
                 vouchers.Add((branch, v));
             }
 
@@ -400,7 +408,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
 
     private static void RewriteVoucher(
         XElement voucher, TallyBranchMasterIdentity branch,
-        TallyBranchMasterPlan plan, Func<string, string> ledger, IReadOnlyCollection<MasterRecord> authority)
+        TallyBranchMasterPlan plan, Func<string, string> ledger, string sourceAnchor)
     {
         foreach (var item in voucher.Descendants().Where(x =>
             Is(x, "LEDGERNAME") || Is(x, "PARTYLEDGERNAME") || Is(x, "PARTYNAME") ||
@@ -413,7 +421,16 @@ public static class TallyConsolidatedPreparedXmlBuilder
             if (!string.IsNullOrWhiteSpace(item.Value))
                 item.Value = item.Value.Trim() + " - " + branch.DisplayName.Trim();
         var original = Value(voucher, "VOUCHERNUMBER");
-        Set(voucher, "VOUCHERNUMBER", branch.BranchId + "-" + original);
+        // The source REFERENCE remains unchanged. Only the target-side
+        // voucher number is generated, deterministically from durable
+        // branch/date/type/reference identity, when original AAH left it
+        // blank for Tally's own automatic numbering. The 96-bit identity
+        // digest avoids leaking invoice numbers into target numbering.
+        var targetNumber = original.Length > 0
+            ? branch.BranchId + "-" + original
+            : "AAH-" + Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(sourceAnchor)))[..24];
+        Set(voucher, "VOUCHERNUMBER", targetNumber);
         var baseType = Value(voucher, "VOUCHERTYPENAME");
         if (plan.VoucherTypes.Count > 0)
         {

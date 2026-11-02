@@ -42,6 +42,36 @@ public static class TallyConsolidatedBranchSourcePolicy
         return saved;
     }
 
+    /// <summary>
+    /// Validate the original accounting exporter's actual voucher collection
+    /// before consolidated staging. This checks the existing Tally serializer,
+    /// not a second builder, and never changes DR/CR, GST or source identities.
+    /// </summary>
+    public static void RequirePreparedVoucherCount(string xml, int ready, string branchClientCode)
+    {
+        if (ready <= 0)
+            throw new InvalidOperationException("Branch '" + branchClientCode +
+                "' has no ready vouchers in the original accounting exporter.");
+        var document = TallyConsolidatedXmlTextSafety.ParseDocument(
+            xml, "original exporter output for branch " + branchClientCode);
+        var requestData = document.Descendants().Where(x =>
+            x.Name.LocalName.Equals("REQUESTDATA", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (document.Root is null ||
+            !document.Root.Name.LocalName.Equals("ENVELOPE", StringComparison.OrdinalIgnoreCase) ||
+            requestData.Length != 1)
+            throw new InvalidOperationException("Branch '" + branchClientCode +
+                "' has no verified original Tally All Masters envelope.");
+        var messages = requestData[0].Elements().Where(x =>
+            x.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var vouchers = messages.SelectMany(message => message.Elements()).Where(x =>
+            x.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (vouchers.Length != ready)
+            throw new InvalidOperationException("Branch '" + branchClientCode +
+                "' original accounting exporter reported " + ready +
+                " ready voucher(s), but its XML contains " + vouchers.Length +
+                " voucher(s). Empty/stale source XML must not be consolidated.");
+    }
+
     public static string Validate(
         string preparedXml, string? statusText, string branchClientCode,
         string financialYear, TallyCompanyInfo destination,
@@ -71,8 +101,15 @@ public static class TallyConsolidatedBranchSourcePolicy
             preparedXml, "saved source branch " + branchClientCode);
         if (document.Root is null || !document.Root.Name.LocalName.Equals("ENVELOPE", StringComparison.OrdinalIgnoreCase) ||
             !document.Descendants().Any(x =>
-                x.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Saved branch XML is not a complete original Tally import envelope.");
+                x.Name.LocalName.Equals("REQUESTDATA", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Branch '" + branchClientCode +
+                "' does not contain the original Tally All Masters import envelope.");
+        if (!document.Descendants().Where(x =>
+                x.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase))
+                .Any(x => x.Elements().Any(y =>
+                    y.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidOperationException("Branch '" + branchClientCode +
+                "' contains no prepared voucher messages. Never consolidate an empty/stale XML snapshot.");
 
         var xmlCompany = document.Descendants().FirstOrDefault(x =>
             x.Name.LocalName.Equals("SVCURRENTCOMPANY", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";

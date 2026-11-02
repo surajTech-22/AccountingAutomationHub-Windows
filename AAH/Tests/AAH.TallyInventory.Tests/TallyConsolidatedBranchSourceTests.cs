@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text;
 using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Tally;
 
@@ -168,16 +170,53 @@ internal static class TallyConsolidatedBranchSourceTests
             SourceStatus, "CL-KA", "2025-26", Destination, null),
             "An empty linked Live XML must never be treated as prepared branch accounting.");
 
+        // Exercise the actual Tally Excel-parity XML writer used by normal
+        // GenerateLiveXml, rather than a hand-written import envelope fixture.
+        // Normal AAH intentionally leaves Journal VOUCHERNUMBER empty and
+        // preserves its stable AAH-owned REFERENCE for Tally auto-numbering.
+        var writer = typeof(TallyAccountingVoucherExportService).Assembly.GetType(
+            "AccountingAutomationHub.Infrastructure.Tally.TallyExcelParityXmlWriter", throwOnError: true)!;
+        var flags = BindingFlags.Static | BindingFlags.NonPublic;
+        var xmlBuilder = new StringBuilder();
+        writer.GetMethod("BeginAllMastersImport", flags)!.Invoke(null, [xmlBuilder, "AAH Prepared Branch CL-KA"]);
+        writer.GetMethod("BeginVoucher", flags)!.Invoke(null, [
+            xmlBuilder, "Journal", "Accounting Voucher View", new DateTime(2025, 5, 1),
+            null, "", "AAH|GSTJ|101|2025-26|2025-05", ""
+        ]);
+        writer.GetMethod("EndVoucher", flags)!.Invoke(null, [xmlBuilder]);
+        writer.GetMethod("EndAllMastersImport", flags)!.Invoke(null, [xmlBuilder]);
+        var originalWriterXml = xmlBuilder.ToString();
+        TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
+            originalWriterXml, 1, "CL-KA");
+        Check(TallyConsolidatedBranchSourcePolicy.Validate(
+            originalWriterXml, SourceStatus, "CL-KA", "2025-26", Destination, null) ==
+            "AAH Prepared Branch CL-KA",
+            "Existing branch XML writer generated a valid source that the consolidated validator rejected.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
+            originalWriterXml, 2, "CL-KA"),
+            "Consolidation accepted a different number of voucher messages from the original writer.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(
+            originalWriterXml.Replace("<VOUCHER", "<NOTAVOUCHER")
+                .Replace("</VOUCHER>", "</NOTAVOUCHER>"), 1, "CL-KA"),
+            "Consolidation accepted a stale source with no valid voucher messages.");
+        Reject(() => TallyConsolidatedBranchSourcePolicy.Validate(
+            originalWriterXml.Replace("<VOUCHER", "<NOTAVOUCHER")
+                .Replace("</VOUCHER>", "</NOTAVOUCHER>"), SourceStatus,
+            "CL-KA", "2025-26", Destination, null),
+            "Source validator accepted an XML envelope with no original vouchers.");
+
         var mainWindow = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
             "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
-        Check(mainWindow.Contains("var sourcePath = await PrepareMissingBranchXmlAsync(", StringComparison.Ordinal) &&
+        Check(mainWindow.Contains("var (xml, statusText) = await PrepareMissingBranchXmlAsync(", StringComparison.Ordinal) &&
             mainWindow.Contains("child, branch.Name, financialYear);", StringComparison.Ordinal) &&
             !mainWindow.Contains("if (existing.Length == 0)", StringComparison.Ordinal) &&
             !mainWindow.Contains("var candidates = new List<string>();", StringComparison.Ordinal) &&
             mainWindow.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
+            mainWindow.Contains("TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(", StringComparison.Ordinal) &&
+            mainWindow.Contains("return (snapshot.Xml, statusText);", StringComparison.Ordinal) &&
             mainWindow.Contains("snapshot.Unsupported != 0 || snapshot.MissingLedgers != 0", StringComparison.Ordinal) &&
             mainWindow.Contains("Source: saved offline branch accounting; no Tally posting", StringComparison.Ordinal),
-            "Consolidation must always regenerate source-owned branch XML rather than picking stale, empty or ambiguous linked source snapshots.");
+            "Consolidation must pass the existing branch writer's actual in-memory XML, not reload a stale copy.");
         Check(mainWindow.Contains("DispatcherPriority.ContextIdle, new Action(() =>", StringComparison.Ordinal) &&
             !mainWindow.Contains("Task.Delay(90)", StringComparison.Ordinal) &&
             mainWindow.Contains("currentClient.Id, currentClient.FinancialYear, module);", StringComparison.Ordinal),
