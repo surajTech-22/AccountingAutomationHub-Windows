@@ -47,6 +47,10 @@ internal static class TallyBranchMasterImportContractTests
             new TallyClientLink { ClientId = link.ClientId, CompanyKey = link.CompanyKey, CompanyName = link.CompanyName },
             destination), "blank authoritative Client/FY accepted");
 
+        Check(TallyCompanyInfo.ParseTallyDate("01-04-2021") == new DateTime(2021, 4, 1) &&
+              TallyCompanyInfo.NormalizeFinancialYear("", "01-04-2021") == "2021-22",
+            "Indian DD-MM-YYYY book date was parsed as US MM-DD-YYYY.");
+
         // Tally's discovery FinancialYear is inferred from the date books began.
         // It is NOT proof that a company cannot contain a later linked Client/FY.
         var originalBooksLink = new TallyClientLink
