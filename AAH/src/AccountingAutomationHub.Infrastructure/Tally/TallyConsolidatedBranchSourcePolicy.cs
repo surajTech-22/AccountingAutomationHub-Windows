@@ -30,7 +30,13 @@ public static class TallyConsolidatedBranchSourcePolicy
             string.IsNullOrWhiteSpace(saved.CompanyName) ||
             !saved.FinancialYear.Trim().Equals(financialYear.Trim(), StringComparison.OrdinalIgnoreCase) ||
             saved.CompanyKey.Trim().Equals(destination.CompanyKey.Trim(), StringComparison.OrdinalIgnoreCase) ||
-            !saved.CompanyName.Trim().Equals(preparedXmlCompany.Trim(), StringComparison.OrdinalIgnoreCase))
+            // A fresh offline AAH branch snapshot deliberately carries a
+            // synthetic SVCURRENTCOMPANY, not the branch's optional Tally link
+            // name. Preserve a separately verified live source master link
+            // when it has the same branch ClientId/FY and is not the writable
+            // consolidated destination.
+            (!preparedXmlCompany.StartsWith("AAH Prepared Branch ", StringComparison.OrdinalIgnoreCase) &&
+             !saved.CompanyName.Trim().Equals(preparedXmlCompany.Trim(), StringComparison.OrdinalIgnoreCase)))
             return null;
 
         return saved;
@@ -72,6 +78,10 @@ public static class TallyConsolidatedBranchSourcePolicy
             x.Name.LocalName.Equals("SVCURRENTCOMPANY", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
         if (xmlCompany.Length == 0)
             throw new InvalidOperationException("Saved branch XML has no declared Tally import destination.");
+        if (xmlCompany.StartsWith("AAH Prepared Branch ", StringComparison.OrdinalIgnoreCase) &&
+            !xmlCompany.Equals("AAH Prepared Branch " + branchClientCode, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Offline prepared branch XML belongs to a different ClientId/FY: " + branchClientCode);
 
         if (optionalSourceLink is not null)
         {
