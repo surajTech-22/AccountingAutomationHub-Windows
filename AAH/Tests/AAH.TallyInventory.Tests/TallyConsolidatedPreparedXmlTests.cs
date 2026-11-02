@@ -55,9 +55,11 @@ internal static class TallyConsolidatedPreparedXmlTests
         var a = Prepared(Karnataka,
             Xml("Sales", "1", "KA-INV-1", "Buyer", "Local Sales", "-100.25", "100.25", "Sundry Debtors", "Sales Accounts"),
             Ledger("Buyer", "Sundry Debtors"), Ledger("Local Sales", "Sales Accounts"));
+        // Tally has one global Ledger namespace even under different Groups.
+        // The normal happy path uses two different legitimate source names.
         var b = Prepared(TamilNadu,
-            Xml("Sales", "1", "TN-INV-1", "Buyer", "Local Sales", "-200.10", "200.10", "Sundry Debtors", "Sales Accounts"),
-            Ledger("Buyer", "Sundry Debtors"), Ledger("Local Sales", "Sales Accounts"));
+            Xml("Sales", "1", "TN-INV-1", "Tamil Buyer", "Tamil Sales", "-200.10", "200.10", "Sundry Debtors", "Sales Accounts"),
+            Ledger("Tamil Buyer", "Sundry Debtors"), Ledger("Tamil Sales", "Sales Accounts"));
 
         var result = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, b]);
         Check(result.BranchCount == 2 && result.SourceVouchers == 2 && result.FinalVouchers == 2,
@@ -69,14 +71,61 @@ internal static class TallyConsolidatedPreparedXmlTests
         Check(finalDoc.Descendants("VOUCHERNUMBER").Select(x => x.Value).ToArray()
             .SequenceEqual(new[] { "KA-1", "TN-1" }), "Branch voucher identity collided.");
         Check(finalDoc.Descendants("LEDGERNAME").Select(x => x.Value).ToHashSet()
-            .SetEquals(new[] { "Buyer - Karnataka", "Local Sales - Karnataka",
-                "Buyer - Tamil Nadu", "Local Sales - Tamil Nadu" }), "Branch ledger identity was lost.");
+            .SetEquals(new[] { "Buyer", "Local Sales",
+                "Tamil Buyer", "Tamil Sales" }), "Branch ledger identity was lost.");
         var masterDoc = XDocument.Parse(result.MastersXml);
         Check(masterDoc.Descendants("LEDGER").Count() == 4 &&
               masterDoc.Descendants("LEDGER").Any(x =>
-                  (string?)x.Element("NAME") == "Buyer - Karnataka" &&
+                  (string?)x.Element("NAME") == "Buyer" &&
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
+
+        Check(masterDoc.Descendants("GROUP").Any(x =>
+                (string?)x.Element("NAME") == "Karnataka Debtors") &&
+              masterDoc.Descendants("GROUP").Any(x =>
+                (string?)x.Element("NAME") == "Tamil Nadu Debtors"),
+            "Mandatory branch-named groups disappeared when Ledger names became state-free.");
+
+        // Never silently merge two separate original Ledger accounts into a
+        // single Tally Ledger, which can only belong to one parent Group.
+        try
+        {
+            TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+                a, b with { Xml = a.Xml.Replace("KA-INV-1", "TN-INV-1") }
+            ]);
+            throw new Exception("Identical source Ledger names were silently merged across branch groups.");
+        }
+        catch (InvalidOperationException exception)
+        {
+            Check(exception.Message.Contains("globally unique Ledger names", StringComparison.Ordinal) &&
+                  exception.Message.Contains("Buyer", StringComparison.Ordinal) &&
+                  exception.Message.Contains("Local Sales", StringComparison.Ordinal),
+                "Cross-branch source Ledger name conflicts were not reported together.");
+        }
+
+        // Formatting, not tax calculation: GST numeric state codes become
+        // official names; party master State follows its own registration
+        // prefix, while voucher place of supply remains source-owned.
+        var stateData = XDocument.Parse(a.Xml);
+        var stateVoucher = stateData.Descendants("VOUCHER").Single();
+        stateVoucher.Add(new XElement("PLACEOFSUPPLY", "24"), new XElement("STATENAME", "29"));
+        var party = stateData.Descendants("LEDGER").Single(x => (string?)x.Element("NAME") == "Buyer");
+        party.Add(new XElement("PARTYGSTIN", "24ABCDE1234F1Z5"),
+                  new XElement("STATENAME", "29"), new XElement("PRIORSTATENAME", "29"));
+        var stateResult = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
+            a with { Xml = stateData.ToString() }, b ]);
+        var normalizedParty = XDocument.Parse(stateResult.MastersXml).Descendants("LEDGER")
+            .Single(x => (string?)x.Element("NAME") == "Buyer");
+        var normalizedVoucher = XDocument.Parse(stateResult.VouchersXml).Descendants("VOUCHER")
+            .Single(x => (string?)x.Element("REFERENCE") == "KA-INV-1");
+        Check((string?)normalizedParty.Element("STATENAME") == "Gujarat" &&
+              (string?)normalizedParty.Element("PRIORSTATENAME") == "Gujarat" &&
+              (string?)normalizedParty.Element("PARTYGSTIN") == "24ABCDE1234F1Z5" &&
+              (string?)normalizedVoucher.Element("PLACEOFSUPPLY") == "Gujarat" &&
+              (string?)normalizedVoucher.Element("STATENAME") == "Karnataka" &&
+              normalizedVoucher.Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(new[] { "-100.25", "100.25" }.Order()),
+            "GST state normalization altered source registration, voucher PoS or DR/CR.");
 
         // Existing AAH accounting export uses empty VOUCHERNUMBER when the
         // original Tally type assigns numbering automatically. Its REFERENCE,
@@ -123,7 +172,7 @@ internal static class TallyConsolidatedPreparedXmlTests
         var preparedMasterAuthority = TallyConsolidatedPreparedXmlBuilder.Build(
             Plan(), [onlySalesMaster, b]);
         Check(XDocument.Parse(preparedMasterAuthority.MastersXml).Descendants("LEDGER")
-            .Any(x => (string?)x.Element("NAME") == "Buyer - Karnataka"),
+            .Any(x => (string?)x.Element("NAME") == "Buyer"),
             "Original prepared branch Ledger CREATE was ignored when the Master cache was absent.");
 
         // Never let a voucher name alone authorize an invented party/GST Ledger.
@@ -190,11 +239,11 @@ internal static class TallyConsolidatedPreparedXmlTests
         var liveOnlyAuthority = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [
             originalWithoutBuyerMaster with { SourceLiveMastersXml = fullBuyer }, b ]);
         Check(XDocument.Parse(liveOnlyAuthority.MastersXml).Descendants("LEDGER")
-            .Any(x => (string?)x.Element("NAME") == "Buyer - Karnataka" &&
+            .Any(x => (string?)x.Element("NAME") == "Buyer" &&
                       (string?)x.Element("PARENT") == "Karnataka Debtors"),
             "Original separately linked Tally's full Master export was not accepted as ledger authority.");
         var detailed = XDocument.Parse(liveMasterCase.MastersXml).Descendants("LEDGER").Single(x =>
-            (string?)x.Element("NAME") == "Buyer - Karnataka");
+            (string?)x.Element("NAME") == "Buyer");
         Check(detailed.Element("MASTERID") is null &&
               (string?)detailed.Element("PARENT") == "Karnataka Debtors" &&
               detailed.Descendants("GSTIN").Any(x => x.Value == "29ABCDE1234F1Z5"),
@@ -334,7 +383,7 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("NAME") == "Karnataka Regional Sales" &&
                   (string?)x.Element("PARENT") == "Karnataka Sales") &&
               customDoc.Descendants("LEDGER").Any(x =>
-                  (string?)x.Element("NAME") == "Local Sales - Karnataka" &&
+                  (string?)x.Element("NAME") == "Local Sales" &&
                   (string?)x.Element("PARENT") == "Karnataka Regional Sales"),
               "Custom source ledger classification lost its branch hierarchy.");
 
@@ -348,9 +397,9 @@ internal static class TallyConsolidatedPreparedXmlTests
         var cashResult = TallyConsolidatedPreparedXmlBuilder.Build(withCash, [cashSource, b]);
         var cashMaster = XDocument.Parse(cashResult.MastersXml);
         Check(cashMaster.Descendants("LEDGER").Count(x =>
-                (string?)x.Element("NAME") == "Cash - Karnataka") == 1 &&
+                (string?)x.Element("NAME") == "Cash (KA)") == 1 &&
               XDocument.Parse(cashResult.VouchersXml).Descendants("LEDGERNAME")
-                  .Any(x => x.Value == "Cash - Karnataka"),
+                  .Any(x => x.Value == "Cash (KA)"),
               "Optional branch Cash was duplicated instead of reusing planned master.");
 
         var outgoing = Prepared(Karnataka,
@@ -358,9 +407,9 @@ internal static class TallyConsolidatedPreparedXmlTests
                 "Bank Accounts", "Current Liabilities"),
             Ledger("Bank", "Bank Accounts"), Ledger("Clearing", "Current Liabilities"));
         var incoming = Prepared(TamilNadu,
-            Xml("Receipt", "22", "AAH-INTERBANK:TRANSFER-10", "Bank", "Clearing", "500.00", "-500.00",
+            Xml("Receipt", "22", "AAH-INTERBANK:TRANSFER-10", "Bank TN", "Clearing TN", "500.00", "-500.00",
                 "Bank Accounts", "Current Liabilities"),
-            Ledger("Bank", "Bank Accounts"), Ledger("Clearing", "Current Liabilities"));
+            Ledger("Bank TN", "Bank Accounts"), Ledger("Clearing TN", "Current Liabilities"));
         var transfer = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [outgoing, incoming]);
         Check(transfer.InterbankReconciled == 1 && transfer.SourceVouchers == 2 && transfer.FinalVouchers == 1,
             "Explicit interbank pair did not reconcile to one common Contra.");
