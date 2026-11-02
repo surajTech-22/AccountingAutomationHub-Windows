@@ -2701,6 +2701,7 @@ public sealed class MainWindowViewModel :
             ["Prepared-Vouchers.xml"] = prepared.VouchersXml
         };
         var exchangeNumber = 0;
+        var verifiedVoucherCount = 0;
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
             (stage, requestXml, responseXml) =>
             {
@@ -2711,7 +2712,8 @@ public sealed class MainWindowViewModel :
                 evidence[prefix + "-Request.xml"] = requestXml;
                 evidence[prefix + (responseXml.StartsWith("Transport exception:", StringComparison.Ordinal)
                     ? "-Error.txt" : "-Response.xml")] = responseXml;
-            });
+            },
+            () => verifiedVoucherCount++);
         try
         {
             var result = await importer.ImportAsync(link, company, prepared,
@@ -2727,7 +2729,7 @@ public sealed class MainWindowViewModel :
             // its exact in-flight request/response is preserved for inspection.
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import STOPPED: " + exception,
-                prepared.FinalVouchers, 0, evidence);
+                prepared.FinalVouchers, verifiedVoucherCount, evidence);
             throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
         }
     }
