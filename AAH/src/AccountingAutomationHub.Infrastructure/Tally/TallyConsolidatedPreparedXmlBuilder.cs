@@ -49,10 +49,6 @@ public static class TallyConsolidatedPreparedXmlBuilder
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
-            var ledgerAuthority = branch.Masters
-                .Where(m => m.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Name))
-                .GroupBy(m => m.Name.Trim(), StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
             // Branch-prepared XML deliberately omits Ledgers already live in
             // that branch's Tally company. Fill those master definitions only
             // from the original branch's freshly exported Tally masters, never
@@ -67,6 +63,49 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 .GroupBy(x => Field(x, "NAME").Length > 0 ? Field(x, "NAME") : Value(x, "NAME"),
                     StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+            // The normal branch exporter already verified any Ledger CREATE it
+            // included in its own ClientId/FY XML. A private branch can also
+            // have a separately linked Tally company whose fresh full Master
+            // export contains exact Ledger authority. The old wrapper checked
+            // ONLY SqliteMasterRepository rows, losing either valid source.
+            // Never authorize a ledger solely because a voucher mentions its
+            // name or GSTIN: require one exact Ledger master definition.
+            var ledgerAuthority = branch.Masters
+                .Where(m => m.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                            !m.IsArchived && !string.IsNullOrWhiteSpace(m.Name))
+                .GroupBy(m => m.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+            foreach (var (ledgerName, declarations) in originalLedgerXml)
+            {
+                if (ledgerName.Length == 0 || ledgerAuthority.ContainsKey(ledgerName))
+                    continue;
+                var preparedCreates = declarations.Where(x =>
+                    x.Parent is not null && Is(x.Parent, "TALLYMESSAGE") &&
+                    Field(x, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase) &&
+                    !x.DescendantsAndSelf().Any(y => Is(y, "MASTERID") || Is(y, "GUID") || Is(y, "ALTERID"))).ToArray();
+                var candidates = preparedCreates.Length > 0 ? preparedCreates
+                    : declarations.Where(x => liveSource is not null &&
+                        x.Ancestors().Contains(liveSource.Root) &&
+                        Value(x, "MASTERID").Length > 0).ToArray();
+                // Conflicting or incomplete declarations cannot become a
+                // second guessed party/tax/bank master.
+                if (candidates.Length != 1) continue;
+                var declared = candidates[0];
+                var parentName = Value(declared, "PARENT");
+                var intrinsicName = Value(declared, "NAME");
+                if (parentName.Length == 0 ||
+                    (intrinsicName.Length > 0 &&
+                     !intrinsicName.Equals(ledgerName, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                ledgerAuthority[ledgerName] = [new MasterRecord
+                {
+                    Name = ledgerName,
+                    Parent = parentName,
+                    Type = "Ledger",
+                    Source = preparedCreates.Length > 0 ? "Original branch prepared CREATE" : "Live Tally",
+                    TallyMasterId = preparedCreates.Length > 0 ? "" : Value(declared, "MASTERID")
+                }];
+            }
             // Inventory masters and units are reused, never regenerated from an
             // assumed VAT/GST rate. Shared units/groups are accepted only when
             // their source definitions are identical between branches.
@@ -168,6 +207,28 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 // Never merge taxes, parties, bank accounts or other ledgers by name.
                 return sourceName.Trim() + " - " + branch.Branch.DisplayName.Trim();
             }
+
+            // Report every unresolved posting ledger before rewriting ANY source
+            // voucher. This is a preparation/read-only gate; it never creates
+            // a party ledger from the GSTIN or silently drops a posting.
+            var unresolvedLedgers = source.Descendants().Where(x => Is(x, "VOUCHER") &&
+                    x.Parent is not null && Is(x.Parent, "TALLYMESSAGE"))
+                .SelectMany(v => v.Descendants().Where(x =>
+                    Is(x, "LEDGERNAME") || Is(x, "PARTYLEDGERNAME") ||
+                    Is(x, "PARTYNAME") || Is(x, "BASICBASEPARTYNAME")))
+                .Select(x => x.Value.Trim()).Where(x => x.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(name => !ledgerAuthority.TryGetValue(name, out var entries) || entries.Length != 1)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (unresolvedLedgers.Length > 0)
+                throw new InvalidOperationException(
+                    "Branch '" + branch.Branch.DisplayName + "' has " + unresolvedLedgers.Length +
+                    " unverified posting Ledger(s): " + string.Join(" | ", unresolvedLedgers.Take(16)) +
+                    (unresolvedLedgers.Length > 16 ? " | …" : "") +
+                    ". These are used by original branch vouchers, but no unique active branch Ledger Master, " +
+                    "original prepared Ledger CREATE, or full verified source-Tally Ledger exists. " +
+                    "Resolve the exact ledgers in the branch Ledger Master and regenerate its prepared XML. " +
+                    "No vouchers were removed, recalculated, or posted.");
 
             foreach (var raw in source.Descendants().Where(x => Is(x, "VOUCHER") &&
                        x.Parent is not null && Is(x.Parent, "TALLYMESSAGE")))
