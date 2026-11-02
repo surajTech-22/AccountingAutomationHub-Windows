@@ -20,9 +20,9 @@ internal static class TallyConsolidatedPreparedXmlTests
         <BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC>
         <REQUESTDATA>
           <TALLYMESSAGE><LEDGER NAME="{debitName}" ACTION="Create">
-            <NAME>{debitName}</NAME><PARENT>{debitParent}</PARENT></LEDGER></TALLYMESSAGE>
+            <NAME>{debitName}</NAME><PARENT>{System.Security.SecurityElement.Escape(debitParent)}</PARENT></LEDGER></TALLYMESSAGE>
           <TALLYMESSAGE><LEDGER NAME="{creditName}" ACTION="Create">
-            <NAME>{creditName}</NAME><PARENT>{creditParent}</PARENT></LEDGER></TALLYMESSAGE>
+            <NAME>{creditName}</NAME><PARENT>{System.Security.SecurityElement.Escape(creditParent)}</PARENT></LEDGER></TALLYMESSAGE>
           <TALLYMESSAGE><VOUCHER ACTION="{(altered ? "Alter" : "Create")}" VCHTYPE="{type}">
             <DATE>20250505</DATE><VOUCHERNUMBER>{number}</VOUCHERNUMBER>
             <VOUCHERTYPENAME>{type}</VOUCHERTYPENAME><REFERENCE>{reference}</REFERENCE>
