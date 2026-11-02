@@ -500,8 +500,57 @@ public sealed class SqliteSalesRecordRepository :
         command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
         using var reader = command.ExecuteReader();
         var records = new List<SalesImportRecord>();
-        while (reader.Read()) records.Add(ReadRecord(reader));
+        var originalJson = new Dictionary<long, string>();
+        while (reader.Read())
+        {
+            var record = ReadRecord(reader);
+            records.Add(record);
+            originalJson[record.PersistentId] = ReadString(reader, "RecordJson");
+        }
+        reader.Close();
+        // Match ONE registered customer across sales / credit notes, even if
+        // old GSTR-1 files spell the name differently. Explicit manually saved
+        // B2B GSTIN names retain priority over automated source names.
+        var overrides = GetB2BCustomerNameOverrides(clientId, financialYear);
+        var changed = GstinLatestPartyNameConsistency.NormalizeSales(records, overrides);
+        PersistLatestCustomerNames(connection, clientId, financialYear, changed, originalJson);
         return records;
+    }
+
+    private static void PersistLatestCustomerNames(
+        SqliteConnection connection, long clientId, string financialYear,
+        IReadOnlyList<SalesImportRecord> changed, IReadOnlyDictionary<long, string> originalJson)
+    {
+        if (changed.Count == 0) return;
+        using var transaction = connection.BeginTransaction();
+        foreach (var row in changed)
+        {
+            if (row.PersistentId <= 0) continue;
+            JsonObject? json;
+            try { json = JsonNode.Parse(originalJson.GetValueOrDefault(row.PersistentId, "")) as JsonObject; }
+            catch { json = null; }
+            json ??= JsonSerializer.SerializeToNode(row) as JsonObject ?? new JsonObject();
+            json["CustomerName"] = row.CustomerName;
+            json["CustomerNameSource"] = row.CustomerNameSource;
+            using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE SalesRecords SET CustomerName=$Name, CustomerNameSource=$Source,
+                    RecordJson=$Json, UpdatedUtc=$Utc
+                WHERE Id=$Id AND ClientId=$ClientId AND FinancialYear=$FY
+                  AND UPPER(TRIM(CustomerGstin))=$Gstin;
+                """;
+            update.Parameters.AddWithValue("$Name", row.CustomerName);
+            update.Parameters.AddWithValue("$Source", row.CustomerNameSource);
+            update.Parameters.AddWithValue("$Json", json.ToJsonString());
+            update.Parameters.AddWithValue("$Utc", DateTime.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$Id", row.PersistentId);
+            update.Parameters.AddWithValue("$ClientId", clientId);
+            update.Parameters.AddWithValue("$FY", financialYear.Trim());
+            update.Parameters.AddWithValue("$Gstin", row.CustomerGstin.Trim().ToUpperInvariant());
+            update.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     // R9 FIXED16: repair already-imported Tally Voucher XML rows so the Sales grid
