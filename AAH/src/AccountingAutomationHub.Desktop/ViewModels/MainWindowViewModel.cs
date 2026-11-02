@@ -2393,6 +2393,7 @@ public sealed class MainWindowViewModel :
 
         var identities = new List<TallyBranchMasterIdentity>();
         var branchSources = new List<TallyPreparedBranchXml>();
+        var branchSourceFingerprints = new List<(ClientProfile Client, string BranchName, string Fingerprint)>();
         var skippedOptionalSourceLinks = 0;
         // This is the same Tally HTTP service as the Dashboard, not another
         // connection. Read original master XML only for linked OPEN branch
@@ -2416,8 +2417,9 @@ public sealed class MainWindowViewModel :
             // Pass the working branch exporter's ACTUAL in-memory XML directly
             // to the consolidated wrapper. Persisting its diagnostic copy must
             // never become a second, stale source authority.
-            var (xml, statusText) = await PrepareMissingBranchXmlAsync(
+            var (xml, statusText, sourceFingerprint) = await PrepareMissingBranchXmlAsync(
                 child, branch.Name, financialYear);
+            branchSourceFingerprints.Add((child, branch.Name, sourceFingerprint));
             var savedSourceLink = _tallyRepository.GetLinkForClient(child.Id);
             // The original branch's prepared accounting is owned by its AAH
             // private ClientId/FY, not by a separate Tally company. A source
@@ -2472,6 +2474,12 @@ public sealed class MainWindowViewModel :
             branchSources.Add(new TallyPreparedBranchXml(identity, xml, masters, fullSourceMasterXml));
         }
 
+        // Each branch XML is individually verified, but an earlier branch can
+        // change while another is collected or its optional live master is read.
+        // Recheck the entire set before assembling one consolidated document.
+        TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+            branchSourceFingerprints,
+            child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
         var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
             link, company, identities, separateTypes, separateCash,
             accountingFinancialYear: financialYear);
@@ -2490,6 +2498,12 @@ public sealed class MainWindowViewModel :
             result.MastersXml, "generated consolidated master XML preview");
         TallyConsolidatedXmlTextSafety.ParseDocument(
             result.VouchersXml, "generated consolidated voucher XML preview");
+        // Guard once more after the plan, XML construction and parsing. A
+        // concurrent edit must never leave a seemingly current mixed-time
+        // consolidated preview for this generation request.
+        TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+            branchSourceFingerprints,
+            child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
         File.WriteAllText(mastersPath, result.MastersXml, System.Text.Encoding.UTF8);
         File.WriteAllText(vouchersPath, result.VouchersXml, System.Text.Encoding.UTF8);
         return result with
@@ -2510,7 +2524,7 @@ public sealed class MainWindowViewModel :
     /// accounting records, or reuse the consolidated Tally company's identity
     /// as a pretend branch link.
     /// </summary>
-    private async Task<(string Xml, string StatusText)> PrepareMissingBranchXmlAsync(
+    private async Task<(string Xml, string StatusText, string SourceFingerprint)> PrepareMissingBranchXmlAsync(
         ClientProfile branchClient, string branchName, string financialYear)
     {
         if (_privateBranchAccounts.FindByChild(branchClient.Id) is null ||
@@ -2551,7 +2565,7 @@ public sealed class MainWindowViewModel :
                 if (fingerprint.Equals(_branchXmlPreparationService
                         .ComputeOfflineConsolidationSourceFingerprint(branchClient),
                         StringComparison.Ordinal))
-                    return (cachedXml, cachedStatus);
+                    return (cachedXml, cachedStatus, fingerprint);
             }
 
             // On ANY branch input change, call the original individual-account
@@ -2604,7 +2618,7 @@ public sealed class MainWindowViewModel :
             File.WriteAllText(tempStatus, statusText, System.Text.Encoding.UTF8);
             File.Move(tempXml, path, overwrite: true);
             File.Move(tempStatus, status, overwrite: true);
-            return (snapshot.Xml, statusText);
+            return (snapshot.Xml, statusText, fingerprint);
         }).ConfigureAwait(false);
     }
 
