@@ -348,6 +348,9 @@ internal static class GitHubAutoUpdateService
             if (IsUpdateInProgress())
             {
                 Log("Existing verified updater became active during staging; no competing updater launched.");
+                Interlocked.Exchange(ref _updateLaunched, 0);
+                try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
                 return;
             }
             var psi = new ProcessStartInfo(path)
