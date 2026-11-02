@@ -72,6 +72,58 @@ internal static class TallyBranchMasterImportContractTests
             originalBooksLink, selectedLinked) == "2025-26",
             "Books-start year was incorrectly treated as the only import financial year.");
 
+        // Regression from 02-Nov consolidated screenshot: top header says
+        // Linked, but the saved parent name can be older than the same live
+        // Tally company's current "Consolidated" display name. Normal branch
+        // export already works; only this consolidated guard rejected it.
+        var renamedLinked = new TallyClientLink
+        {
+            ClientId = 123, CompanyKey = "SAVED-CONSOLIDATED-KEY",
+            CompanyName = "Mithansh Technology Pvt Ltd",
+            CompanyNumber = "405", FinancialYear = "2025-26",
+            BooksFrom = "01-04-2021"
+        };
+        var renamedSelected = new TallyCompanyInfo
+        {
+            CompanyKey = "SAVED-CONSOLIDATED-KEY",
+            Name = "Mithansh Technology Pvt Ltd Consolidated",
+            CompanyNumber = "405", BooksFrom = "01-04-2021",
+            FinancialYear = "2021-22"
+        };
+        Check(TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            renamedLinked, renamedSelected) == "2025-26",
+            "Consolidated saved link incorrectly rejected its renamed, same-key Tally destination.");
+        Check(ReferenceEquals(TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            renamedLinked, renamedSelected, [renamedSelected]), renamedSelected),
+            "Exact live linked consolidated company rejected due to an older saved display name.");
+        Check(ReferenceEquals(TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            renamedLinked, renamedSelected, [new TallyCompanyInfo {
+                CompanyKey = "RECOMPUTED-BOOK-YEAR-KEY", Name = renamedSelected.Name,
+                CompanyNumber = "405", BooksFrom = "01-04-2021", FinancialYear = "2021-22"
+            }]), null) == false,
+            "Live derived-key drift was rejected despite matching parent company number and BooksFrom.");
+
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            renamedLinked, new TallyCompanyInfo {
+                CompanyKey = renamedLinked.CompanyKey, Name = "Different Company",
+                CompanyNumber = "9999", BooksFrom = "01-04-2021"
+            }), "Different company number passed just because the saved link key matched");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            renamedLinked, new TallyCompanyInfo {
+                CompanyKey = renamedLinked.CompanyKey, Name = renamedSelected.Name,
+                CompanyNumber = "405", BooksFrom = "01-04-2020"
+            }), "Different company BooksFrom passed same saved link key");
+        Reject(() => TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            renamedLinked, new TallyCompanyInfo {
+                CompanyKey = "UNRELATED-LINK", Name = renamedSelected.Name,
+                CompanyNumber = "405", BooksFrom = "01-04-2021"
+            }), "Company number match overrode a changed selected CompanyKey");
+        Reject(() => TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            renamedLinked, renamedSelected, [new TallyCompanyInfo {
+                CompanyKey = "OTHER", Name = renamedSelected.Name,
+                CompanyNumber = "9999", BooksFrom = "01-04-2021"
+            }]), "Unrelated live destination passed after saved-name-drift repair");
+
         // Fresh raw discovery regenerates a CompanyKey from its inferred
         // books-year, while the original coordinator keeps the saved linked key.
         var freshlyDiscovered = new TallyCompanyInfo
