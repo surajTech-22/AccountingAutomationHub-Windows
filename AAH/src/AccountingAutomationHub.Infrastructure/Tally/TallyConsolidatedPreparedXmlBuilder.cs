@@ -434,6 +434,11 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 // classification. Settlement/receivable/RCM clearing ledgers
                 // without a single duty head remain source-owned.
                 TallyConsolidatedGstMasterPolicy.ApplyKnownDutyHead(ledger, parent, original);
+                // The individual branch exporter includes placeholder
+                // Tax Classification / legacy GST enum values that Tally
+                // cannot resolve as Master names. Strip ONLY placeholders
+                // in the consolidated destination copy, before any POST.
+                TallyConsolidatedGstMasterPolicy.RemoveUnresolvedSourcePlaceholders(ledger);
                 TallyConsolidatedStateNamePolicy.NormalizeLedger(ledger);
                 foreach (var nameTag in ledger.Descendants().Where(x =>
                     Is(x, "NAME") && x.Parent is not null && Is(x.Parent, "NAME.LIST") &&
