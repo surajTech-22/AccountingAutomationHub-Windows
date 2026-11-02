@@ -333,6 +333,8 @@ internal static class Program
         TallyBranchMasterPlannerTests.Run();
         TallyBranchMasterImportContractTests.Run();
         TallyConsolidatedPreparedXmlTests.Run();
+        TallyOfflineConsolidationLedgerTests.Run();
+        TallyConsolidatedSourceRefreshTests.Run();
         TallyConsolidatedVoucherImportGuardTests.Run();
         TallyConsolidatedBranchSourceTests.Run();
         TallyConsolidatedXmlTextSafetyTests.Run();

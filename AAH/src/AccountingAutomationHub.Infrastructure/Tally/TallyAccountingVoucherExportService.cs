@@ -906,6 +906,51 @@ public sealed class TallyAccountingVoucherExportService
     /// live preview maintained after Purchase/Sales/Journal/GST refreshes; the
     /// explicit Tally Export action still performs live duplicate checks and sends.
     /// </summary>
+    /// <summary>
+    /// Read-only, source-data change request for consolidated import.
+    /// It reads exactly the saved AAH categories consumed by GenerateLiveXml;
+    /// unlike GenerateLiveXml it never prepares vouchers, contacts Tally or
+    /// modifies an individual company link. Inserting, deleting, editing,
+    /// renaming or reclassifying any source record changes the fingerprint.
+    /// </summary>
+    public string ComputeOfflineConsolidationSourceFingerprint(ClientProfile client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        // Serializing the full persisted source models avoids relying on UpdatedUtc
+        // being populated by every legacy import/migration path. A stable sort
+        // ensures SQLite row ordering does not produce spurious cache misses.
+        static string[] Stable<T>(IEnumerable<T> source) =>
+            source.Select(row => System.Text.Json.JsonSerializer.Serialize(row))
+                .OrderBy(value => value, StringComparer.Ordinal).ToArray();
+
+        var contents = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Schema = "AAH-BRANCH-XML-SOURCE-V2",
+            client.Id,
+            client.ClientCode,
+            client.FinancialYear,
+            client.Gstin,
+            client.Pan,
+            client.State,
+            client.AdditionalGstins,
+            Purchases = Stable(_purchaseRepository.GetRecords(client.Id, client.FinancialYear)),
+            Sales = Stable(_salesRepository.GetRecords(client.Id, client.FinancialYear)),
+            CashEntries = Stable(_bankingRepository.GetCashEntries(client.Id, client.FinancialYear)),
+            BankAccounts = Stable(_bankingRepository.GetAccounts(client.Id, client.FinancialYear)),
+            Journals = Stable(_journalRepository.GetVouchers(client.Id, client.FinancialYear)),
+            JournalSettings = _journalRepository.GetSettings(client.Id, client.FinancialYear),
+            Masters = Stable(_masterRepository.Get(client.Id, client.FinancialYear, false)),
+            StockItems = Stable(_stockMasterRepository.GetStockItems(client.Id, client.FinancialYear)),
+            StockItemUnits = Stable(_stockMasterRepository.GetStockItemUnitProfiles(client.Id, client.FinancialYear)),
+            Units = Stable(_stockMasterRepository.GetUnits(client.Id, client.FinancialYear)),
+            StockGroups = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Stock Group")),
+            StockCategories = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Stock Category")),
+            Godowns = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Godown")),
+            CostCentres = Stable(_stockMasterRepository.GetSimpleMasters(client.Id, client.FinancialYear, "Cost Centre"))
+        });
+        return TallyConsolidatedBranchXmlSnapshotCache.Sha256(contents);
+    }
+
     public TallyLiveAccountingXmlSnapshot GenerateLiveXml(
         ClientProfile client,
         TallyCompanyInfo company,
@@ -3441,7 +3486,13 @@ public sealed class TallyAccountingVoucherExportService
         // Data/All Masters stage. Do not resend them through the inherited generic
         // All Masters envelope or a successful CREATE/ALTER could be turned into an
         // IGNORE/Exception by the duplicate policy.
-        var ordinaryRequiredLedgers = requiredLedgers.Where(ledger => !IsFix83GstAssetLedger(ledger)).ToArray();
+        // The normal importer handles these generated GST asset ledgers in a
+        // separate verified master stage. An OFFLINE consolidation source has
+        // no such live stage: include the branch's already-prepared GST ledger
+        // classification as-is. Never recalculate GST or journal amounts.
+        var ordinaryRequiredLedgers = offlineConsolidatedBranchSource
+            ? requiredLedgers.ToArray()
+            : requiredLedgers.Where(ledger => !IsFix83GstAssetLedger(ledger)).ToArray();
         var requiredGroups = new Dictionary<string, MasterRecord>(StringComparer.OrdinalIgnoreCase);
         foreach (var ledger in ordinaryRequiredLedgers)
             AddRequiredGroup(ledger.Parent, groups, requiredGroups);
@@ -3483,6 +3534,45 @@ public sealed class TallyAccountingVoucherExportService
             var liveExists = freshLiveLedgerKeys is not null
                 ? freshLiveLedgerKeys.Contains(key)
                 : candidates.Any(IsLiveTallyMaster);
+
+            // AAH's offline branch snapshot is SOURCE DATA, not an import to
+            // the branch's Tally company. A valid, already-linked Tally master
+            // must therefore be exported from the branch's persisted source
+            // records just like a local master. The old liveExists short-circuit
+            // silently omitted these ledgers, leaving the consolidated builder
+            // without a CREATE template for an otherwise valid voucher party.
+            // Preserve original voucher/business GST fields and saved bank data;
+            // do NOT copy Tally identity or generate a GST journal/DR/CR entry.
+            // The actual consolidated company creates its own identities through
+            // its independent master-first/live-readback gate.
+            if (offlineConsolidatedBranchSource)
+            {
+                if (candidates.Length > 1)
+                    throw new InvalidOperationException(
+                        "Ambiguous original branch Ledger masters: " + ledger.Name +
+                        ". Resolve source duplicates before consolidation.");
+                if (candidates.Length == 1)
+                {
+                    if (!TallyMasterKey(candidates[0].Parent).Equals(
+                        TallyMasterKey(ledger.Parent), StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(
+                            "Original branch Ledger parent conflict: " + ledger.Name);
+                    AppendLedgerMaster(builder, ledger, bankAccount, applicableFrom, "Create");
+                    continue;
+                }
+                if (bankAccount is not null)
+                {
+                    // The exact saved bank account is separate source authority.
+                    // Carry its bank metadata rather than emitting a bare bank
+                    // ledger as the normal online CREATE helper would do.
+                    AppendLedgerMaster(builder, ledger, bankAccount, applicableFrom, "Create");
+                    continue;
+                }
+                // No source master: do not infer a party/tax ledger solely from
+                // a voucher name. The consolidated builder will fail closed
+                // with the branch and missing-ledger details.
+                continue;
+            }
 
             // When the fresh direct collection says the Ledger is missing, stale Tally
             // provenance must not outrank a real Manual/local Master. Require one
