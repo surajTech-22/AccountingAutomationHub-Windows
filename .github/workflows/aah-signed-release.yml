@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.567)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.568)"
         required: true
-        default: "v4.0.0.567"
+        default: "v4.0.0.568"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.567: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.568: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.567]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.568]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.567' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.568' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.567: enforces strictly raw branch accounting for consolidated Tally. Source private branch Ledger/Group records carry only names, parents and classifications; original branch source XML and optional verified live master XML lose all foreign MASTERID, ALTERID, GUID, VOUCHERID, REMOTEID, VCHKEY, TAGNAME/TAGVALUE and related IDs immediately at ingestion. Source voucher ALTER/CREATE are both prepared as NEW destination CREATE without consulting branch Tally identity; the exact DR/CR, taxes, GST, dates, party fields, inventory and invoice references remain unchanged. Consolidated masters and voucher payloads are scanned again before every live POST to reject identity leaks; destination master-first/readback provides wholly new consolidated Tally MASTERIDs and voucher IDs. Existing branch groups, optional cash/voucher types, explicit interbank matching and duplicate/readback protections are unchanged. Includes v566 Gujarat ledger source authority and v565 parent-FY corrections. GitHub SHA256 verification; unsigned binaries."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.568: one valid GSTIN now resolves to the latest substantive invoice/document-dated party name across saved Purchase and Sales records within the same AAH Client/FY. Historical 2B, RCM, Purchase, Debit Note, Sales/Credit Note rows automatically self-heal supplier/customer names when read by the working module, with exact SupplierName/CustomerName and RecordJson persistence, without changing invoice values, tax, GSTIN, stock, document numbers, source documents or manual edit flags. The highest invoice/document date wins, then source persistent ID for a date tie; placeholders are not accepted as latest names. Explicit Sales B2B manual GSTIN overrides remain authoritative and OriginalCustomerName is preserved. Tally prepared voucher source uses the unified names while preserving existing destination master checks and v567 source-Tally ID isolation. Tests include Kotlin/Windows builds, actual SQLite Purchase/Sales row updates and all accounting regressions. SHA256 assets verified; unsigned installer."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
