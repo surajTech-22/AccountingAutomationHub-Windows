@@ -154,6 +154,17 @@ internal static class TallyBranchMasterImportContractTests
         Check(ReferenceEquals(TallyBranchConsolidationImportService.ResolveLinkedDestination(
                 renamedLinked, null, [renamedSelected]), renamedSelected),
             "An unselected but uniquely open saved Tally link should work without relinking.");
+        var recoveredAfterPulse = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, null, [driftedSelection]);
+        Check(recoveredAfterPulse.CompanyKey == renamedLinked.CompanyKey &&
+              recoveredAfterPulse.Name == driftedSelection.Name,
+            "A recomputed CompanyKey erased top selection but a unique verified saved destination was not recovered.");
+        Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
+            renamedLinked, null, [driftedSelection,
+                new TallyCompanyInfo { CompanyKey = "SECOND", Name = "Second Group Books",
+                    CompanyNumber = "405", BooksFrom = "01-04-2021" }]),
+            "An empty selection cannot guess between two companies sharing the saved identity.");
+
 
         Reject(() => TallyBranchConsolidationImportService.ResolveLinkedDestination(
             renamedLinked,
