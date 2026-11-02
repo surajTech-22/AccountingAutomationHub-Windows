@@ -254,13 +254,13 @@ internal static class TallyConsolidatedBranchSourceTests
 
         var mainWindow = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
             "AccountingAutomationHub.Desktop", "ViewModels", "MainWindowViewModel.cs"));
-        Check(mainWindow.Contains("var (xml, statusText) = await PrepareMissingBranchXmlAsync(", StringComparison.Ordinal) &&
+        Check(mainWindow.Contains("var (xml, statusText, sourceFingerprint) = await PrepareMissingBranchXmlAsync(", StringComparison.Ordinal) &&
             mainWindow.Contains("child, branch.Name, financialYear);", StringComparison.Ordinal) &&
             !mainWindow.Contains("if (existing.Length == 0)", StringComparison.Ordinal) &&
             !mainWindow.Contains("var candidates = new List<string>();", StringComparison.Ordinal) &&
             mainWindow.Contains("_branchXmlPreparationService.GenerateLiveXml(", StringComparison.Ordinal) &&
             mainWindow.Contains("TallyConsolidatedBranchSourcePolicy.RequirePreparedVoucherCount(", StringComparison.Ordinal) &&
-            mainWindow.Contains("return (snapshot.Xml, statusText);", StringComparison.Ordinal) &&
+            mainWindow.Contains("return (snapshot.Xml, statusText, fingerprint);", StringComparison.Ordinal) &&
             mainWindow.Contains("snapshot.Unsupported != 0 || snapshot.MissingLedgers != 0", StringComparison.Ordinal) &&
             mainWindow.Contains("Source: saved offline branch accounting; no Tally posting", StringComparison.Ordinal),
             "Consolidation must pass the existing branch writer's actual in-memory XML, not reload a stale copy.");
