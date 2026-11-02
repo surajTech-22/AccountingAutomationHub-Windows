@@ -729,7 +729,12 @@ public partial class App : System.Windows.Application
         if (_isExiting) return;
         if (_workspaceSelectorInitial)
         {
-            ExitApplication();
+            // The initial Workspace Selector is hosted inside MainWindow.
+            // Its own Close button must obey the same X -> tray contract.
+            // Exiting here killed the only AAH instance, so the GitHub updater
+            // had no listener/tray process to find after release notification.
+            // Keep the selector content intact for the next tray reopen.
+            HandleMainWindowClosing(new CancelEventArgs());
             return;
         }
         _workspaceSelectorVisible = false;
@@ -750,6 +755,17 @@ public partial class App : System.Windows.Application
 
     private void ShowActiveWorkspace()
     {
+        // Reopen the SAME initial selector after its Close -> tray action.
+        // Do not silently skip workspace selection or start an Accounting
+        // client merely because the user reopened the tray menu.
+        if (_workspaceSelectorVisible && _mainWindow is { } selectorHost)
+        {
+            if (!selectorHost.IsVisible) selectorHost.Show();
+            if (selectorHost.WindowState == WindowState.Minimized)
+                selectorHost.WindowState = WindowState.Normal;
+            selectorHost.Activate();
+            return;
+        }
         if (_activeWorkspace == AahWorkspaceKind.Audit) ShowAuditWindow();
         else if (_activeWorkspace == AahWorkspaceKind.FinancialStatementsIncomeTax) ShowFinancialStatementsIncomeTaxWindow();
         else ShowAccountingWindow();
@@ -761,9 +777,25 @@ public partial class App : System.Windows.Application
     // verified process-targeted update-shutdown handler.
     public void HandleMainWindowClosing(CancelEventArgs e)
     {
-        if (_isExiting || Preferences is null) return;
+        // X/Close ALWAYS means hide-to-tray, including the startup interval
+        // before Preferences has finished loading. Otherwise WPF may destroy
+        // the only main HWND and leave the updater with no running owner PID.
+        // Only verified update shutdown and explicit Exit Completely use the
+        // separate _isExiting path.
+        if (_isExiting) return;
         e.Cancel = true;
-        _mainWindow?.Hide();
+        try
+        {
+            _mainWindow?.Hide();
+            if (_trayIcon is not null)
+                _trayIcon.Visible = true;
+        }
+        catch (Exception exception)
+        {
+            WriteShutdownDiagnostic("Close-to-tray could not hide main window: " + exception);
+        }
+        WriteShutdownDiagnostic("Main window close intercepted; AAH remains alive in tray for background workers and auto-update.");
+        if (Preferences is null) return; // Do not let unfinished settings initialization close the process.
         if (NetworkClientRuntime.IsNetworkClient)
         {
             ShowTrayBalloon("AAH LAN is still live",

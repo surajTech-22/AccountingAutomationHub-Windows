@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.561)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.562)"
         required: true
-        default: "v4.0.0.561"
+        default: "v4.0.0.562"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.561: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.562: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.561]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.562]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.561' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.562' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.561: Consolidated Tally now consumes the original branch accounting exporter's verified XML directly in memory, checks the original TALLYMESSAGE voucher count against its ready count, and never substitutes a stale/empty saved Live XML. The original Tally exporter legitimately leaves VOUCHERNUMBER blank for automatically numbered purchase/sales/GST journal entries; consolidated preparation now preserves their source REFERENCE and original postings while assigning a stable target-side voucher number, rejecting ambiguous duplicate/no-reference cases. Mandatory branch grouping, original GST/DR/CR, branch master identity, master-first verification and live destination duplicate/readback gates remain unchanged. Normal Tally import is unchanged. Back up the consolidated Tally company before live posting, and do not retry a partly accepted import without reconciliation. Installer SHA256 verified but unsigned; SmartScreen may warn."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.562: fixes AAH desktop X/Close failing to remain in the system tray and blocking automatic installation. MainWindow now intercepts close before placement saving and cancels it before any settings readiness check; normal close keeps the owner process and background watchers running. Exit Completely remains a separate safe action. The GitHub UpdateHost now permits the original launcher process to have already exited before preflight, while rejecting any still-live unrelated/reused PID, verifying every same-install process path, never force-killing Tally/AAH, and preserving master/SQLite data. Original consolidated Tally v561 fixes and normal import remain unchanged. Live update still requires an AAH instance receiving the release event or one-time manual installer if AAH is fully closed. Installer is GitHub SHA256 verified but unsigned.."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or

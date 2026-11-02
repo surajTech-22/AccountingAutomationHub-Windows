@@ -56,9 +56,17 @@ internal static class Program
             if (!PublisherIdentityCompatible(publisher, installedPublisher))
                 throw new InvalidDataException("Updater and installed AAH have incompatible Authenticode signing identities.");
 
-            using var parent = Process.GetProcessById(parentId);
-            if (!SameProcessPath(parent, target))
-                throw new InvalidDataException("Specified AAH process does not match the installed application path.");
+            // AAH can close normally between spawning its verified updater
+            // and the updater finishing its launch/HTTPS preflight. The PID is
+            // a launch-time provenance hint, NOT a perpetual lifetime lock:
+            // do not abandon a validated release merely because that PID
+            // has already exited. A PID that still exists but belongs to an
+            // unrelated executable MUST remain a hard failure. Every running
+            // exact-install AAH instance is independently path-verified and
+            // asked to exit before touching program files.
+            if (!LauncherExitedOrBelongsToInstallation(parentId, target))
+                throw new InvalidDataException(
+                    "Updater launcher PID is active but no longer belongs to this AAH installation.");
 
             using var response = await Http.GetAsync(ReleaseApi);
             response.EnsureSuccessStatusCode();
@@ -496,6 +504,30 @@ internal static class Program
             return false;
         }
         finally { foreach (var p in remaining) p.Dispose(); }
+    }
+
+    internal static bool LauncherExitedOrBelongsToInstallation(int launcherPid, string installedExe)
+    {
+        if (launcherPid <= 0) return false;
+        try
+        {
+            using var launcher = Process.GetProcessById(launcherPid);
+            if (launcher.HasExited)
+            {
+                Log("Launching AAH PID " + launcherPid + " exited before updater preflight; validating remaining exact-install PIDs.");
+                return true;
+            }
+            return SameProcessPath(launcher, installedExe);
+        }
+        catch (ArgumentException)
+        {
+            // GetProcessById throws when the original launcher legitimately
+            // exited. This is not evidence that another process can be killed;
+            // ShutdownAllVerifiedInstallProcessesAsync independently verifies
+            // the FULL path of every remaining process before file replacement.
+            Log("Launching AAH PID " + launcherPid + " already exited; continuing with exact-install process verification.");
+            return true;
+        }
     }
 
     internal static bool IsExactInstallationProcess(string processName, string fullProcessExe, string installedExe) =>
