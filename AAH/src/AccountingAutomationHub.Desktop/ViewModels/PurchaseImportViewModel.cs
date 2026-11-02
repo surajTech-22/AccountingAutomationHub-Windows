@@ -70,6 +70,10 @@ public sealed class PurchaseImportViewModel :
     private string _eReturnsRootPath = string.Empty;
     private string _sourceVerificationText = string.Empty;
     private string _searchText = string.Empty;
+    private string _activeReconciliationFilter = string.Empty;
+    private long _reconciliationFilterClientId;
+    private string _reconciliationFilterFinancialYear = string.Empty;
+    private string _lastWarmPurchaseFingerprint = string.Empty;
     private bool _saveSourceFiles;
     private string _companyName = string.Empty;
     private string _clientGstin = string.Empty;
@@ -2165,6 +2169,18 @@ public sealed class PurchaseImportViewModel :
         IsImportPanelExpanded =
             string.IsNullOrWhiteSpace(globalRoot);
 
+        // A filter is local to this exact private-branch ClientId/FY.
+        // Never carry Karnataka's 2B selection into Gujarat or Consolidated.
+        if (client?.Id != _reconciliationFilterClientId ||
+            !(client?.FinancialYear ?? string.Empty).Equals(
+                _reconciliationFilterFinancialYear, StringComparison.OrdinalIgnoreCase))
+        {
+            _activeReconciliationFilter = string.Empty;
+            _reconciliationFilterClientId = client?.Id ?? 0;
+            _reconciliationFilterFinancialYear = client?.FinancialYear ?? string.Empty;
+            _lastWarmPurchaseFingerprint = string.Empty;
+        }
+
         if (client is null)
         {
             CompanyName = string.Empty;
@@ -2236,6 +2252,16 @@ public sealed class PurchaseImportViewModel :
             !client.FinancialYear.Equals(snapshot.FinancialYear, StringComparison.OrdinalIgnoreCase))
             return;
 
+        // Other module-ready notifications must not reset a filtered Purchase grid.
+        // Compare the complete saved source, not just row counts or timestamps.
+        if (_pendingLiveEditIds.Count > 0 || _liveEditSaveRunning) return;
+        var fingerprint = Convert.ToHexString(SHA256.HashData(
+            JsonSerializer.SerializeToUtf8Bytes(snapshot.Purchases)));
+        if (_preparedClientId == client.Id &&
+            _preparedFinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+            _lastWarmPurchaseFingerprint == fingerprint)
+            return;
+
         CompanyName = string.IsNullOrWhiteSpace(client.LegalName) ? client.ClientName : client.LegalName;
         ClientGstin = client.Gstin;
         FinancialYear = client.FinancialYear;
@@ -2245,6 +2271,7 @@ public sealed class PurchaseImportViewModel :
             : new PurchaseImportSummary();
         _preparedClientId = client.Id;
         _preparedFinancialYear = client.FinancialYear;
+        _lastWarmPurchaseFingerprint = fingerprint;
         StatusText = $"Purchase ready • {snapshot.Purchases.Count:N0} saved row(s).";
         RefreshCommands();
     }
@@ -3229,9 +3256,14 @@ public sealed class PurchaseImportViewModel :
 
     public void ApplyReconciliationFilter(string? filter)
     {
-        var normalized = (filter ?? string.Empty).Trim();
-        IEnumerable<PurchaseImportRecord> rows = AllRows;
-        rows = normalized.ToUpperInvariant() switch
+        _activeReconciliationFilter = (filter ?? string.Empty).Trim().ToUpperInvariant();
+        ReplaceRows(ReconciliationRows, FilterReconciliationRows(AllRows));
+    }
+
+    private IEnumerable<PurchaseImportRecord> FilterReconciliationRows(IEnumerable<PurchaseImportRecord> source)
+    {
+        IEnumerable<PurchaseImportRecord> rows = source;
+        rows = _activeReconciliationFilter switch
         {
             "MATCHED" => rows.Where(record => record.ReconciliationStatus.Contains("Matched", StringComparison.OrdinalIgnoreCase) &&
                                                 !record.ReconciliationStatus.Contains("Difference", StringComparison.OrdinalIgnoreCase)),
@@ -3242,7 +3274,7 @@ public sealed class PurchaseImportViewModel :
                                                    record.ReconciliationStatus.Equals("Rejected in 2B", StringComparison.OrdinalIgnoreCase)),
             _ => rows
         };
-        ReplaceRows(ReconciliationRows, rows);
+        return rows;
     }
 
     private static bool TryFinancialYearRange(string? financialYear, out DateTime start, out DateTime end)
@@ -3338,7 +3370,7 @@ public sealed class PurchaseImportViewModel :
 
         ReplaceRows(
             ReconciliationRows,
-            materialized);
+            FilterReconciliationRows(materialized));
 
         ReplaceRows(
             PurchaseRows,
