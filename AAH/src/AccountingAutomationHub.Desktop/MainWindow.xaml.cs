@@ -194,9 +194,16 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        SaveWindowPlacement();
+        // Intercept the native Close before any optional placement persistence.
+        // A placement exception must NEVER turn X/Close into actual HWND disposal.
+        // The App handles explicit Exit Completely via its separate _isExiting gate.
         if (System.Windows.Application.Current is App app)
             app.HandleMainWindowClosing(e);
+        try { SaveWindowPlacement(); }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.WriteLine("AAH closing placement save: " + exception);
+        }
         base.OnClosing(e);
     }
 
