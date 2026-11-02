@@ -29,6 +29,7 @@ using AccountingAutomationHub.Infrastructure.Sales;
 using AccountingAutomationHub.Infrastructure.Settings;
 using AccountingAutomationHub.Infrastructure.Tally;
 using AccountingAutomationHub.Infrastructure.Tax;
+using AccountingAutomationHub.Domain.Masters;
 using AccountingAutomationHub.Domain.Tally;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
