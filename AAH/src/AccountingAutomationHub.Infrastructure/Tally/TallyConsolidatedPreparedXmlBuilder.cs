@@ -49,6 +49,9 @@ public static class TallyConsolidatedPreparedXmlBuilder
             if (!Is(source.Root, "ENVELOPE") ||
                 !source.Descendants().Any(x => Is(x, "TALLYMESSAGE")))
                 throw new InvalidOperationException("Invalid original Tally XML envelope for " + branch.Branch.DisplayName);
+            // Boundary rule: accept branch accounting facts, never any
+            // company-owned object IDs or Alter version from its XML.
+            RemoveForeignTallyIdentity(source.Root!);
             // Branch-prepared XML deliberately omits Ledgers already live in
             // that branch's Tally company. Fill those master definitions only
             // from the original branch's freshly exported Tally masters, never
