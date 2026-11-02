@@ -2720,6 +2720,22 @@ public sealed class DashboardViewModel :
             return;
         }
 
+        // Tally can be linked AFTER the consolidated page was first opened.
+        // Correct stale pre-link copy on the original embedded Dashboard card
+        // whenever the coordinator reports the confirmed parent Client/FY link.
+        if (_isConsolidatedTallyScope && link is not null)
+        {
+            if (TallyReportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase) ||
+                TallyReportStatus.StartsWith("Link and open", StringComparison.OrdinalIgnoreCase))
+                TallyReportStatus = "Linked company available. Select a live report and click Refresh Report.";
+            if (TallyStatisticsStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
+            if (TallyExportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
+                TallyExportStatus =
+                    "Use Generate Consolidated XML and Export Consolidated to Tally; " +
+                    "normal parent Export Selected is disabled.";
+        }
+
         TallyClientLink? metricLink = link;
         var displayCompany = pending ? selected : openLinkedCompany ?? selected;
         var confirmedLinkIsLive = IsConfirmedTallyLinkLive(link, openLinkedCompany);
