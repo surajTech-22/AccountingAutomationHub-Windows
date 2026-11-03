@@ -2431,6 +2431,40 @@ public sealed class SqliteTallyRepository
     /// authority. A Tally CREATED acknowledgement without full DR/CR readback
     /// must remain visibly separate from Verified.
     /// </summary>
+    /// <summary>
+    /// One read-only query for the existing consolidated voucher ownership
+    /// states, scoped to the exact linked destination Client/FY/CompanyKey.
+    /// This is presentation authority ONLY. It cannot classify a voucher as
+    /// safe to CREATE, ALTER, DELETE or retry.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ReadConsolidatedVoucherStates(
+        long clientId, string financialYear, string companyKey)
+    {
+        var rows = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (clientId <= 0 || string.IsNullOrWhiteSpace(financialYear) ||
+            string.IsNullOrWhiteSpace(companyKey)) return rows;
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT SourceAnchor, State
+            FROM TallySourceBindings
+            WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
+              AND CompanyKey=$CompanyKey COLLATE NOCASE
+              AND EntityType='Consolidated Voucher' COLLATE NOCASE;
+            """;
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$CompanyKey", companyKey.Trim());
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var anchor = reader.GetString(0).Trim();
+            if (anchor.Length > 0) rows[anchor] = reader.GetString(1).Trim();
+        }
+        return rows;
+    }
+
     public (int Verified, int AwaitingVerification, int HeldForReview) ReadConsolidatedVoucherProgress(
         long clientId, string financialYear, string companyKey)
     {
