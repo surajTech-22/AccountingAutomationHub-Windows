@@ -516,11 +516,13 @@ internal static class Program
     }
 
     /// <summary>
-    /// A repeated-update race used to leave the original AAH PID or its sibling
-    /// alive, then a new process failed single-instance startup readiness.
-    /// Enumerate and verify the FULL executable path of every AAH process.
-    /// Never signal other installation paths or unknown identities, never kill.
-    /// A process that cannot be inspected causes an explicit safe block.
+    /// A repeated-update race left AAH process handles alive after the app logged
+    /// completed accounting/Tally disposal and final OnExit ownership release.
+    /// Enumerate/verify EVERY executable path before replacement. A running
+    /// process with no complete, post-start verified-shutdown evidence is NEVER
+    /// terminated or overwritten. The update host may retire ONLY an already
+    /// cleaned ghost (same exact installation/PID, observed process start time,
+    /// complete ordered shutdown log), then recensus before transaction.
     /// </summary>
     internal static async Task<bool> ShutdownAllVerifiedInstallProcessesAsync(string installedExe)
     {
@@ -538,7 +540,7 @@ internal static class Program
                     processes.Count + " exact-install AAH process(es): " +
                     string.Join(",", processes.Select(x => x.Id)));
                 var results = await Task.WhenAll(processes.Select(async process =>
-                    await RequestVerifiedUpdateExitWithRetryAsync(process)));
+                    await RequestVerifiedUpdateExitWithRetryAsync(process, installedExe)));
                 if (results.Any(x => !x))
                 {
                     // The user's v575 failure was a race: a PID without a
@@ -673,39 +675,43 @@ internal static class Program
         verifiedReleaseBinary.ToString().Equals(stableTag.TrimStart('v'),
             StringComparison.Ordinal);
 
-    // Older AAH versions do not quiesce repeatable background discovery when
-    // a verified update is requested. A single 11-minute wait can therefore
-    // miss the moment an import finishes. The updater owns one bounded retry;
-    // it never sends a force-kill, closes unrelated processes or overwrites a
-    // running application's files.
-    internal static async Task<bool> RequestVerifiedUpdateExitWithRetryAsync(Process parent)
+    // Verified v582 updater recovery: old v579/v580 desktop builds may finish
+    // OnExit cleanup but retain a foreground thread. Their PID listener is
+    // already unregistered, so resending an event cannot finish the process.
+    // Retry normal graceful exit, but recognize logged COMPLETED shutdown
+    // as a separate, strictly checked terminal state. No broad PID killing.
+    internal static async Task<bool> RequestVerifiedUpdateExitWithRetryAsync(
+        Process parent, string? verifiedInstalledExe = null)
     {
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            if (await RequestGracefulUpdateExitAsync(parent, TimeSpan.FromMinutes(11)))
+            if (await RequestGracefulUpdateExitAsync(
+                parent, TimeSpan.FromMinutes(11), verifiedInstalledExe))
                 return true;
             if (attempt < 2)
-                Log("Original AAH has not exited after verified update request; resending the same PID-targeted graceful signal once.");
+                Log("AAH not yet exited: retrying PID-targeted graceful shutdown; active accounting jobs are never interrupted.");
         }
         return false;
     }
 
-    internal static async Task<bool> RequestGracefulUpdateExitAsync(Process parent, TimeSpan timeout)
+    internal static async Task<bool> RequestGracefulUpdateExitAsync(
+        Process parent, TimeSpan timeout, string? verifiedInstalledExe = null)
     {
-        // Verify the process-specific, locally created event. Do NOT create
-        // the event here: an absent listener is not permission to kill AAH.
-        // In particular do not signal a different PID or process name.
         if (parent.HasExited) return true;
         if (!parent.ProcessName.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Graceful update shutdown target is not AAH.");
-        // The event can be temporarily unavailable while a new AAH instance
-        // starts or while an old one is finishing normal cleanup. Wait for
-        // either graceful exit or listener registration; do not equate an
-        // absent event with authorization to terminate the process.
+
+        // A completed ghost has no listener, but its ordered, post-start
+        // verified shutdown audit log is sufficient to retire only that exact
+        // process. All unverified, active and unknown PIDs remain untouched.
+        if (await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe))
+            return true;
         var listenerDiscovery = Stopwatch.StartNew();
         while (listenerDiscovery.Elapsed < TimeSpan.FromSeconds(20))
         {
             if (parent.HasExited) return true;
+            if (await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe))
+                return true;
             try
             {
                 using var exitSignal = EventWaitHandle.OpenExisting(
@@ -713,7 +719,7 @@ internal static class Program
                 exitSignal.Set();
                 Log("Sent graceful update shutdown to original AAH PID " + parent.Id +
                     "; waiting for its own import/export/Tally cleanup.");
-                return await WaitForOriginalExitAsync(parent, timeout);
+                return await WaitForOriginalExitAsync(parent, timeout, verifiedInstalledExe);
             }
             catch (WaitHandleCannotBeOpenedException)
             {
@@ -721,25 +727,154 @@ internal static class Program
             }
             catch (UnauthorizedAccessException)
             {
-                Log("AAH update-shutdown signal access denied; no forced termination.");
+                Log("AAH update-shutdown signal access denied; no process termination.");
                 return false;
             }
         }
         if (parent.HasExited) return true;
-        Log("AAH PID " + parent.Id + " still has no shutdown listener after startup grace. " +
-            "This may be a pre-protocol or stuck instance; deferring without force-kill or data changes.");
+        Log("AAH PID " + parent.Id + " has no registered shutdown listener and no complete " +
+            "verified-cleanup evidence; preserving process and accounting data.");
         return false;
     }
 
-    private static async Task<bool> WaitForOriginalExitAsync(Process parent, TimeSpan timeout)
+    // Pure, deterministic evidence gate; the updater cannot authorize a kill
+    // from a PID alone, a release hint, an idle sample, or partial cleanup.
+    // Timestamp + PID + ordered milestones must ALL belong to this process
+    // lifetime, including successful Tally/cache disposal and final lock release.
+    internal static bool HasCompletedVerifiedExitEvidence(
+        string log, int pid, DateTimeOffset startedUtc, DateTimeOffset observedUtc,
+        out DateTimeOffset completedUtc)
     {
+        completedUtc = default;
+        if (pid <= 0 || startedUtc > observedUtc) return false;
+        var markers = new[]
+        {
+            "Verified updater requested graceful exit; new automation intake quiesced.",
+            "Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.",
+            "Application shutdown started; stopping Accounting/Tally runtime.",
+            "Tally coordinator disposal completed.",
+            "Workspace cache disposal completed.",
+            "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
+            "Process exit releasing final single-instance ownership."
+        };
+        var stage = 0;
+        var prefix = " PID " + pid.ToString(CultureInfo.InvariantCulture) + ": ";
+        foreach (var raw in log.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var pos = line.IndexOf(prefix, StringComparison.Ordinal);
+            if (pos <= 0) continue;
+            if (!DateTimeOffset.TryParse(line[..pos], CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal, out var when)) continue;
+            when = when.ToUniversalTime();
+            if (when < startedUtc.AddSeconds(-2) ||
+                when > observedUtc.AddMinutes(1)) continue;
+            var message = line[(pos + prefix.Length)..];
+            if (message.Contains("Verified updater deferred:", StringComparison.Ordinal) ||
+                message.Contains("Verified updater shutdown check failed", StringComparison.Ordinal))
+            {
+                stage = 0;
+                completedUtc = default;
+                continue;
+            }
+            if (message.Equals(markers[stage], StringComparison.Ordinal))
+            {
+                stage++;
+                if (stage == markers.Length)
+                {
+                    completedUtc = when;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static string ReadBoundedShutdownLog()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "AccountingAutomationHub_v4_0_0_shutdown.log");
+        if (!File.Exists(path)) return string.Empty;
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        // AAH appends diagnostics; never scan an unbounded history every 2s.
+        var skip = Math.Max(0L, file.Length - 1024L * 1024L);
+        file.Seek(skip, SeekOrigin.Begin);
+        using var reader = new StreamReader(file, Encoding.UTF8, true);
+        var tail = reader.ReadToEnd();
+        if (skip > 0)
+        {
+            var firstBreak = tail.IndexOf('\n');
+            return firstBreak >= 0 ? tail[(firstBreak + 1)..] : string.Empty;
+        }
+        return tail;
+    }
+
+    private static async Task<bool> RetireVerifiedCleanedGhostAsync(
+        Process process, string? verifiedInstalledExe)
+    {
+        if (process.HasExited) return true;
+        if (string.IsNullOrWhiteSpace(verifiedInstalledExe)) return false;
         try
         {
-            using var stop = new CancellationTokenSource(timeout);
-            await parent.WaitForExitAsync(stop.Token);
+            // Process objects hold the original OS handle: PID reuse after a
+            // scan cannot turn this into a kill of some later process.
+            var actualPath = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(actualPath) ||
+                !IsExactInstallationProcess(process.ProcessName, actualPath, verifiedInstalledExe))
+                return false;
+            var processStart = new DateTimeOffset(process.StartTime.ToUniversalTime());
+            var now = DateTimeOffset.UtcNow;
+            var audit = ReadBoundedShutdownLog();
+            if (!HasCompletedVerifiedExitEvidence(
+                audit, process.Id, processStart, now, out var completedAt))
+                return false;
+            if (now - completedAt < TimeSpan.FromSeconds(5))
+                return false; // Give WPF/foreground helpers a chance to exit.
+            if (process.HasExited) return true;
+            // Re-verify exact process identity before taking the sole narrow
+            // process-ending action. This is NOT an active-app force-close:
+            // verified updater-triggered idle + completed accounting/WAL
+            // cleanup and owner release were already logged by THIS PID.
+            if (!SameProcessPath(process, verifiedInstalledExe))
+                return false;
+            Log("AAH PID " + process.Id + " completed verified Tally/runtime cleanup and " +
+                "final instance release, but remained alive. Retiring this proven-cleaned ghost only.");
+            process.Kill(entireProcessTree: false);
+            using var boundedWait = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await process.WaitForExitAsync(boundedWait.Token);
+            Log("Proven-cleaned ghost AAH PID " + process.Id + " exited; fresh process census required.");
             return true;
         }
-        catch (OperationCanceledException) { return false; }
+        catch (InvalidOperationException) when (process.HasExited) { return true; }
+        catch (Exception ex)
+        {
+            Log("AAH cleaned-ghost verification/exit deferred for PID " + process.Id +
+                ": " + ex.GetType().Name + ": " + ex.Message);
+            return process.HasExited;
+        }
+    }
+
+    private static async Task<bool> WaitForOriginalExitAsync(
+        Process parent, TimeSpan timeout, string? verifiedInstalledExe)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.Elapsed < timeout)
+        {
+            if (parent.HasExited) return true;
+            if (await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe))
+                return true;
+            var remaining = timeout - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero) break;
+            using var sample = new CancellationTokenSource(
+                remaining < TimeSpan.FromSeconds(2) ? remaining : TimeSpan.FromSeconds(2));
+            try
+            {
+                await parent.WaitForExitAsync(sample.Token);
+                return true;
+            }
+            catch (OperationCanceledException) { /* Recheck recorded cleanup. */ }
+        }
+        return parent.HasExited;
     }
 
     private static async Task<bool> StartAndVerifyAsync(string exe, string install)
