@@ -3093,18 +3093,23 @@ public sealed class TallyHttpService : IDisposable
         Action<string, string>? diagnosticExchange = null)
     {
         ArgumentNullException.ThrowIfNull(company);
-        var request = BuildFunctionRequest(company.Name, "$NumVouchers");
+        // Tally's native $NumVouchers function; two leading dollar signs are required.
+        var request = BuildFunctionRequest(company.Name, "$" + "$NumVouchers");
         var response = await PostAsync(request, cancellationToken).ConfigureAwait(false);
         try { diagnosticExchange?.Invoke(request, response); }
         catch { /* diagnostic observers do not change read results */ }
         var result = ReadTag(CleanXml(response), "RESULT").Trim();
-        if (!int.TryParse(result, NumberStyles.None,
-                CultureInfo.InvariantCulture, out var count) || count < 0)
+        // Tally builds may return an integral numeric result as 2 or 2.00.
+        // Do not strip non-digits: that would interpret 2.00 as 200.
+        if (!decimal.TryParse(result, NumberStyles.AllowLeadingSign |
+                NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture,
+                out var number) || number < 0 || number > int.MaxValue ||
+            number != decimal.Truncate(number))
             throw new InvalidOperationException(
-                "The destination's live $NumVouchers function returned no unambiguous " +
-                "nonnegative count. Tally duplicate authority cannot be verified, " +
-                "so consolidated CREATE was blocked.");
-        return count;
+                "The destination's native Voucher-count function returned no unambiguous " +
+                "nonnegative integer. Tally duplicate authority cannot be verified; " +
+                "consolidated CREATE was blocked.");
+        return (int)number;
     }
 
     private async Task<int> ReadFunctionIntSafeAsync(
