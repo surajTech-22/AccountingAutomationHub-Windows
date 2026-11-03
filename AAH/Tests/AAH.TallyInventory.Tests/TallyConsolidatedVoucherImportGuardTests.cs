@@ -106,6 +106,42 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "Original accounting duplicate check ignored changed source reference or GST DR/CR.");
         Console.WriteLine("PASS: consolidated uses ORIGINAL strict Tally duplicate matcher and 3 signed DR/CR lines.");
 
+        // The same original normal accounting matcher is reused for PURCHASE,
+        // SALES and multi-line JOURNAL, not just the CL019 Debit Note.
+        foreach (var (voucherType, number, reference, party, narration, postings, amount) in new[]
+        {
+            ("Purchase", "TALLY-AUTO-P-25", "PURCHASE-001", "Vendor One", "Purchase bill",
+                new[] { ("Vendor One", -100m), ("Purchase 18%", 100m) }, 100m),
+            ("Sales", "TALLY-AUTO-S-26", "SALES-001", "Customer One", "Sales bill",
+                new[] { ("Customer One", 118m), ("Sales 18%", -118m) }, 118m),
+            ("Journal", "TALLY-AUTO-J-27", "JOURNAL-001", "", "Journal allocation",
+                new[] { ("Expense A", -120m), ("Income B", 120m) }, 120m)
+        })
+        {
+            var liveTest = new TallyVoucherIndexRecord
+            {
+                MasterId = number, VoucherDate = new DateTime(2026, 2, 28),
+                VoucherType = voucherType, VoucherNumber = number,
+                Reference = reference, PartyLedger = party,
+                Narration = narration, Amount = amount,
+                DebitLedgers = string.Join(" | ", postings.Where(p => p.Item2 < 0m).Select(p => p.Item1)),
+                CreditLedgers = string.Join(" | ", postings.Where(p => p.Item2 > 0m).Select(p => p.Item1)),
+                LedgerPostings = postings.Select((p, index) => new TallyLedgerPostingRecord
+                {
+                    Sequence = index + 1,
+                    LedgerName = p.Item1,
+                    SignedAmount = p.Item2, IsDebit = p.Item2 < 0m
+                }).ToArray()
+            };
+            if (!TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedSource(
+                    liveTest, new DateTime(2026, 2, 28), voucherType, reference,
+                    party, narration, postings.Select(p => (p.Item1, p.Item2)).ToArray()))
+                throw new InvalidOperationException(
+                    "Existing normal Tally accounting matcher did not recognize " +
+                    voucherType + " under an auto-numbered native MASTERID.");
+        }
+        Console.WriteLine("PASS: consolidated Purchase/Sales/Journal reuse normal exact signed ledger safety.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
