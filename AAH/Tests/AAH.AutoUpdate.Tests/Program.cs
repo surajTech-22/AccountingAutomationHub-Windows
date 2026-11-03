@@ -261,6 +261,6 @@ Require(desktopUpdaterSource.Contains(
         desktopUpdaterSource.Contains("await Task.Delay(TimeSpan.FromSeconds(30))",
             StringComparison.Ordinal),
     "Streaming updater or bounded host retry could hold mutex / loop indefinitely.");
-Pass("updater host download and failed-host recovery are bounded, not recurring polling");
+Console.WriteLine("PASS: updater host download and failed-host recovery are bounded, not recurring polling");
 
 Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
