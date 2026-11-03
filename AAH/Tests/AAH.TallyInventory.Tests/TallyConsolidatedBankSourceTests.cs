@@ -2,6 +2,8 @@ using System.Collections;
 using System.Reflection;
 using System.Xml.Linq;
 using AccountingAutomationHub.Application.Banking;
+using AccountingAutomationHub.Application.Masters;
+using AccountingAutomationHub.Domain.Masters;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Infrastructure.Tally;
@@ -77,6 +79,44 @@ internal static class TallyConsolidatedBankSourceTests
         Check(Prepare(repo, client, from, to).Count == 1,
             "unchanged bank source was not deterministic");
         Check(bank.Writes == 0, "offline bank source mutated bank repository");
+
+        // Use the SAME original BuildRequiredLedgerSpecs Master-first bank
+        // grouping as individual Tally Bank import; this is the linkage the
+        // old consolidated wrapper skipped (and then falsely required the
+        // Ledger to already exist as an explicit branch Master).
+        bank.Mappings.Add(new BankLedgerMapping
+        {
+            ClientId = 19, FinancialYear = client.FinancialYear,
+            LedgerName = "Office Expenses",
+            MasterGroup = "Indirect Expenses",
+            Status = "Mapped",
+            UpdatedUtc = new DateTime(2026, 11, 3)
+        });
+        var masters = DispatchProxy.Create<IMasterRepository, SafeMasterReadOnlyFake>();
+        var masterStore = (SafeMasterReadOnlyFake)(object)masters;
+        var prepareMethod = typeof(TallyBankVoucherImportService).GetMethod(
+            "PrepareOfflineConsolidatedBankVouchers",
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Bank original preparation missing");
+        var opaquePrepared = prepareMethod.Invoke(null, [repo, client, from, to]);
+        var originalMasterMethod = typeof(TallyBankVoucherImportService).GetMethod(
+            "ReadOriginalOfflineBankLedgerAuthorities",
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "The wrapper does not link the original Bank Ledger Mapping/Group rules");
+        var authority = ((IEnumerable)(originalMasterMethod.Invoke(
+            null, [repo, masters, client, opaquePrepared])
+            ?? throw new InvalidOperationException("Original Bank master authority returned null")))
+            .Cast<object>().ToArray();
+        var mappedLedger = authority.FirstOrDefault(item =>
+            item.GetType().GetField("Item1")?.GetValue(item)?.ToString() == "Office Expenses");
+        Check(mappedLedger is not null &&
+              mappedLedger.GetType().GetField("Item2")?.GetValue(mappedLedger)?.ToString() ==
+                  "Indirect Expenses" &&
+              (bool)(mappedLedger.GetType().GetField("Item3")?.GetValue(mappedLedger) ?? false),
+            "Original Bank Ledger Mapping with saved Group did not supply permitted Master authority");
+        Check(masterStore.Writes == 0 && bank.Writes == 0,
+            "Read-only consolidated preview wrote Ledger Mapping, Master or Bank rows");
 
         // One genuine same-day matched transfer: the normal Bank DR/CR
         // classifier produces two mirrored Contra intents if asked per row.
@@ -236,6 +276,7 @@ public class SafeBankReadOnlyFake : DispatchProxy
     public List<BankTransactionRecord> Rows { get; set; } = [];
     public List<BankAccountRecord> Accounts { get; set; } = [];
     public List<BankTransferMatch> Matches { get; set; } = [];
+    public List<BankLedgerMapping> Mappings { get; set; } = [];
     public int Writes { get; private set; }
 
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
@@ -244,7 +285,22 @@ public class SafeBankReadOnlyFake : DispatchProxy
         if (name == "GetTransactions") return Rows;
         if (name == "GetAccounts") return Accounts;
         if (name == "GetTransferMatches") return Matches;
+        if (name == "GetLedgerMappings") return Mappings;
         Writes++;
         throw new InvalidOperationException("Offline Bank attempted unexpected operation: " + name);
+    }
+}
+
+public class SafeMasterReadOnlyFake : DispatchProxy
+{
+    public List<MasterRecord> Rows { get; set; } = [];
+    public int Writes { get; private set; }
+
+    protected override object? Invoke(MethodInfo? method, object?[]? args)
+    {
+        if (method?.Name == "Get") return Rows;
+        Writes++;
+        throw new InvalidOperationException(
+            "Offline Bank requested an unexpected master operation: " + method?.Name);
     }
 }
