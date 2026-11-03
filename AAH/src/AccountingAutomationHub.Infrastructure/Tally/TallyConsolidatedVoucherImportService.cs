@@ -313,6 +313,21 @@ public sealed class TallyConsolidatedVoucherImportService(
         foreach (var expected in source)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (skipped.Contains(expected.SourceAnchor))
+                continue;
+
+            // Existing normal AAH source lifecycle: persist CreatePending
+            // BEFORE the potentially mutating network request. A transport
+            // failure or lost Tally response must never become an unbound new
+            // source that is automatically sent again.
+            tallyRepository.StageSourceBindingChange(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                expected.SourceAnchor, expected.SourceAnchor,
+                string.Empty, string.Empty, expected.ContentHash,
+                expected.DesiredVersion, "CREATE", "CreatePending",
+                "Full-FY live Tally duplicate and master-first checks passed. " +
+                "Exactly one original branch voucher is about to be submitted.");
+
             // A single in-flight voucher is the only permissible import unit.
             // Failure after POST is ambiguous; never automatically retry.
             var sb = new StringBuilder();
@@ -320,8 +335,48 @@ public sealed class TallyConsolidatedVoucherImportService(
             sb.AppendLine(new XElement("TALLYMESSAGE", new XElement(expected.Xml))
                 .ToString(SaveOptions.DisableFormatting));
             TallyExcelParityXmlWriter.EndErp9DataImport(sb);
-            var response = await ImportWithEvidenceAsync(
-                "Voucher-" + expected.Number, sb.ToString(), cancellationToken).ConfigureAwait(false);
+            TallyImportResponse response;
+            try
+            {
+                response = await ImportWithEvidenceAsync(
+                    "Voucher-" + expected.Number, sb.ToString(), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                tallyRepository.UpsertSourceBinding(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    expected.SourceAnchor, expected.SourceAnchor,
+                    string.Empty, string.Empty, expected.ContentHash,
+                    "AcceptedAwaitingMasterId",
+                    "Tally transport result unknown after CREATE request: " + exception.Message);
+                throw;
+            }
+
+            if (response.Created == 1)
+            {
+                // A successful Tally CREATE is an accounting event, even if
+                // the later live readback fails (CL019: CREATED=1/LASTVCHID=2).
+                // Commit its accepted state BEFORE asking Tally for another
+                // read-only Voucher collection. Re-export cannot resend.
+                tallyRepository.UpsertSourceBinding(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    expected.SourceAnchor, expected.SourceAnchor,
+                    response.LastVoucherId, string.Empty, expected.ContentHash,
+                    "AcceptedAwaitingVerification",
+                    "Tally CREATED=1; LASTVCHID=" + response.LastVoucherId +
+                    "; awaiting exact full Voucher DR/CR readback.");
+                try { tallyAcknowledgedCreate?.Invoke(); }
+                catch { /* diagnostic observer must never change accounting state */ }
+            }
+            else
+            {
+                tallyRepository.UpsertSourceBinding(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    expected.SourceAnchor, expected.SourceAnchor,
+                    string.Empty, string.Empty, expected.ContentHash,
+                    "AcceptedAwaitingMasterId",
+                    "Tally did not confirm one CREATE; reply requires live reconciliation.");
+            }
             if (response.Created != 1 || response.Altered != 0 || response.Deleted != 0 ||
                 response.Ignored != 0 || response.Errors != 0 || response.Exceptions != 0 ||
                 !string.IsNullOrWhiteSpace(response.LineError))
@@ -331,19 +386,53 @@ public sealed class TallyConsolidatedVoucherImportService(
 
             var after = await tally.ExportVoucherAuthorityFreshAsync(
                 destination, expected.Date, expected.Date, cancellationToken).ConfigureAwait(false);
-            var matches = after.Index.Where(x => x.VoucherDate?.Date == expected.Date &&
+            // Exact Tally Reference is the source document identity; Tally
+            // can assign a different VOUCHERNUMBER. Reuse the normal strict
+            // accounting classifier and validate the same MASTERID in the
+            // complete original full XML readback.
+            var matches = after.Index.Where(x =>
                 IgnoreCase.Equals(x.VoucherType, expected.Type) &&
-                IgnoreCase.Equals(x.VoucherNumber, expected.Number)).ToArray();
+                x.VoucherDate?.Date == expected.Date &&
+                ((expected.Reference.Length > 0 &&
+                  IgnoreCase.Equals(x.Reference, expected.Reference)) ||
+                 IgnoreCase.Equals(x.VoucherNumber, expected.Number) ||
+                 (response.LastVoucherId.Length > 0 &&
+                  IgnoreCase.Equals(x.MasterId, response.LastVoucherId)))).ToArray();
             if (matches.Length != 1 || string.IsNullOrWhiteSpace(matches[0].MasterId))
-                throw new InvalidOperationException("Tally did not read back one durable MASTERID for " +
-                    expected.Number + ". No automatic retry is safe.");
-            var full = after.Full.Where(x => IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
-            if (full.Length != 1 || !SamePostings(expected.Postings,
+                throw new InvalidOperationException(
+                    "Tally CREATED consolidated source " + expected.SourceAnchor +
+                    " (LASTVCHID=" + response.LastVoucherId +
+                    ") but one durable exact live MASTERID was not found. " +
+                    "The existing AcceptedAwaitingVerification state prevents resend.");
+            var full = after.Full.Where(x =>
+                IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
+            if (full.Length != 1 ||
+                !TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                    matches[0], expected.Date, expected.Type, expected.Reference,
+                    Value(expected.Xml, "NARRATION"), expected.Postings) ||
+                !SamePostings(expected.Postings,
                     ReadPostings(TallyConsolidatedXmlTextSafety.ParseDocument(
                         full[0].OriginalXml, "live voucher posting readback").Root!
                         .DescendantsAndSelf().First(x => Is(x, "VOUCHER")))))
-                throw new InvalidOperationException("Live Tally DR/CR postings differ from branch XML for " +
-                    expected.Number + ". Import stopped; inspect posted voucher before continuing.");
+                throw new InvalidOperationException(
+                    "Tally accepted the CREATE but exact live Voucher MASTERID/DR/CR " +
+                    "verification failed for " + expected.SourceAnchor +
+                    ". The accepted state is retained; NO retry or ALTER is authorized.");
+
+            tallyRepository.ConfirmSourceBindingVersion(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                expected.SourceAnchor, expected.SourceAnchor,
+                matches[0].MasterId, matches[0].Guid,
+                expected.ContentHash, expected.DesiredVersion,
+                long.TryParse(matches[0].AlterId, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var verifiedAlterId)
+                    ? verifiedAlterId : 0L,
+                "Tally CREATE and full signed DR/CR were verified at destination " +
+                "MASTERID " + matches[0].MasterId + "; auto-number preserved.");
+            tallyRepository.RecordImportFingerprints(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                new[] { (expected.SourceAnchor, expected.ContentHash) },
+                "Imported", "Tally accepted and live MASTERID/DRCR confirmed.");
             imported++;
             // The caller needs an accurate partial-success count if a later
             // voucher fails. This fires only AFTER exact live MASTERID/DR/CR
@@ -352,8 +441,10 @@ public sealed class TallyConsolidatedVoucherImportService(
             catch { /* diagnostic-only callback */ }
         }
         return new TallyConsolidatedVoucherImportResult(imported, createdMasters,
-            "Tally confirmed and read back each consolidated voucher with its original DR/CR entries. " +
-            "No branch amounts or GST journals were recalculated.");
+            "Consolidated import used existing AAH source bindings: verified CREATE " +
+            imported.ToString(CultureInfo.InvariantCulture) + ", exact live duplicates skipped " +
+            skipped.Count.ToString(CultureInfo.InvariantCulture) +
+            ". Original branch DR/CR and GST were unchanged; no automatic ALTER or DELETE.");
     }
 
     private static void RequireDestination(XDocument doc, string name)
