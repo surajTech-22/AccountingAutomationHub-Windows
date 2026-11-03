@@ -737,26 +737,47 @@ internal static class Program
         return false;
     }
 
-    // Pure, deterministic evidence gate; the updater cannot authorize a kill
-    // from a PID alone, a release hint, an idle sample, or partial cleanup.
-    // Timestamp + PID + ordered milestones must ALL belong to this process
-    // lifetime, including successful Tally/cache disposal and final lock release.
+    // Pure deterministic evidence gates: neither a PID alone nor an idle
+    // signal authorizes process termination. The complete ordered shutdown
+    // evidence must match this exact process lifetime and executable path.
     internal static bool HasCompletedVerifiedExitEvidence(
         string log, int pid, DateTimeOffset startedUtc, DateTimeOffset observedUtc,
-        out DateTimeOffset completedUtc)
+        out DateTimeOffset completedUtc) =>
+        HasOrderedCompletedExitEvidence(log, pid, startedUtc, observedUtc,
+            new[]
+            {
+                "Verified updater requested graceful exit; new automation intake quiesced.",
+                "Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.",
+                "Application shutdown started; stopping Accounting/Tally runtime.",
+                "Tally coordinator disposal completed.",
+                "Workspace cache disposal completed.",
+                "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
+                "Process exit releasing final single-instance ownership."
+            }, out completedUtc);
+
+    // Legacy explicit Exit Completely may also strand foreground helper threads
+    // after its original Tally/automation/distributed idle gate, WAL cleanup and
+    // final OnExit lock release. This is NOT ordinary X-to-tray.
+    internal static bool HasCompletedSafeUserExitEvidence(
+        string log, int pid, DateTimeOffset startedUtc, DateTimeOffset observedUtc,
+        out DateTimeOffset completedUtc) =>
+        HasOrderedCompletedExitEvidence(log, pid, startedUtc, observedUtc,
+            new[]
+            {
+                "User requested Exit Completely: no in-flight accounting/Tally work.",
+                "Application shutdown started; stopping Accounting/Tally runtime.",
+                "Tally coordinator disposal completed.",
+                "Workspace cache disposal completed.",
+                "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
+                "Process exit releasing final single-instance ownership."
+            }, out completedUtc);
+
+    private static bool HasOrderedCompletedExitEvidence(
+        string log, int pid, DateTimeOffset startedUtc, DateTimeOffset observedUtc,
+        string[] markers, out DateTimeOffset completedUtc)
     {
         completedUtc = default;
-        if (pid <= 0 || startedUtc > observedUtc) return false;
-        var markers = new[]
-        {
-            "Verified updater requested graceful exit; new automation intake quiesced.",
-            "Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.",
-            "Application shutdown started; stopping Accounting/Tally runtime.",
-            "Tally coordinator disposal completed.",
-            "Workspace cache disposal completed.",
-            "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
-            "Process exit releasing final single-instance ownership."
-        };
+        if (pid <= 0 || startedUtc > observedUtc || markers.Length == 0) return false;
         var stage = 0;
         var prefix = " PID " + pid.ToString(CultureInfo.InvariantCulture) + ": ";
         foreach (var raw in log.Split('\n'))
@@ -771,7 +792,9 @@ internal static class Program
                 when > observedUtc.AddSeconds(2)) continue;
             var message = line[(pos + prefix.Length)..];
             if (message.Contains("Verified updater deferred:", StringComparison.Ordinal) ||
-                message.Contains("Verified updater shutdown check failed", StringComparison.Ordinal))
+                message.Contains("Verified updater shutdown check failed", StringComparison.Ordinal) ||
+                message.StartsWith("User exit deferred:", StringComparison.Ordinal) ||
+                message.StartsWith("Exit Completely validation failed", StringComparison.Ordinal))
             {
                 stage = 0;
                 completedUtc = default;
@@ -825,8 +848,11 @@ internal static class Program
             var processStart = new DateTimeOffset(process.StartTime.ToUniversalTime());
             var now = DateTimeOffset.UtcNow;
             var audit = ReadBoundedShutdownLog();
-            if (!HasCompletedVerifiedExitEvidence(
-                audit, process.Id, processStart, now, out var completedAt))
+            var verifiedUpdaterComplete = HasCompletedVerifiedExitEvidence(
+                audit, process.Id, processStart, now, out var completedAt);
+            if (!verifiedUpdaterComplete &&
+                !HasCompletedSafeUserExitEvidence(
+                    audit, process.Id, processStart, now, out completedAt))
                 return false;
             if (now - completedAt < TimeSpan.FromSeconds(5))
                 return false; // Give WPF/foreground helpers a chance to exit.
