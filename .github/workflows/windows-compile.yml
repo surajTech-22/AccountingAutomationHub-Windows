@@ -49,6 +49,12 @@ jobs:
           python ci/test_aah_bank_ocr_summary_recheck.py
           if ($LASTEXITCODE -ne 0) { throw 'AAH source-backed summary-region OCR regression.' }
 
+      - name: Reproduce repeated native PowerShell installer staging and rollback safety
+        shell: powershell
+        run: |
+          & .\\ci\\test_native_transaction_staging.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Native transactional updater regression failed.' }
+
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
