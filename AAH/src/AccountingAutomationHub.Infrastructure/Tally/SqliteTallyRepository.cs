@@ -2437,17 +2437,17 @@ public sealed class SqliteTallyRepository
     /// This is presentation authority ONLY. It cannot classify a voucher as
     /// safe to CREATE, ALTER, DELETE or retry.
     /// </summary>
-    public IReadOnlyDictionary<string, string> ReadConsolidatedVoucherStates(
+    public IReadOnlyDictionary<string, (string State, string LastVerifiedHash)> ReadConsolidatedVoucherStates(
         long clientId, string financialYear, string companyKey)
     {
-        var rows = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rows = new Dictionary<string, (string State, string LastVerifiedHash)>(StringComparer.OrdinalIgnoreCase);
         if (clientId <= 0 || string.IsNullOrWhiteSpace(financialYear) ||
             string.IsNullOrWhiteSpace(companyKey)) return rows;
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT SourceAnchor, State
+            SELECT SourceAnchor, State, LastContentHash
             FROM TallySourceBindings
             WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
               AND CompanyKey=$CompanyKey COLLATE NOCASE
@@ -2460,7 +2460,9 @@ public sealed class SqliteTallyRepository
         while (reader.Read())
         {
             var anchor = reader.GetString(0).Trim();
-            if (anchor.Length > 0) rows[anchor] = reader.GetString(1).Trim();
+            if (anchor.Length > 0)
+                rows[anchor] = (reader.GetString(1).Trim(),
+                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim());
         }
         return rows;
     }
