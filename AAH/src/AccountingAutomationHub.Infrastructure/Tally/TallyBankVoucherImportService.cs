@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Text;
 using AccountingAutomationHub.Application.Clients;
+using AccountingAutomationHub.Application.Banking;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Domain.Common;
@@ -39,6 +40,165 @@ public sealed class TallyBankVoucherImportService
         _tallyHttpService = tallyHttpService;
         _liveMasterSyncService = liveMasterSyncService;
         _clientPreferences = clientPreferences;
+    }
+
+    /// <summary>
+    /// READ-ONLY offline adapter for the existing Bank voucher treatment rules.
+    /// It never calls ImportAsync, changes a Bank row, runs duplicate DELETE,
+    /// links a Tally company, or assigns a destination MASTERID. Instead it
+    /// supplies the already-proven Bank writer's exact two signed posting
+    /// sides to the ordinary branch XML generator. Consolidation then uses
+    /// its own independent destination MASTERID/readback authority.
+    /// </summary>
+    internal sealed record OfflineConsolidatedBankVoucher(
+        long TransactionRowId,
+        TallyBankCreateAlterExpectation Expectation,
+        string BankLedger,
+        string CounterpartLedger)
+    {
+        public string SourceNumber =>
+            "BANK-" + TransactionRowId.ToString(CultureInfo.InvariantCulture);
+    }
+
+    internal static IReadOnlyList<OfflineConsolidatedBankVoucher>
+        PrepareOfflineConsolidatedBankVouchers(
+            IBankingRepository bankingRepository, ClientProfile client,
+            DateTime fromDate, DateTime toDate)
+    {
+        ArgumentNullException.ThrowIfNull(bankingRepository);
+        ArgumentNullException.ThrowIfNull(client);
+        var active = bankingRepository
+            .GetTransactions(client.Id, client.FinancialYear, includeArchived: false)
+            .Where(x => !x.RecordStatus.StartsWith("Archived",
+                StringComparison.OrdinalIgnoreCase) &&
+                x.TransactionDate.Date >= fromDate.Date &&
+                x.TransactionDate.Date <= toDate.Date)
+            .OrderBy(x => x.TransactionDate.Date).ThenBy(x => x.Id).ToArray();
+        if (active.Length == 0) return [];
+        var all = bankingRepository
+            .GetTransactions(client.Id, client.FinancialYear, includeArchived: true)
+            .GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First());
+        var accounts = bankingRepository.GetAccounts(client.Id, client.FinancialYear)
+            .ToDictionary(x => x.Id);
+        var matchedTransfers = new Dictionary<long, BankTransferMatch>();
+        foreach (var match in bankingRepository.GetTransferMatches(client.Id, client.FinancialYear)
+                     .Where(x => x.Status.Equals("Matched", StringComparison.OrdinalIgnoreCase)))
+        {
+            matchedTransfers[match.SourceTransactionId] = match;
+            matchedTransfers[match.TargetTransactionId] = match;
+        }
+        // Exactly the established payment-return pair exclusion from the
+        // individual Bank importer. An excluded net-zero pair is not a voucher.
+        var rejectedPairs = ExcelLedgerMappingParser
+            .BuildRejectReversalTransactionIds(all.Values
+                .Where(x => !x.RecordStatus.StartsWith("Archived",
+                    StringComparison.OrdinalIgnoreCase))).ToHashSet();
+        var result = new List<OfflineConsolidatedBankVoucher>();
+        var issues = new List<string>();
+        var seenRowIds = new HashSet<long>();
+        foreach (var transaction in active)
+        {
+            if (!seenRowIds.Add(transaction.Id) || transaction.Id <= 0)
+            {
+                issues.Add("Duplicate/invalid Bank source transaction row ID " + transaction.Id);
+                continue;
+            }
+            if (rejectedPairs.Contains(transaction.Id))
+                continue;
+            if (!TryNormalizeMode(transaction.Mode, out var mode))
+            {
+                issues.Add("Bank row " + transaction.Id + ": voucher mode not finalized");
+                continue;
+            }
+            if (!accounts.TryGetValue(transaction.BankAccountId, out var account) ||
+                string.IsNullOrWhiteSpace(account.AuthorityName))
+            {
+                issues.Add("Bank row " + transaction.Id + ": missing source Bank Account ledger");
+                continue;
+            }
+            var bankLedger = account.AuthorityName.Trim();
+            var mapped = (transaction.LedgerName ?? string.Empty).Trim();
+            if (mapped.Length == 0)
+            {
+                // Manual Bank export requires a FINAL mapped ledger. The
+                // auto-import-only Suspense exception is not implicit here.
+                issues.Add("Bank row " + transaction.Id + ": Final Ledger is not mapped");
+                continue;
+            }
+            var counterpart = NormalizeCounterpartLedger(
+                mapped, BankingPreferenceKeys.DefaultEmptyLedgerName);
+            if (IsPaymentReturnTransaction(transaction))
+            {
+                if (TryResolvePaymentReturnTreatment(
+                    transaction, all, bankLedger, out var corrected, out _))
+                {
+                    mode = transaction.Credit > 0 ? "Receipt" : "Payment";
+                    counterpart = corrected;
+                }
+                else if (TallyMasterNamesEquivalent(bankLedger, counterpart))
+                {
+                    issues.Add("Bank row " + transaction.Id +
+                        ": payment return needs a distinct original counterpart");
+                    continue;
+                }
+            }
+            else if (TryResolveInterbankTreatment(transaction, accounts, all,
+                         matchedTransfers, out var transferLedger))
+            {
+                mode = "Contra";
+                counterpart = transferLedger;
+            }
+            if (string.IsNullOrWhiteSpace(counterpart) ||
+                TallyMasterNamesEquivalent(bankLedger, counterpart))
+            {
+                issues.Add("Bank row " + transaction.Id +
+                    ": Bank and counterpart cannot be the same Ledger");
+                continue;
+            }
+            if (transaction.Amount <= 0 ||
+                transaction.Debit > 0 && transaction.Credit > 0)
+            {
+                issues.Add("Bank row " + transaction.Id +
+                    ": debit/credit amount is zero or ambiguous");
+                continue;
+            }
+            // The original bank writer's DR/CR algorithm, not a new
+            // consolidation tax/accounting calculation.
+            var originalIntent = new PreparedBankVoucher(
+                transaction, mode, bankLedger, counterpart,
+                TallyVoucherFingerprint.BuildSourceKey(
+                    client.Id, client.FinancialYear,
+                    transaction.TransactionId, transaction.Id),
+                string.Empty, (transaction.ReferenceNumber ?? string.Empty).Trim(),
+                string.Empty, string.Empty);
+            var lines = BuildErp9Entries(originalIntent).ToArray();
+            if (lines.Length != 2 ||
+                lines.Count(x => x.IsDebit) != 1 ||
+                lines.Count(x => !x.IsDebit) != 1 ||
+                Math.Abs(lines.Where(x => x.IsDebit).Sum(x => x.Amount) -
+                         lines.Where(x => !x.IsDebit).Sum(x => x.Amount)) > 0.01m)
+            {
+                issues.Add("Bank row " + transaction.Id +
+                    ": original two-sided Bank DR/CR is unbalanced");
+                continue;
+            }
+            var expectation = new TallyBankCreateAlterExpectation(
+                transaction.TransactionDate.Date, mode,
+                (transaction.ReferenceNumber ?? string.Empty).Trim(),
+                transaction.Narration ?? string.Empty, lines, "");
+            result.Add(new OfflineConsolidatedBankVoucher(
+                transaction.Id, expectation, bankLedger, counterpart));
+        }
+        if (issues.Count > 0)
+            throw new InvalidOperationException(
+                "Consolidated Bank uses the existing manual Bank voucher rules, " +
+                "but " + issues.Count.ToString(CultureInfo.InvariantCulture) +
+                " of " + active.Length.ToString(CultureInfo.InvariantCulture) +
+                " source transaction(s) need ledger/mode/transfer review. " +
+                "No partial or unsafe consolidated Bank XML was generated. " +
+                string.Join(" | ", issues.Take(12)) +
+                (issues.Count > 12 ? " | ..." : ""));
+        return result;
     }
 
     public async Task<TallyBankImportResult> ImportAsync(
