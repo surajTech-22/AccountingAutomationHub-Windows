@@ -2704,6 +2704,41 @@ public sealed class MainWindowViewModel :
             "Accepted/pending sources are never automatically resent.";
     }
 
+    // User-invoked READ-ONLY reconciliation of accepted, unverified Tally
+    // CREATEs (CL019 LASTVCHID=337). Uses the SAME existing Tally link,
+    // staged original branch XML and source-binding repository, without
+    // calling the Voucher Import API or posting additional source rows.
+    private async Task<int> VerifyConsolidatedAcceptedReadOnlyAsync(
+        long parentId, string financialYear, bool separateTypes, bool separateCash)
+    {
+        var prepared = await GenerateConsolidatedPreparedXmlAsync(
+            parentId, financialYear, separateTypes, separateCash);
+        var client = _clientContext.CurrentClient;
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        if (client is null || client.Id != parentId ||
+            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            link is null || link.ClientId != parentId ||
+            _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
+            _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
+            throw new InvalidOperationException(
+                "Read-only reconciliation requires the same linked consolidated Client/FY and idle Tally.");
+        var company = ResolveConsolidatedLinkedDestination(link, financialYear);
+        var importer = new TallyConsolidatedVoucherImportService(
+            _tallyHttpService, tallyRepository: _tallyRepository);
+        try
+        {
+            return await importer.ReconcileAcceptedReadOnlyAsync(
+                link, company, prepared, accountingFinancialYear: financialYear);
+        }
+        finally
+        {
+            // Read-only refresher; no change to the established accounting
+            // import gate, no separate background voucher import stream.
+            _consolidatedTallyImportPage?.RefreshTallyImportProgress();
+            _consolidatedDashboardPage?.RefreshTallyImportProgress();
+        }
+    }
+
     private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
@@ -2838,6 +2873,8 @@ public sealed class MainWindowViewModel :
                         (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash),
                         (types, cash) => GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash),
                         (types, cash) => ExportConsolidatedVouchersAsync(client.Id, client.FinancialYear, types, cash),
+                        (types, cash) => VerifyConsolidatedAcceptedReadOnlyAsync(
+                            client.Id, client.FinancialYear, types, cash),
                         () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
             }
 
