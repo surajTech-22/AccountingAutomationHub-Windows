@@ -4146,6 +4146,68 @@ public sealed class TallyAccountingVoucherExportService
         TallyExcelParityXmlWriter.EndVoucher(builder);
     }
 
+    /// <summary>
+    /// Consolidated wrapper adapter for the SAME normal AAH MASTERID-addressed
+    /// voucher ALTER writer below. The branch has ALREADY prepared every
+    /// accounting/GST/DRCR line; this only substitutes the consolidated
+    /// destination MASTERID and preserves Tally's actual Voucher Number.
+    /// All Previous -> Desired and accepted-write decisions belong to the
+    /// caller's original TallySourceBindings / normal Tally readback gates.
+    /// </summary>
+    public static string BuildBoundConsolidatedVoucherAlterXml(
+        string companyName, XElement preparedCreateVoucher,
+        string exactDestinationMasterId, string liveVoucherNumber)
+    {
+        ArgumentNullException.ThrowIfNull(preparedCreateVoucher);
+        if (!preparedCreateVoucher.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals((string?)preparedCreateVoucher.Attribute("ACTION"), "Create",
+                StringComparison.OrdinalIgnoreCase) ||
+            !long.TryParse(exactDestinationMasterId, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var destinationId) || destinationId <= 0 ||
+            preparedCreateVoucher.Attributes().Any(attribute =>
+                attribute.Name.LocalName is "TAGNAME" or "TAGVALUE" or "MASTERID" or "GUID" or "ALTERID"))
+            throw new InvalidOperationException(
+                "Consolidated ALTER requires original prepared CREATE XML and one bound, positive destination MASTERID.");
+        string Field(string key) => preparedCreateVoucher.Elements().FirstOrDefault(
+            element => element.Name.LocalName.Equals(key, StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(companyName) ||
+            !DateTime.TryParseExact(Field("DATE"), "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ||
+            string.IsNullOrWhiteSpace(Field("VOUCHERTYPENAME")))
+            throw new InvalidOperationException("Prepared consolidated voucher is missing date, type or company.");
+        DateTime? refDate = DateTime.TryParseExact(Field("REFERENCEDATE"), "yyyyMMdd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedRefDate)
+                ? parsedRefDate : null;
+        var view = (string?)preparedCreateVoucher.Attribute("OBJVIEW") ??
+            "Accounting Voucher View";
+        var builder = new StringBuilder();
+        TallyExcelParityXmlWriter.BeginErp9DataImport(builder, companyName, "Vouchers");
+        // Reuse the normal explicit-Tally-MASTERID ALTER envelope, not a
+        // second ad-hoc accounting XML writer.
+        BeginVoucherAlter(builder, Field("VOUCHERTYPENAME"), view,
+            date, refDate, Field("REFERENCE"), Field("PARTYLEDGERNAME"),
+            exactDestinationMasterId);
+        if (!string.IsNullOrWhiteSpace(liveVoucherNumber))
+            builder.AppendLine(new XElement("VOUCHERNUMBER", liveVoucherNumber)
+                .ToString(SaveOptions.DisableFormatting));
+        var standardHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "DATE", "REFERENCEDATE", "VOUCHERTYPENAME", "VOUCHERNUMBER",
+            "REFERENCE", "PARTYNAME", "PARTYLEDGERNAME", "BASICBASEPARTYNAME"
+        };
+        foreach (var field in preparedCreateVoucher.Elements())
+        {
+            if (standardHeaders.Contains(field.Name.LocalName)) continue;
+            // Append the PREPARED source children literally, including full
+            // inventory and signed ledger allocations. No amount, tax,
+            // ledger or narration is recomputed here.
+            builder.AppendLine(new XElement(field).ToString(SaveOptions.DisableFormatting));
+        }
+        TallyExcelParityXmlWriter.EndVoucher(builder);
+        TallyExcelParityXmlWriter.EndErp9DataImport(builder);
+        return builder.ToString();
+    }
+
     private static void BeginVoucherAlter(
         StringBuilder builder,
         string voucherType,
