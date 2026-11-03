@@ -145,8 +145,15 @@ public sealed class TallyConsolidatedVoucherImportService(
         // A failed live read means no mutations. No cached branch or destination
         // data may authorize a CREATE against a Tally company.
         var open = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
-        TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+        var liveDestination = TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
             link, destination, open, financialYear);
+        // Consolidated must use the same durable source binding repository as
+        // ordinary Purchase/Sales/Journal/Bank export. It must never fall back
+        // to the former stateless CREATE-only writer.
+        if (tallyRepository is null)
+            throw new InvalidOperationException(
+                "The existing Tally source-binding/version repository was not supplied; " +
+                "consolidated Voucher CREATE is blocked.");
         if (!int.TryParse(financialYear[..Math.Min(4, financialYear.Length)],
             NumberStyles.None, CultureInfo.InvariantCulture, out var firstYear) ||
             firstYear < 1900 || firstYear > 9998)
@@ -155,9 +162,95 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(firstYear + 1, 3, 31);
         if (source.Any(x => x.Date < from || x.Date > to))
             throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
-        var before = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
-            .ConfigureAwait(false);
-        RequireNoCollision(before.Index, source);
+        // Reuse the existing bounded full-company/FY authority path used by
+        // the central Tally coordinator. Unlike the old consolidated one-shot
+        // collection, it checks every month's Voucher MASTERID against its full
+        // object before authorizing any destination CREATE.
+        var before = await tally.ExportFullCompanySnapshotAsync(
+            liveDestination, from, to, cancellationToken).ConfigureAwait(false);
+        if (liveDestination.VoucherCount > 0 && before.Vouchers.Count == 0)
+            throw new InvalidOperationException(
+                "Tally reports existing saved Voucher(s) but the full-FY snapshot " +
+                "returned zero. This is NOT evidence of an empty destination. " +
+                "No consolidated CREATE is safe.");
+        tallyRepository.ReplaceVoucherIndex(
+            link.CompanyKey, financialYear, before.Vouchers);
+        tallyRepository.UpsertVoucherXmlAuthority(
+            link.CompanyKey, financialYear, before.FullVouchers);
+        // Reuse Fix85's normal missing MASTERID detection. An externally
+        // deleted prior Voucher remains held for explicit recovery, not CREATE.
+        tallyRepository.ReconcileMissingVoucherBindingAuthority(
+            link.ClientId, financialYear, link.CompanyKey,
+            before.Vouchers.Select(v => v.MasterId));
+
+        var skipped = new HashSet<string>(IgnoreCase);
+        foreach (var planned in source)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var state = tallyRepository.GetSourceBindingVersionState(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                planned.SourceAnchor);
+            // AAH's durable source anchor survives Tally auto-numbering.
+            // Never equate a new Tally VOUCHERNUMBER with a new source.
+            var candidates = before.Vouchers.Where(live =>
+                IgnoreCase.Equals(live.VoucherType, planned.Type) &&
+                ((planned.Reference.Length > 0 &&
+                  IgnoreCase.Equals(live.Reference, planned.Reference)) ||
+                 IgnoreCase.Equals(live.VoucherNumber, planned.Number) ||
+                 (state?.MasterId.Length > 0 &&
+                  IgnoreCase.Equals(live.MasterId, state.MasterId)))).ToArray();
+
+            if (candidates.Length > 1)
+                throw new InvalidOperationException(
+                    "Consolidated source " + planned.SourceAnchor +
+                    " matches multiple existing destination MASTERIDs. " +
+                    "Neither CREATE nor ALTER nor DELETE is allowed without reconciliation.");
+            if (candidates.Length == 1)
+            {
+                var candidate = candidates[0];
+                if (!TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                    candidate, planned.Date, planned.Type, planned.Reference,
+                    Value(planned.Xml, "NARRATION"), planned.Postings))
+                    throw new InvalidOperationException(
+                        "Consolidated source " + planned.SourceAnchor +
+                        " already exists in Tally with conflicting date, reference, " +
+                        "narration or exact ledger DR/CR. Preserving the existing " +
+                        "MASTERID; no unsafe CREATE, ALTER or DELETE.");
+                if (state?.MasterId.Length > 0 &&
+                    !IgnoreCase.Equals(state.MasterId, candidate.MasterId))
+                    throw new InvalidOperationException(
+                        "Previously bound consolidated source " + planned.SourceAnchor +
+                        " changed destination MASTERID. Exact rebind must be reviewed.");
+                // Reuse the normal exporter’s verified source-version commit.
+                // An original first-time import that Tally already holds is
+                // adopted by exact live authority without another Tally POST.
+                tallyRepository.ConfirmSourceBindingVersion(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    planned.SourceAnchor, planned.SourceAnchor,
+                    candidate.MasterId, candidate.Guid, planned.ContentHash,
+                    planned.DesiredVersion,
+                    long.TryParse(candidate.AlterId, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out var alterId) ? alterId : 0L,
+                    "Existing consolidated source fully matched live Tally by " +
+                    "type/date/reference/full DRCR; no import, ALTER or DELETE.");
+                tallyRepository.RecordImportFingerprints(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    new[] { (planned.SourceAnchor, planned.ContentHash) },
+                    "Imported", "Existing live destination voucher verified; not resent.");
+                skipped.Add(planned.SourceAnchor);
+                continue;
+            }
+            if (state is not null ||
+                tallyRepository.HasImportedSourceFingerprint(
+                    link.ClientId, financialYear, link.CompanyKey,
+                    SourceEntityType, planned.SourceAnchor))
+                throw new InvalidOperationException(
+                    "Consolidated source " + planned.SourceAnchor +
+                    " has previous accepted/pending/deleted/verified Tally evidence " +
+                    "but no exact live matching MASTERID. The existing AAH " +
+                    "source-binding and explicit Restore-to-Tally safety gates " +
+                    "forbid an automatic second CREATE.");
+        }
 
         var available = await ReadMasterAuthorityAsync(destination, cancellationToken).ConfigureAwait(false);
         // The compulsory branch groups and optional voucher types must have
@@ -199,9 +292,22 @@ public sealed class TallyConsolidatedVoucherImportService(
 
         // All masters must be live and parent-verified before the first voucher.
         foreach (var master in masters) RequireMaster(available, master);
-        var recheck = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
-            .ConfigureAwait(false);
-        RequireNoCollision(recheck.Index, source);
+        // One fresh read after master-first, before voucher writes. If the
+        // source authority changed during master creation, never continue
+        // from an earlier duplicate decision.
+        var recheck = await tally.ExportVoucherAuthorityFreshAsync(
+            destination, from, to, cancellationToken).ConfigureAwait(false);
+        var originalIds = before.Vouchers.Select(v => v.MasterId)
+            .ToHashSet(IgnoreCase);
+        var currentIds = recheck.Index.Select(v => v.MasterId)
+            .ToHashSet(IgnoreCase);
+        if (!originalIds.SetEquals(currentIds))
+            throw new InvalidOperationException(
+                "Live Tally Voucher authority changed during consolidated " +
+                "master-first verification. The import is blocked before CREATE; " +
+                "refresh the normal duplicate/version snapshot.");
+        RequireNoCollision(recheck.Index,
+            source.Where(v => !skipped.Contains(v.SourceAnchor)).ToArray());
 
         var imported = 0;
         foreach (var expected in source)
