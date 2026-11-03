@@ -20,7 +20,7 @@ function Get-AAHChildPath([string]$Root, [string]$Relative) {
 # Get-FileHash cmdlet for every one of hundreds of release files. A stalled
 # hash must fail BEFORE a journal or installed-file mutation.
 function Get-AAHFileHash([string]$Path) {
-    $stream = New-Object System.IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read, 1048576)
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $hasher = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
     $buffer = New-Object byte[] 1048576
     $clock = [Diagnostics.Stopwatch]::StartNew()
