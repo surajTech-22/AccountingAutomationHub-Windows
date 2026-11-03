@@ -15,6 +15,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
     private readonly Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> _prepareXml;
     private readonly Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> _importVouchers;
+    private readonly Func<bool, bool, Task<int>> _verifyAcceptedReadOnly;
+    private string _acceptedVerificationStatus = "Any Tally-accepted voucher awaiting live MASTERID can be verified read-only; this never resends a voucher.";
     private readonly Func<string> _tallyProgressReader;
     private string _tallyImportProgressStatus = "Checking the original Tally source-binding progress...";
     private bool _separateVoucherTypes;
@@ -28,6 +30,7 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters,
         Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml,
         Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> importVouchers,
+        Func<bool, bool, Task<int>> verifyAcceptedReadOnly,
         Func<string> tallyProgressReader)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
@@ -40,10 +43,13 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
         _prepareXml = prepareXml ?? throw new ArgumentNullException(nameof(prepareXml));
         _importVouchers = importVouchers ?? throw new ArgumentNullException(nameof(importVouchers));
+        _verifyAcceptedReadOnly = verifyAcceptedReadOnly
+            ?? throw new ArgumentNullException(nameof(verifyAcceptedReadOnly));
         _tallyProgressReader = tallyProgressReader
             ?? throw new ArgumentNullException(nameof(tallyProgressReader));
         RefreshTallyImportProgress();
         ImportConsolidatedVouchersCommand = new AsyncRelayCommand(ImportVouchersAsync);
+        VerifyAcceptedReadOnlyCommand = new AsyncRelayCommand(VerifyAcceptedReadOnlyAsync);
         PrepareConsolidatedXmlCommand = new AsyncRelayCommand(PrepareXmlAsync);
         ImportBranchMastersCommand = new AsyncRelayCommand(ImportMastersAsync);
     }
@@ -65,6 +71,12 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public AsyncRelayCommand ImportBranchMastersCommand { get; }
     public AsyncRelayCommand PrepareConsolidatedXmlCommand { get; }
     public AsyncRelayCommand ImportConsolidatedVouchersCommand { get; }
+    public AsyncRelayCommand VerifyAcceptedReadOnlyCommand { get; }
+    public string AcceptedVerificationStatus
+    {
+        get => _acceptedVerificationStatus;
+        private set => SetProperty(ref _acceptedVerificationStatus, value);
+    }
     private string _voucherImportStatus = "Import requires a verified Tally link, master-first readback and collision-free prepared branch vouchers. A failed readback will stop without retry.";
     public string VoucherImportStatus { get => _voucherImportStatus; private set => SetProperty(ref _voucherImportStatus, value); }
     private string _preparedXmlStatus = "Collects the existing prepared XML from every branch. No calculations except explicitly matched interbank transfers.";
@@ -118,6 +130,26 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         {
             // The import can POST hundreds of vouchers before a single readback
             // fails; always reload the authoritative bound source statuses.
+            RefreshTallyImportProgress();
+        }
+    }
+
+    private async Task VerifyAcceptedReadOnlyAsync()
+    {
+        AcceptedVerificationStatus = "Reading existing Tally MASTERIDs and full DR/CR; no voucher import will be sent...";
+        try
+        {
+            var verified = await _verifyAcceptedReadOnly(SeparateVoucherTypes, SeparateCashLedgers);
+            AcceptedVerificationStatus = verified == 0
+                ? "No accepted-unverified consolidated vouchers required reconciliation."
+                : $"{verified} Tally-accepted voucher(s) exactly read back and bound; no new voucher CREATE, ALTER or DELETE.";
+        }
+        catch (Exception ex)
+        {
+            AcceptedVerificationStatus = "Read-only verification deferred; accepted vouchers remain protected from resend. " + ex.Message;
+        }
+        finally
+        {
             RefreshTallyImportProgress();
         }
     }
