@@ -219,15 +219,22 @@ public sealed class TallyBankVoucherImportService
             result.Add(new OfflineConsolidatedBankVoucher(
                 transaction.Id, expectation, bankLedger, counterpart));
         }
-        if (issues.Count > 0)
+        // The ORIGINAL manual Bank importer skips individual unmapped,
+        // unsupported or treatment-required rows and prepares the rest.
+        // Do not turn those existing per-row skips into a new all-or-nothing
+        // consolidated exception. This routine is read-only: it cannot mark
+        // a skipped row as imported, substitute a ledger or enter Suspense.
+        // Automatic Bank Sync's explicit allowUnmappedSuspense opt-in remains
+        // owned exclusively by the ORIGINAL Bank import path.
+        // Invalid duplicate source identities, however, are not safe to
+        // choose silently: fail closed before any bank XML is assembled.
+        if (issues.Any(x => x.StartsWith("Duplicate/invalid Bank source",
+                             StringComparison.Ordinal)))
             throw new InvalidOperationException(
-                "Consolidated Bank uses the existing manual Bank voucher rules, " +
-                "but " + issues.Count.ToString(CultureInfo.InvariantCulture) +
-                " of " + active.Length.ToString(CultureInfo.InvariantCulture) +
-                " source transaction(s) need ledger/mode/transfer review. " +
-                "No partial or unsafe consolidated Bank XML was generated. " +
-                string.Join(" | ", issues.Take(12)) +
-                (issues.Count > 12 ? " | ..." : ""));
+                "Ambiguous original Bank transaction identity prevents " +
+                "consolidated source preparation: " + string.Join(" | ",
+                    issues.Where(x => x.StartsWith("Duplicate/invalid Bank source",
+                        StringComparison.Ordinal)).Take(8)));
         return result;
     }
 
