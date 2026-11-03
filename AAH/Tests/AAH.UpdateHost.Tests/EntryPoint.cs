@@ -299,6 +299,23 @@ internal static class EntryPoint
         Console.WriteLine("PASS: v593 duplicate AAH regression: post-ready process census " +
                           "rejects stale/duplicate PIDs, uses completed-cleanup proof only, " +
                           "and records obsolete updater without killing it.");
+        // The v2 PC verifier reported .HasExited==true for PID 15308
+        // while Windows CIM and Task Manager still listed that SAME process
+        // creation time and executable. Do not regress into an optimistic
+        // post-restart census that silently hides these old PIDs.
+        Assert(!hostSource.Contains(
+                   "if (process.HasExited) { process.Dispose(); continue; }",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("var handleSaysExited = process.HasExited;",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("Process.HasExited is true. Refusing to disregard it.",
+                   StringComparison.Ordinal),
+            "Managed HasExited alone incorrectly hides an OS-enumerated old AAH PID.");
+        Console.WriteLine("PASS: .NET HasExited and native process-enumeration disagreement " +
+                          "is fail-closed, not ignored as a clean update.");
+
         Assert(Program.LauncherExitedOrBelongsToInstallation(int.MaxValue, originalExe),
             "Updater blocked a verified release when the launcher already exited before preflight.");
         Assert(!Program.LauncherExitedOrBelongsToInstallation(
