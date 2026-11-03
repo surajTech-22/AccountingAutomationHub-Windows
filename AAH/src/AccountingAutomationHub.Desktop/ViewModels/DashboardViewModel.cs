@@ -2708,7 +2708,15 @@ public sealed class DashboardViewModel :
 
         TallyConnectionStatus = _tallyCoordinator.ConnectionStatus;
         TallyActionStatus = _tallyCoordinator.LastOperationStatus;
-        TallyLiveXmlStatus = _tallyCoordinator.LiveXmlStatus;
+        // CL019: a consolidated parent's normal prepared XML can still say
+        // "345 ready" after 333 CREATEs because it is SOURCE preparation,
+        // not proof of destination acceptance. The scoped consolidated
+        // verification panel reads the actual TallySourceBindings instead.
+        TallyLiveXmlStatus = _isConsolidatedTallyScope
+            ? "Prepared source XML is separate from destination import status. " +
+              "See Consolidated Tally Import Verification for exact live-verified " +
+              "and Tally-accepted-awaiting-readback voucher counts."
+            : _tallyCoordinator.LiveXmlStatus;
         OnPropertyChanged(nameof(TallyReadyVoucherCount));
         OnPropertyChanged(nameof(TallyNewMasterCreateCount));
         HasPendingTallySelection = pending;
