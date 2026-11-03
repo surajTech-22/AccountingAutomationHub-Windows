@@ -636,6 +636,77 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Regional Sales"),
               "Custom source ledger classification lost its branch hierarchy.");
 
+        // Regression: Mitansh v587 prepared all 296 Karnataka Bank rows but
+        // consolidated XML stopped at "Circular or unknown branch accounting
+        // group: Primary". The source Suspense Ledger is under Tally's built-in
+        // Suspense A/c Group (itself under Primary), which is NOT a custom
+        // Group that should be created under Primary in destination books.
+        var suspenseBranch = new TallyPreparedBranchXml(Karnataka,
+            Xml("Payment", "BANK-216", "BANK-REF-216",
+                "Karnataka Bank", "Suspense", "-250.00", "250.00",
+                "Bank Accounts", "Suspense A/c"),
+            [
+                Ledger("Karnataka Bank", "Bank Accounts"),
+                Ledger("Suspense", "Suspense A/c"),
+                new MasterRecord { Name = "Suspense A/c", Type = "Group", Parent = "Primary" }
+            ]);
+        var suspense = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [suspenseBranch, b]);
+        var suspenseMasters = XDocument.Parse(suspense.MastersXml);
+        var suspenseVouchers = XDocument.Parse(suspense.VouchersXml);
+        Check(suspense.SourceVouchers == 2 && suspense.FinalVouchers == 2 &&
+              suspenseMasters.Descendants("GROUP").Any(x =>
+                  (string?)x.Element("NAME") == "Karnataka Suspense A/c" &&
+                  (string?)x.Element("PARENT") == "Suspense A/c") &&
+              suspenseMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Suspense" &&
+                  (string?)x.Element("PARENT") == "Karnataka Suspense A/c") &&
+              !suspenseMasters.Descendants("GROUP").Any(x =>
+                  (string?)x.Element("NAME") == "Primary") &&
+              suspenseVouchers.Descendants("VOUCHER").Any(x =>
+                  (string?)x.Element("VOUCHERNUMBER") == "KA-BANK-216") &&
+              suspenseVouchers.Descendants("AMOUNT").Select(x => x.Value)
+                  .Order().SequenceEqual(new[] { "-250.00", "250.00", "-200.10", "200.10" }.Order()) &&
+              !suspense.MastersXml.Contains("MASTERID") &&
+              !suspense.VouchersXml.Contains("MASTERID"),
+            "Built-in Suspense A/c under Primary was not mapped to an isolated branch subgroup with unchanged original DR/CR.");
+
+        // The same original hierarchy also supports saved custom subgroups
+        // UNDER the canonical built-in group without losing nesting.
+        var nestedSuspense = suspenseBranch with
+        {
+            Xml = suspenseBranch.Xml.Replace(
+                "<PARENT>Suspense A/c</PARENT></LEDGER>",
+                "<PARENT>Review Suspense</PARENT></LEDGER>"),
+            Masters = [
+                Ledger("Karnataka Bank", "Bank Accounts"),
+                Ledger("Suspense", "Review Suspense"),
+                new MasterRecord { Name = "Review Suspense", Type = "Group", Parent = "Suspense A/c" },
+                new MasterRecord { Name = "Suspense A/c", Type = "Group", Parent = "Primary" }
+            ]
+        };
+        var nestedXml = XDocument.Parse(TallyConsolidatedPreparedXmlBuilder.Build(
+            Plan(), [nestedSuspense, b]).MastersXml);
+        Check(nestedXml.Descendants("GROUP").Any(x =>
+                  (string?)x.Element("NAME") == "Karnataka Review Suspense" &&
+                  (string?)x.Element("PARENT") == "Karnataka Suspense A/c"),
+            "Custom subgroup of a canonical Primary child lost its branch hierarchy.");
+
+        // Unknown/custom Primary children require Tally's Group Nature;
+        // neither the wrapper nor a fallback can invent that classification.
+        var unsafeRoot = suspenseBranch with
+        {
+            Xml = suspenseBranch.Xml.Replace(
+                "<PARENT>Suspense A/c</PARENT></LEDGER>",
+                "<PARENT>Unverified Root Group</PARENT></LEDGER>"),
+            Masters = [
+                Ledger("Karnataka Bank", "Bank Accounts"),
+                Ledger("Suspense", "Unverified Root Group"),
+                new MasterRecord { Name = "Unverified Root Group", Type = "Group", Parent = "Primary" }
+            ]
+        };
+        Reject(() => TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [unsafeRoot, b]),
+            "Custom Group below Primary was assigned an invented Tally Group Nature.");
+
         var withCash = TallyBranchConsolidationMasterPlanner.Build(
             "Consolidated Books", "test-company", "2025-26", [Karnataka, TamilNadu], [],
             true, separateCashLedgers: true);
