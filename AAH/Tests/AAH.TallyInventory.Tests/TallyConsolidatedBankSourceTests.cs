@@ -156,13 +156,24 @@ internal static class TallyConsolidatedBankSourceTests
         bank.Matches.Clear();
         bank.Rows.RemoveAt(1);
 
-        // The individual manual Bank importer SKIPS unmapped/unsupported
-        // rows and keeps eligible ones. The old consolidated wrapper instead
-        // threw on ANY unmapped row, so 208/296 missing Final Ledger entries
-        // blocked all Purchase/Sales/Journal vouchers too.
+        // The real manual Bank COORDINATOR (not ImportAsync's default)
+        // explicitly passes allowUnmappedSuspense=true. The 208/296 unmapped
+        // Final Ledger rows therefore still have valid Suspense treatment.
+        // The source LedgerName remains EMPTY for future same-MASTERID ALTER.
         bank.Rows[0].LedgerName = "";
-        Check(Prepare(repo, client, from, to).Count == 0,
-            "Manual Bank unmapped source was converted to a voucher or Suspense.");
+        var suspenseReady = Prepare(repo, client, from, to);
+        Check(suspenseReady.Count == 1 &&
+              bank.Rows[0].LedgerName.Length == 0,
+            "Unmapped original manual Bank did not use read-only Suspense treatment.");
+        var suspense = suspenseReady[0].GetType()
+            .GetProperty("Expectation")?.GetValue(suspenseReady[0]);
+        var suspenseLines = ((IEnumerable)(suspense?.GetType()
+                .GetProperty("Lines")?.GetValue(suspense)
+                ?? throw new InvalidOperationException("Suspense Bank DRCR not prepared.")))
+            .Cast<object>().ToArray();
+        Check(suspenseLines.Any(line => Ledger(line) == "Suspense") &&
+              suspenseLines.Any(line => Ledger(line) == "Branch Bank Account"),
+            "Existing Suspense Ledger and the original Bank Account were not both present.");
         bank.Rows.Add(new BankTransactionRecord {
             Id = 218, ClientId = 19, FinancialYear = client.FinancialYear,
             BankAccountId = 28, Mode = "Receipt",
@@ -174,10 +185,13 @@ internal static class TallyConsolidatedBankSourceTests
             RecordStatus = "Active"
         });
         var mixed = Prepare(repo, client, from, to);
-        Check(mixed.Count == 1 &&
-              mixed[0].GetType().GetProperty("SourceNumber")?.GetValue(mixed[0])?.ToString() == "BANK-218",
-            "Unmapped manual Bank row blocked the correctly mapped row.");
-        Check(bank.Writes == 0, "offline Bank eligibility mutated original records");
+        Check(mixed.Count == 2 &&
+              mixed.Any(row => row.GetType().GetProperty("SourceNumber")
+                  ?.GetValue(row)?.ToString() == "BANK-218") &&
+              mixed.Any(row => row.GetType().GetProperty("SourceNumber")
+                  ?.GetValue(row)?.ToString() == "BANK-216"),
+            "Original manual Bank Suspense row and correctly mapped row did not both prepare.");
+        Check(bank.Writes == 0, "Suspense/manual Bank preview mutated original source records");
         bank.Rows.RemoveAt(1);
         bank.Rows[0].LedgerName = "Office Expenses";
         bank.Rows[0].RecordStatus = "Archived";
