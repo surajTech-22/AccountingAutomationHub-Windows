@@ -1016,10 +1016,11 @@ public sealed class TallyAccountingVoucherExportService
         // authority the ORIGINAL individual Bank exporter already recognizes.
         // The shared Bank BuildRequiredLedgerSpecs decides eligibility and
         // parent group. Nothing is saved to the source branch or Tally.
-        var originalBankLedgerAuthorities = offlineBank.Count > 0
-            ? TallyBankVoucherImportService.ReadOriginalOfflineBankLedgerAuthorities(
-                _bankingRepository, _masterRepository, client, offlineBank)
-            : [];
+        IReadOnlyList<(string Name, string Parent, bool CanCreate, bool IsBank)>
+            originalBankLedgerAuthorities = offlineBank.Count > 0
+                ? TallyBankVoucherImportService.ReadOriginalOfflineBankLedgerAuthorities(
+                    _bankingRepository, _masterRepository, client, offlineBank)
+                : Array.Empty<(string Name, string Parent, bool CanCreate, bool IsBank)>();
         var offlineSourceMasters = allMasters.ToList();
         var originalMasterNames = allMasters
             .Where(master => master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase))
