@@ -89,7 +89,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             var number = Value(voucher, "VOUCHERNUMBER");
             if (type.Length == 0 || number.Length == 0)
                 throw new InvalidOperationException("Source voucher identity is missing.");
-            var anchor = "CONSOLIDATED|" + type + "|" + number;
+            var anchor = BuildConsolidatedSourceAnchor(type, number);
             if (!seen.Add(anchor))
                 throw new InvalidOperationException("Repeated original source anchor in prepared XML.");
             var state = tallyRepository.GetSourceBindingVersionState(
@@ -217,6 +217,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             throw new InvalidOperationException("Prepared consolidated voucher count/shape is not authoritative.");
 
         var distinct = new HashSet<string>(IgnoreCase);
+        var stableAnchors = new HashSet<string>(IgnoreCase);
         var source = new List<ExpectedVoucher>();
         foreach (var voucher in vouchers)
         {
@@ -244,7 +245,11 @@ public sealed class TallyConsolidatedVoucherImportService(
             // branch identity. The destination owns its eventual Tally number;
             // this stable SOURCE anchor is kept only in AAH's existing
             // Client/FY/CompanyKey source-binding table.
-            var sourceAnchor = "CONSOLIDATED|" + type + "|" + number;
+            var sourceAnchor = BuildConsolidatedSourceAnchor(type, number);
+            if (!stableAnchors.Add(sourceAnchor))
+                throw new InvalidOperationException(
+                    "Original Bank source was repeated with different voucher treatments: " +
+                    sourceAnchor + ". One source cannot CREATE two Tally vouchers.");
             var (contentHash, exactPostings) = ComputePreparedContentIdentity(voucher);
             // The existing repository retains this immutable desired version
             // for accepted-unverified and previous->desired audit tracking.
@@ -850,6 +855,26 @@ public sealed class TallyConsolidatedVoucherImportService(
     /// desired ALTER, instead of showing the older destination as up-to-date.
     /// No Tally mutation, tax calculation or new accounting model.
     /// </summary>
+    /// <summary>
+    /// Payment/Receipt/Contra is a mutable Tally treatment, NOT a permanent
+    /// bank transaction identity. The branch's original BANK-row number and
+    /// branch scope are stable when the bank mapping/treatment changes;
+    /// the existing source binding must ALTER that same destination MASTERID.
+    /// Normal Sales/Purchase/Journal anchors keep their previous format.
+    /// </summary>
+    public static string BuildConsolidatedSourceAnchor(string voucherType, string preparedNumber)
+    {
+        var number = (preparedNumber ?? string.Empty).Trim();
+        var type = (voucherType ?? string.Empty).Trim();
+        if (number.Length == 0 || type.Length == 0)
+            throw new InvalidOperationException("Consolidated source identity is incomplete.");
+        var bankOrigin = number.StartsWith("BANK-", StringComparison.OrdinalIgnoreCase) ||
+                         number.Contains("-BANK-", StringComparison.OrdinalIgnoreCase);
+        return bankOrigin
+            ? "CONSOLIDATED|BANK|" + number
+            : "CONSOLIDATED|" + type + "|" + number;
+    }
+
     public static (string ContentHash, string SerializedPostings)
         ComputePreparedContentIdentity(XElement voucher)
     {
