@@ -12,6 +12,12 @@ public sealed class TallyLiveAccountingXmlSnapshot
     public DateTime ToDate { get; init; }
     public int Selected { get; init; }
     public int Ready { get; init; }
+    // Read-only offline branch Bank eligibility counts; distinguish original
+    // selected statement rows from actual Bank vouchers prepared for export.
+    // A matched transfer pair or reject/reversal may intentionally yield fewer
+    // vouchers. This is presentation/diagnostic metadata, not import authority.
+    public int BankStatementSelected { get; init; }
+    public int BankStatementPrepared { get; init; }
     public int MissingLedgers { get; init; }
     public int Unsupported { get; init; }
     public int RepeatedSourceCandidatesSkipped { get; init; }
