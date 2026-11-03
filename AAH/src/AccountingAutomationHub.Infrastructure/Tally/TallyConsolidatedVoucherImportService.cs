@@ -119,6 +119,19 @@ public sealed class TallyConsolidatedVoucherImportService(
             var entries = ReadPostings(voucher);
             if (entries.Count == 0)
                 throw new InvalidOperationException("Prepared voucher has no ledger posting authority: " + number);
+            // The normal AAH exporter also rejects duplicates among selected
+            // local sources before checking Tally. Two branches must never
+            // conceal one identical invoice behind different prefixed numbers.
+            var sourceReference = Value(voucher, "REFERENCE");
+            if (sourceReference.Length > 0 && source.Any(previous =>
+                previous.Date.Date == date.Date &&
+                IgnoreCase.Equals(previous.Type, type) &&
+                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), sourceReference) &&
+                SamePostings(previous.Postings, entries)))
+                throw new InvalidOperationException(
+                    "Consolidated branch XML repeats original reference '" +
+                    sourceReference + "' with the same date/type/DR/CR under two " +
+                    "different voucher numbers. No Tally CREATE was sent.");
             source.Add(new ExpectedVoucher(date, type, number, entries, voucher));
         }
 
