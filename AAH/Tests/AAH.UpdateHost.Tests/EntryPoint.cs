@@ -266,6 +266,39 @@ internal static class EntryPoint
             "Different-install AAH process was selected for graceful shutdown.");
         Assert(!Program.IsExactInstallationProcess("explorer", originalExe, originalExe),
             "Non-AAH application could be targeted for shutdown.");
+
+        // v593 CL019 observed the new PID ready while old v589 PID 15308
+        // stayed listed, plus stale updater PID 8968. A ready event alone must
+        // NOT pass the update. The old PID may be retired ONLY if the existing
+        // ordered per-PID accounting/Tally cleanup audit proved completion.
+        Assert(Program.IsOnlyExpectedRestartPid(new[] { 2652 }, 2652),
+            "One live restarted AAH instance was not recognized.");
+        Assert(!Program.IsOnlyExpectedRestartPid(new[] { 15308, 2652 }, 2652),
+            "A ready new PID incorrectly masked a lingering same-install old AAH PID.");
+        Assert(!Program.IsOnlyExpectedRestartPid(new[] { 15308 }, 2652),
+            "The old pre-update PID was accepted instead of the newly restarted instance.");
+        Assert(!Program.IsOnlyExpectedRestartPid(Array.Empty<int>(), 2652),
+            "Updater accepted a ready signal with no surviving AAH process.");
+        Assert(!Program.IsOnlyExpectedRestartPid(new[] { 2652 }, 0),
+            "Updater accepted an absent/invalid restarted PID.");
+        var readyGate = hostSource.IndexOf(
+            "if (!await VerifySingleRestartedInstallationAsync(target, restartedPid.Value))",
+            StringComparison.Ordinal);
+        var successMarker = hostSource.IndexOf("Log(restartOnly", StringComparison.Ordinal);
+        var liveCensus = hostSource.IndexOf(
+            "var final = GetSameInstallationProcesses(installedExe)", StringComparison.Ordinal);
+        Assert(readyGate > 0 && readyGate < successMarker && liveCensus > 0 &&
+               hostSource.Contains("RetireVerifiedCleanedGhostAsync(process, installedExe)",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("ReportResidualUpdateHostsWithoutTerminating();",
+                   StringComparison.Ordinal) &&
+               !hostSource.Contains("Kill(entireProcessTree: true); // old updater",
+                   StringComparison.Ordinal),
+            "Verified ready was marked SUCCESS before fresh single-instance census or " +
+            "residual old-updater warning; accounting/Tally safety must remain unchanged.");
+        Console.WriteLine("PASS: v593 duplicate AAH regression: post-ready process census " +
+                          "rejects stale/duplicate PIDs, uses completed-cleanup proof only, " +
+                          "and records obsolete updater without killing it.");
         Assert(Program.LauncherExitedOrBelongsToInstallation(int.MaxValue, originalExe),
             "Updater blocked a verified release when the launcher already exited before preflight.");
         Assert(!Program.LauncherExitedOrBelongsToInstallation(
