@@ -1444,6 +1444,45 @@ public sealed class TallyHttpService : IDisposable
     }
 
     /// <summary>
+    /// Independent read-only fallback for a faulty date-filtered voucher
+    /// collection. It asks Tally for unfiltered Voucher objects and accepts
+    /// the result ONLY if it matches the separate native company-wide count.
+    /// Used for consolidated duplicate preflight, never for mutating Tally.
+    /// </summary>
+    public async Task<IReadOnlyList<TallyVoucherIndexRecord>> ExportCompleteCompanyVoucherIndexForConsolidationAsync(
+        TallyCompanyInfo company, int expectedCompanyCount,
+        CancellationToken cancellationToken = default,
+        Action<string, string>? diagnosticExchange = null)
+    {
+        ArgumentNullException.ThrowIfNull(company);
+        if (expectedCompanyCount < 0 || expectedCompanyCount > 10000)
+            throw new InvalidOperationException(
+                "Consolidated duplicate authority cannot safely enumerate " +
+                expectedCompanyCount + " company vouchers in one fallback response. " +
+                "No voucher CREATE authorized.");
+        var request = BuildConsolidatedUnfilteredVoucherIndexRequest(company.Name);
+        var response = await PostAsync(
+            request, cancellationToken, TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+        try { diagnosticExchange?.Invoke(request, response); }
+        catch { /* Diagnostics must not change accounting decisions. */ }
+        var index = ParseVoucherIndex(response, company.CompanyKey, company.FinancialYear);
+        if (index.Count != expectedCompanyCount)
+            throw new InvalidOperationException(
+                "Incomplete consolidated company Voucher authority: native Tally count is " +
+                expectedCompanyCount + ", but the unfiltered Voucher collection returned " +
+                index.Count + ". No new voucher CREATE authorized.");
+        if (index.Any(v => v.VoucherDate is null ||
+                           string.IsNullOrWhiteSpace(v.MasterId) ||
+                           string.IsNullOrWhiteSpace(v.VoucherType) ||
+                           string.IsNullOrWhiteSpace(v.VoucherNumber)) ||
+            index.Select(v => v.MasterId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != index.Count)
+            throw new InvalidOperationException(
+                "Unfiltered Voucher collection contains incomplete, duplicated or " +
+                "unidentified native MASTERID objects. No consolidated CREATE authorized.");
+        return index;
+    }
+
+    /// <summary>
     /// Fix49/Fix50 compatibility helper retained for inherited callers and source gates.
     /// Fix51 normal connected operation no longer uses this as a pre-write Merge path:
     /// the initial active-FY baseline persists the complete Voucher XML authority and
@@ -5410,6 +5449,46 @@ public sealed class TallyHttpService : IDisposable
                   <SYSTEM TYPE="Formulae" NAME="AAHRequestedVoucherAuthorityPeriod">$Date &gt;= ##SVFromDate AND $Date &lt;= ##SVToDate</SYSTEM>
                 </TDLMESSAGE>
               </TDL>
+            </DESC>
+          </BODY>
+        </ENVELOPE>
+        """;
+    }
+
+    private static string BuildConsolidatedUnfilteredVoucherIndexRequest(string companyName)
+    {
+        // No problematic $Date filter or session period variables. This
+        // fallback is reached only if the normal date-filtered XML disagrees
+        // with the strict company-wide native Tally Voucher count.
+        const string collectionName = "AAH Consolidated Complete Voucher Index";
+        return $"""
+        <ENVELOPE>
+          <HEADER>
+            <VERSION>1</VERSION>
+            <TALLYREQUEST>EXPORT</TALLYREQUEST>
+            <TYPE>COLLECTION</TYPE>
+            <ID>{collectionName}</ID>
+          </HEADER>
+          <BODY>
+            <DESC>
+              <STATICVARIABLES>
+                <SVEXPORTFORMAT>$SysName:XML</SVEXPORTFORMAT>
+                <SVCURRENTCOMPANY>{XmlEscape(companyName)}</SVCURRENTCOMPANY>
+              </STATICVARIABLES>
+              <TDL><TDLMESSAGE>
+                <COLLECTION NAME="{collectionName}" ISINITIALIZE="Yes">
+                  <TYPE>Voucher</TYPE>
+                  <NATIVEMETHOD>MasterID</NATIVEMETHOD>
+                  <NATIVEMETHOD>AlterID</NATIVEMETHOD>
+                  <NATIVEMETHOD>GUID</NATIVEMETHOD>
+                  <NATIVEMETHOD>Date</NATIVEMETHOD>
+                  <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
+                  <NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
+                  <NATIVEMETHOD>Reference</NATIVEMETHOD>
+                  <NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+                  <FETCH>AllLedgerEntries.*,LedgerEntries.*,Amount,Reference,Narration</FETCH>
+                </COLLECTION>
+              </TDLMESSAGE></TDL>
             </DESC>
           </BODY>
         </ENVELOPE>
