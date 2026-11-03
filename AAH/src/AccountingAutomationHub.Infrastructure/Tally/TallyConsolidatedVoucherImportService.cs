@@ -141,6 +141,25 @@ public sealed class TallyConsolidatedVoucherImportService(
             source.Add(new ExpectedVoucher(date, type, number, entries, voucher,
                 reference, sourceAnchor, contentHash, version));
         }
+        // Already-prepared source XML can contain two independent voucher
+        // numbers for the same original invoice. Reject exact repeated source
+        // content before any master or voucher POST, rather than relying only
+        // on Tally to detect a duplicate after the first CREATE.
+        foreach (var group in source.Where(v => v.Reference.Length > 0)
+                     .GroupBy(v => v.Type + "|" +
+                         v.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                         "|" + v.Reference, IgnoreCase))
+        {
+            var hashes = new HashSet<string>(IgnoreCase);
+            foreach (var item in group)
+            {
+                if (!hashes.Add(item.ContentHash))
+                    throw new InvalidOperationException(
+                        "Prepared consolidated vouchers contain the same original " +
+                        "source invoice and full DR/CR under different branch numbers: " +
+                        group.Key + ". No Tally POST was sent.");
+            }
+        }
 
         // A failed live read means no mutations. No cached branch or destination
         // data may authorize a CREATE against a Tally company.
@@ -226,14 +245,17 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // previous->desired ALTER protocol is mandatory; this
                 // consolidated CREATE-only wrapper never invents a shortcut.
                 if (state is not null &&
-                    state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
-                    state.VerifiedContentHash.Length > 0 &&
-                    !IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash))
+                    ((state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                      state.VerifiedContentHash.Length > 0 &&
+                      !IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash)) ||
+                     (state.PendingContentHash.Length > 0 &&
+                      !IgnoreCase.Equals(state.PendingContentHash, planned.ContentHash))))
                     throw new InvalidOperationException(
-                        "Previously verified consolidated source " +
+                        "Previously verified/accepted consolidated source " +
                         planned.SourceAnchor +
-                        " changed AAH content. The existing Previous->Desired " +
-                        "version/ALTER gate must review it; never adopt or CREATE.");
+                        " has a different saved previous or pending accounting " +
+                        "version. The established Previous->Desired/restore safety " +
+                        "gate must review it; never silently adopt or CREATE.");
                 // Reuse the normal exporter’s verified source-version commit.
                 // An original first-time import that Tally already holds is
                 // adopted by exact live authority without another Tally POST.
@@ -319,8 +341,22 @@ public sealed class TallyConsolidatedVoucherImportService(
                 "Live Tally Voucher authority changed during consolidated " +
                 "master-first verification. The import is blocked before CREATE; " +
                 "refresh the normal duplicate/version snapshot.");
-        RequireNoCollision(recheck.Index,
-            source.Where(v => !skipped.Contains(v.SourceAnchor)).ToArray());
+        var createCandidates = source.Where(v =>
+            !skipped.Contains(v.SourceAnchor)).ToArray();
+        RequireNoCollision(recheck.Index, createCandidates);
+        foreach (var planned in createCandidates)
+        {
+            var concurrent = recheck.Index.FirstOrDefault(live =>
+                IgnoreCase.Equals(live.VoucherType, planned.Type) &&
+                planned.Reference.Length > 0 &&
+                IgnoreCase.Equals(live.Reference, planned.Reference));
+            if (concurrent is not null)
+                throw new InvalidOperationException(
+                    "Destination Tally gained a voucher for original source " +
+                    planned.Reference + " while masters were being verified. " +
+                    "The existing normal accounting duplicate authority must be " +
+                    "refreshed; no consolidated CREATE or ALTER was sent.");
+        }
 
         var imported = 0;
         foreach (var expected in source)
