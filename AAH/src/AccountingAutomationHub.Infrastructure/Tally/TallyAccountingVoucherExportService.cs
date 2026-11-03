@@ -925,7 +925,7 @@ public sealed class TallyAccountingVoucherExportService
 
         var contents = System.Text.Json.JsonSerializer.Serialize(new
         {
-            Schema = "AAH-BRANCH-XML-SOURCE-V3-BANK",
+            Schema = "AAH-BRANCH-XML-SOURCE-V4-BANK-ORIGINAL-ELIGIBILITY",
             client.Id,
             client.ClientCode,
             client.FinancialYear,
@@ -1012,6 +1012,43 @@ public sealed class TallyAccountingVoucherExportService
                 ? TallyBankVoucherImportService.PrepareOfflineConsolidatedBankVouchers(
                     _bankingRepository, client, fromDate, toDate)
                 : Array.Empty<TallyBankVoucherImportService.OfflineConsolidatedBankVoucher>();
+        // Bring in only the saved Bank Ledger Mapping/Group and Master
+        // authority the ORIGINAL individual Bank exporter already recognizes.
+        // The shared Bank BuildRequiredLedgerSpecs decides eligibility and
+        // parent group. Nothing is saved to the source branch or Tally.
+        var originalBankLedgerAuthorities = offlineBank.Count > 0
+            ? TallyBankVoucherImportService.ReadOriginalOfflineBankLedgerAuthorities(
+                _bankingRepository, _masterRepository, client, offlineBank)
+            : [];
+        var offlineSourceMasters = allMasters.ToList();
+        var originalMasterNames = allMasters
+            .Where(master => master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase))
+            .Select(master => TallyMasterKey(master.Name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var spec in originalBankLedgerAuthorities)
+        {
+            var key = TallyMasterKey(spec.Name);
+            if (originalMasterNames.Contains(key)) continue;
+            // Original Bank Account rows are their own authoritative Master
+            // source and are serialized by existing AppendLedgerMaster.
+            if (spec.IsBank) continue;
+            if (!spec.CanCreate || string.IsNullOrWhiteSpace(spec.Parent))
+                throw new InvalidOperationException(
+                    "Original Bank Master-first gate has no eligible ledger " +
+                    "or saved Ledger Mapping Group for '" + spec.Name +
+                    "'. Do not infer a new Group or silently post a voucher.");
+            offlineSourceMasters.Add(new MasterRecord
+            {
+                ClientId = client.Id,
+                FinancialYear = client.FinancialYear,
+                Name = spec.Name,
+                Parent = spec.Parent,
+                Type = "Ledger",
+                Source = "Ledger Mapping",
+                IsUserEdited = true
+            }); // Source XML template only; no repository write or Tally ID.
+            originalMasterNames.Add(key);
+        }
         var originalBankExpectations = offlineBank.Select(row => row.Expectation).ToArray();
         string originalBankXml = string.Empty;
         if (originalBankExpectations.Length > 0)
@@ -1024,7 +1061,7 @@ public sealed class TallyAccountingVoucherExportService
         var bankAccountNames = _bankingRepository.GetAccounts(client.Id, client.FinancialYear)
             .Select(x => x.AuthorityName.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var knownLedgerNames = allMasters
+        var knownLedgerNames = offlineSourceMasters
             .Where(x => x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
                         x.Name.Trim().Length > 0)
             .Select(x => x.Name.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1074,7 +1111,7 @@ public sealed class TallyAccountingVoucherExportService
             company.Name,
             range.FromDate,
             prepared,
-            allMasters,
+            offlineSourceMasters,
             bankAccounts,
             stockItems,
             stockItemUnitProfiles,
@@ -1141,6 +1178,15 @@ public sealed class TallyAccountingVoucherExportService
             ToDate = range.ToDate,
             Selected = result.Selected,
             Ready = result.Ready,
+            BankStatementSelected = offlineConsolidatedBranchSource
+                ? _bankingRepository.GetTransactions(
+                    client.Id, client.FinancialYear, includeArchived: false)
+                    .Count(x => !x.RecordStatus.StartsWith("Archived",
+                        StringComparison.OrdinalIgnoreCase) &&
+                        x.TransactionDate.Date >= fromDate.Date &&
+                        x.TransactionDate.Date <= toDate.Date)
+                : 0,
+            BankStatementPrepared = offlineBank.Count,
             MissingLedgers = result.MissingLedgers,
             Unsupported = result.Unsupported,
             RepeatedSourceCandidatesSkipped = result.RepeatedSourceCandidatesSkipped,
