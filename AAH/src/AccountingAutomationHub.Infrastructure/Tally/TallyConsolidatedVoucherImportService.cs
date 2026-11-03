@@ -13,9 +13,12 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 public sealed class TallyConsolidatedVoucherImportService(
     TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null,
-    Action? verifiedVoucher = null)
+    Action? verifiedVoucher = null,
+    SqliteTallyRepository? tallyRepository = null,
+    Action? acknowledgedCreate = null)
 {
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
+    private const string ConsolidatedSourceType = "Consolidated Voucher";
     private static readonly string[] PriorMasters =
         ["GROUP", "VOUCHERTYPE"];
     private static readonly string[] MasterOrder =
@@ -132,9 +135,70 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(firstYear + 1, 3, 31);
         if (source.Any(x => x.Date < from || x.Date > to))
             throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
-        var before = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
-            .ConfigureAwait(false);
-        RequireNoCollision(before.Index, source);
+        // Reuse the SAME full-company snapshot, ALTERID pulse and saved
+        // destination authority that the ordinary Tally export framework owns.
+        // Do not infer an empty Tally destination from an empty FY XML reply.
+        var repository = tallyRepository ??
+            throw new InvalidOperationException(
+                "The original Tally source-binding repository is required for consolidated export.");
+        var liveBefore = await tally.ExportFullCompanySnapshotAsync(
+            destination, from, to, cancellationToken).ConfigureAwait(false);
+        var marker = await tally.GetVoucherChangeMarkerAsync(
+            destination, cancellationToken).ConfigureAwait(false);
+        if (marker.CompanyName.Length > 0 &&
+            !IgnoreCase.Equals(marker.CompanyName, destination.Name))
+            throw new InvalidOperationException(
+                "Tally changed its active company during consolidated duplicate preflight.");
+        // Native count is company-wide while the full XML is FY-bounded.
+        // A mismatch is an uncertain authority, NOT permission to create.
+        if (marker.VoucherCount != liveBefore.Vouchers.Count ||
+            (destination.VoucherCount > 0 && liveBefore.Vouchers.Count == 0))
+            throw new InvalidOperationException(
+                "Consolidated duplicate safety STOP: original Tally full-company authority " +
+                "returned " + liveBefore.Vouchers.Count + " FY voucher(s) but the live " +
+                "Tally marker reports " + marker.VoucherCount +
+                " company voucher(s). Review the original shared authority; no CREATE or ALTER sent.");
+        repository.ReplaceVoucherIndex(
+            destination.CompanyKey, financialYear, liveBefore.Vouchers);
+        repository.ReplaceVoucherXmlAuthority(
+            destination.CompanyKey, financialYear, liveBefore.FullVouchers);
+
+        // Classify the entire source BEFORE creating any additional masters,
+        // using the normal voucher comparator + existing source-binding state.
+        var toPost = new List<ExpectedVoucher>();
+        var duplicateCount = 0;
+        foreach (var expected in source)
+        {
+            var matching = liveBefore.Vouchers.Where(live =>
+                MatchesSourceIdentity(live, expected)).ToArray();
+            if (matching.Length > 1)
+                throw new InvalidOperationException(
+                    "Multiple live destination Tally vouchers match consolidated source " +
+                    Value(expected.Xml, "REFERENCE") + ". Manual duplicate review required.");
+            if (matching.Length == 1)
+            {
+                if (!MatchesNormalAccountingVoucher(matching[0], expected))
+                    throw new InvalidOperationException(
+                        "Original Tally duplicate check found the same source reference/number " +
+                        "with DIFFERENT DR/CR or party metadata: " +
+                        Value(expected.Xml, "REFERENCE") +
+                        ". Neither CREATE nor ALTER is permitted.");
+                duplicateCount++;
+                // The existing source binding is the single durable owner of
+                // previous/version/MASTERID state; no branch Tally ID is copied.
+                ConfirmVerifiedSource(repository, link, financialYear, expected,
+                    matching[0], "Exact duplicate adopted from verified original Tally authority.");
+                continue;
+            }
+            var state = repository.GetSourceBindingVersionState(link.ClientId,
+                financialYear, destination.CompanyKey, ConsolidatedSourceType, expected.Number);
+            if (state is not null)
+                throw new InvalidOperationException(
+                    "Consolidated source " + expected.Number + " already has Tally source-binding state '" +
+                    state.State + "' (native MASTERID " + state.MasterId +
+                    "). Its prior CREATE may have succeeded. No automatic resend or DELETE is safe.");
+            toPost.Add(expected);
+        }
 
         var available = await ReadMasterAuthorityAsync(destination, cancellationToken).ConfigureAwait(false);
         // The compulsory branch groups and optional voucher types must have
