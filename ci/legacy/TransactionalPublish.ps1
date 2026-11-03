@@ -105,6 +105,7 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
     New-Item -Path $transaction -ItemType Directory -ErrorAction Stop | Out-Null
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $stagingClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
     $files = @(Get-ChildItem -LiteralPath $PublishDir -Recurse -File -Force | Sort-Object FullName)
     $scanned = 0
     $unchanged = 0
@@ -151,6 +152,15 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
     # The journal is persisted BEFORE the first installed-file rename.
     $journal = [pscustomobject]@{ Schema=1; InstallDir=$InstallDir; Entries=$entries.ToArray() }
     $journal | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $transaction 'journal.json') -Encoding UTF8
+    } catch {
+        # Until the journal exists, the original installer has not begun a
+        # rename. Safely remove disposable staging immediately on failure.
+        Write-AAHTransactionProgress ('STAGING FAILED before replacement: ' + $_.Exception.Message)
+        if (-not (Test-Path -LiteralPath (Join-Path $transaction 'journal.json'))) {
+            try { Remove-Item -LiteralPath $transaction -Recurse -Force -ErrorAction Stop } catch { }
+        }
+        throw
+    }
     try {
         foreach ($entry in $entries) {
             $target = Get-AAHChildPath $InstallDir $entry.Relative
