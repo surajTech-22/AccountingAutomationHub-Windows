@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Domain.Clients;
+using AccountingAutomationHub.Desktop.Commands;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
 
@@ -40,6 +41,11 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         Pan = parent.Pan ?? string.Empty;
         PrimaryGstin = parent.Gstin ?? string.Empty;
         State = parent.State ?? string.Empty;
+        RefreshConsolidatedCommand = new RelayCommand(() =>
+        {
+            RefreshTallyImportProgress();
+            _ = RefreshAsync();
+        });
         RefreshTallyImportProgress();
         _ = RefreshAsync();
     }
@@ -49,6 +55,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string PrimaryGstin { get; }
     public string State { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
+    public RelayCommand RefreshConsolidatedCommand { get; }
     public string TallyImportProgressStatus
     {
         get => _tallyImportProgressStatus;
