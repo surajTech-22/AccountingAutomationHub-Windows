@@ -312,23 +312,54 @@ internal static class GitHubAutoUpdateService
             }
             Directory.CreateDirectory(root);
             var path = Path.Combine(root, UpdateAssetName);
-            // Download to a separate file, so an interrupted download never
-            // replaces the previously verified updater executable.
-            using (var download = await Client.GetAsync(updateUrl!, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
+            // ResponseHeadersRead does not guarantee a response-body timeout.
+            // Bound an inactive connection and the total transfer so a partial
+            // updater never holds our staging lock indefinitely after DNS loss.
+            // Keep the verified previous EXE intact until the new SHA256 passes.
+            using (var downloadDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(12)))
+            using (var downloadIdle = CancellationTokenSource.CreateLinkedTokenSource(downloadDeadline.Token))
             {
-                download.EnsureSuccessStatusCode();
-                if (download.Content.Headers.ContentLength is > 400_000_000)
-                    throw new InvalidDataException("Updater exceeds the 400MB maximum.");
-                await using var source = await download.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                await using var destination = new FileStream(incoming, FileMode.Create, FileAccess.Write, FileShare.None);
-                var buffer = new byte[128 * 1024];
                 long total = 0;
-                int read;
-                while ((read = await source.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+                try
                 {
-                    total += read;
-                    if (total > 400_000_000) throw new InvalidDataException("Updater exceeds 400MB maximum.");
-                    await destination.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
+                    Log("release " + tag + " starting bounded updater download (12-minute absolute, 90-second idle)");
+                    using var download = await Client.GetAsync(updateUrl!,
+                        HttpCompletionOption.ResponseHeadersRead, downloadDeadline.Token).ConfigureAwait(false);
+                    download.EnsureSuccessStatusCode();
+                    var expectedLength = download.Content.Headers.ContentLength;
+                    if (expectedLength is > 400_000_000)
+                        throw new InvalidDataException("Updater exceeds the 400MB maximum.");
+                    await using var source = await download.Content.ReadAsStreamAsync(downloadDeadline.Token).ConfigureAwait(false);
+                    await using var destination = new FileStream(incoming, FileMode.Create, FileAccess.Write, FileShare.None);
+                    var buffer = new byte[128 * 1024];
+                    long lastLogged = 0;
+                    while (true)
+                    {
+                        downloadIdle.CancelAfter(TimeSpan.FromSeconds(90));
+                        var read = await source.ReadAsync(buffer.AsMemory(), downloadIdle.Token).ConfigureAwait(false);
+                        if (read == 0) break;
+                        total += read;
+                        if (total > 400_000_000) throw new InvalidDataException("Updater exceeds the 400MB maximum.");
+                        await destination.WriteAsync(buffer.AsMemory(0, read), downloadDeadline.Token).ConfigureAwait(false);
+                        if (total - lastLogged >= 8L * 1024 * 1024)
+                        {
+                            Log("release " + tag + " updater download progress " + total + "/" +
+                                (expectedLength?.ToString(CultureInfo.InvariantCulture) ?? "?") + " bytes");
+                            lastLogged = total;
+                        }
+                    }
+                    if (expectedLength is long exact && total != exact)
+                        throw new InvalidDataException("Incomplete updater download: " + total + " of " + exact);
+                }
+                catch (OperationCanceledException ex) when (downloadDeadline.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Updater host download exceeded 12 minutes at " + total +
+                        " bytes; existing application and updater left unchanged.", ex);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    throw new TimeoutException("Updater host download stalled for 90 seconds at " + total +
+                        " bytes; existing application and updater left unchanged.", ex);
                 }
             }
             await using (var stream = File.OpenRead(incoming))
