@@ -958,7 +958,7 @@ internal static class Program
                 using var stop = EventWaitHandle.OpenExisting(
                     @"Local\AccountingAutomationHub.UpdateShutdown.v1." + launched.Id);
                 stop.Set();
-                await WaitForOriginalExitAsync(launched, TimeSpan.FromSeconds(30));
+                await WaitForOriginalExitAsync(launched, TimeSpan.FromSeconds(30), exe);
             }
             catch (WaitHandleCannotBeOpenedException) { }
         }
