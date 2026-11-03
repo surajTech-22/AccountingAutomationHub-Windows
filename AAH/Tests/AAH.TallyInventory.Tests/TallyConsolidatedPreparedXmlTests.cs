@@ -650,7 +650,16 @@ internal static class TallyConsolidatedPreparedXmlTests
                 Ledger("Suspense", "Suspense A/c"),
                 new MasterRecord { Name = "Suspense A/c", Type = "Group", Parent = "Primary" }
             ]);
-        var suspense = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [suspenseBranch, b]);
+        var suspensePlan = Plan();
+        Check(suspensePlan.Groups.Count(x =>
+                  x.Parent.Equals("Suspense A/c", StringComparison.OrdinalIgnoreCase)) == 2 &&
+              suspensePlan.Groups.Any(x => x.BranchId == "KA" &&
+                  x.Name == "Karnataka Suspense A/c" && x.Create) &&
+              XDocument.Parse(suspensePlan.GroupXml).Descendants("GROUP").Any(x =>
+                  (string?)x.Element("NAME") == "Karnataka Suspense A/c" &&
+                  (string?)x.Element("PARENT") == "Suspense A/c"),
+            "Suspense A/c was not created by the ORIGINAL compulsory master-first branch plan.");
+        var suspense = TallyConsolidatedPreparedXmlBuilder.Build(suspensePlan, [suspenseBranch, b]);
         var suspenseMasters = XDocument.Parse(suspense.MastersXml);
         var suspenseVouchers = XDocument.Parse(suspense.VouchersXml);
         Check(suspense.SourceVouchers == 2 && suspense.FinalVouchers == 2 &&
