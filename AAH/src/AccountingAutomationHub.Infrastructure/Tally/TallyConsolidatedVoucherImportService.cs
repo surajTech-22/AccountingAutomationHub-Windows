@@ -462,6 +462,28 @@ public sealed class TallyConsolidatedVoucherImportService(
         return left.Zip(right).All(x => IgnoreCase.Equals(x.First.Name, x.Second.Name) &&
                                         x.First.Amount == x.Second.Amount);
     }
+    /// <summary>
+    /// Exact live reference AND complete signed DR/CR detect a previously
+    /// imported source even if Tally auto-assigned a different voucher number.
+    /// A coincidental matching invoice reference with different amounts or
+    /// ledgers is not silently skipped; number conflicts remain a hard stop.
+    /// </summary>
+    public static bool IsStrongOriginalReferenceDuplicate(
+        TallyVoucherIndexRecord live, DateTime date, string voucherType,
+        string reference, IReadOnlyList<(string Name, decimal Amount)> postings)
+    {
+        ArgumentNullException.ThrowIfNull(live);
+        ArgumentNullException.ThrowIfNull(postings);
+        if (string.IsNullOrWhiteSpace(reference) ||
+            live.VoucherDate?.Date != date.Date ||
+            !IgnoreCase.Equals(live.VoucherType, voucherType) ||
+            !IgnoreCase.Equals(live.Reference, reference) ||
+            live.LedgerPostings.Count != postings.Count)
+            return false;
+        return SamePostings(postings,
+            live.LedgerPostings.Select(x => (x.LedgerName, x.SignedAmount)).ToArray());
+    }
+
     private static void RequireNoCollision(
         IReadOnlyList<TallyVoucherIndexRecord> actual, IReadOnlyList<ExpectedVoucher> expected)
     {
@@ -484,12 +506,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             var reference = Value(planned.Xml, "REFERENCE");
             if (reference.Length == 0) continue;
             var matching = actual.FirstOrDefault(live =>
-                live.VoucherDate?.Date == planned.Date.Date &&
-                IgnoreCase.Equals(live.VoucherType, planned.Type) &&
-                IgnoreCase.Equals(live.Reference, reference) &&
-                live.LedgerPostings.Count == planned.Postings.Count &&
-                SamePostings(planned.Postings, live.LedgerPostings
-                    .Select(x => (x.LedgerName, x.SignedAmount)).ToArray()));
+                IsStrongOriginalReferenceDuplicate(
+                    live, planned.Date, planned.Type, reference, planned.Postings));
             if (matching is not null)
                 throw new InvalidOperationException(
                     "Destination Tally already contains a matching source Reference " +
