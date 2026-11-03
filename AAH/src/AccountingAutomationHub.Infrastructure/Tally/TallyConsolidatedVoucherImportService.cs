@@ -366,6 +366,20 @@ public sealed class TallyConsolidatedVoucherImportService(
                 long.TryParse(exact[0].AlterId, NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var liveAlterId) ? liveAlterId : 0L,
                 "Exact original Tally MASTERID readback verified before source binding.");
+            // A verified exact voucher is not enough to authorize posting the
+            // NEXT source if the normal fresh date-index still cannot see it.
+            // CL019's CREATED=1/LASTVCHID=2 and empty FY index must STOP the
+            // batch, not conceal the newly written voucher from duplicate safety.
+            var visible = await tally.ExportVoucherAuthorityFreshAsync(
+                destination, expected.Date, expected.Date, cancellationToken)
+                .ConfigureAwait(false);
+            if (!visible.Index.Any(v => IgnoreCase.Equals(v.MasterId, nativeId)))
+                throw new InvalidOperationException(
+                    "Tally CREATED and exact native MASTERID " + nativeId +
+                    " was DR/CR-verified, but the original live date/FY Voucher " +
+                    "collection does not show that MASTERID. The verified source " +
+                    "binding is saved; subsequent consolidated CREATEs are HELD " +
+                    "until normal live duplicate authority is consistent.");
             imported++;
             // The caller needs an accurate partial-success count if a later
             // voucher fails. This fires only AFTER exact live MASTERID/DR/CR
