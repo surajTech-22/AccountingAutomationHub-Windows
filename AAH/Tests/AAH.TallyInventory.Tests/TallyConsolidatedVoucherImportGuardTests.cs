@@ -60,6 +60,58 @@ internal static class TallyConsolidatedVoucherImportGuardTests
 
     public static void Run()
     {
+        // CL019 regression (03-Nov-2026): Tally reported CREATED=1,
+        // LASTVCHID=2, but the normal live FY index returned 0. A rerun
+        // must identify an existing voucher even if Tally has auto-numbered
+        // it differently from the original branch voucher.
+        var live = new TallyVoucherIndexRecord
+        {
+            VoucherDate = new DateTime(2026, 2, 28),
+            VoucherType = "Debit Note",
+            VoucherNumber = "Tally-Auto-Number-2",
+            Reference = "INV-DEBIT-001",
+            MasterId = "2",
+            LedgerPostings =
+            [
+                new TallyLedgerPostingRecord { LedgerName = "Vendor A", SignedAmount = -7.08m, IsDebit = true },
+                new TallyLedgerPostingRecord { LedgerName = "Purchase 18%", SignedAmount = 6.00m },
+                new TallyLedgerPostingRecord { LedgerName = "Input IGST 18%", SignedAmount = 1.08m }
+            ]
+        };
+        (string Name, decimal Amount)[] branch =
+        [
+            ("Vendor A", -7.08m), ("Purchase 18%", 6.00m), ("Input IGST 18%", 1.08m)
+        ];
+        void RequireDuplicate(bool expected, TallyVoucherIndexRecord row,
+            DateTime date, string voucherType, string reference,
+            IReadOnlyList<(string Name, decimal Amount)> postings, string caseName)
+        {
+            var detected = TallyConsolidatedVoucherImportService.IsStrongOriginalReferenceDuplicate(
+                row, date, voucherType, reference, postings);
+            if (detected != expected)
+                throw new InvalidOperationException("Consolidated live duplicate test failed: " + caseName);
+        }
+        RequireDuplicate(true, live, new DateTime(2026, 2, 28),
+            "Debit Note", "INV-DEBIT-001", branch,
+            "same original reference + 3 signed DR/CR with different Tally number");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 27),
+            "Debit Note", "INV-DEBIT-001", branch, "different date");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 28),
+            "Credit Note", "INV-DEBIT-001", branch, "different voucher type");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 28),
+            "Debit Note", "OTHER-INVOICE", branch, "different original reference");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 28),
+            "Debit Note", "INV-DEBIT-001",
+            [("Vendor A", -7.08m), ("Purchase 18%", 6.00m), ("Input IGST 18%", 1.09m)],
+            "changed GST posting");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 28),
+            "Debit Note", "INV-DEBIT-001",
+            [("Vendor A", -7.08m), ("Purchase 18%", 6.00m), ("Different IGST", 1.08m)],
+            "different GST ledger");
+        RequireDuplicate(false, live, new DateTime(2026, 2, 28),
+            "Debit Note", "", branch, "blank reference must not imply a duplicate");
+        Console.WriteLine("PASS: consolidated original-reference duplicate detection honors full DR/CR even after Tally auto-numbering.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
