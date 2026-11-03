@@ -55,6 +55,9 @@ public partial class App : System.Windows.Application
     private bool _lastBalloonOpensActionCenter;
     private string _lastBalloonTargetPage = string.Empty;
     private bool _runtimeCleaned;
+    // True only after the final accounting/WAL/tray cleanup statement completes.
+    // _runtimeCleaned alone is set at cleanup ENTRY and is not a safe exit proof.
+    private bool _verifiedUpdaterCleanupCompleted;
     private bool _standalonePortalCredentials;
     private DispatcherTimer? _performanceHeartbeat;
     private DateTime _lastPerformanceHeartbeatUtc;
@@ -1639,6 +1642,7 @@ public partial class App : System.Windows.Application
         // R44: do not release the single-instance ownership during runtime cleanup.
         // Cleanup can be slow (cache checkpoint, Main Server stop, Tally disposal); releasing
         // here creates a window where a second full AAH process can start before this one exits.
+        _verifiedUpdaterCleanupCompleted = true;
         WriteShutdownDiagnostic("Runtime cleanup finished; instance lock remains owned until OnExit completes.");
     }
 
@@ -1689,9 +1693,20 @@ public partial class App : System.Windows.Application
         }
         finally
         {
-            base.OnExit(e);
-            if (_verifiedUpdaterExit && _runtimeCleaned)
+            // v581: v580 logged final lock release, but base.OnExit could still
+            // block before reaching Environment.Exit and leave a ghost AAH PID.
+            // For a PID-targeted verified updater ONLY, accounting/Tally idle
+            // and complete WAL/runtime cleanup have already been confirmed.
+            // Finish Windows process exit now, before any WPF base cleanup can
+            // block the verified transaction. Normal tray and user exits retain
+            // the original base.OnExit behavior and are never force-terminated.
+            if (_verifiedUpdaterExit && _runtimeCleaned && _verifiedUpdaterCleanupCompleted &&
+                !_ownsSingleInstanceMutex)
+            {
+                WriteShutdownDiagnostic("Verified updater: accounting cleanup and instance release complete; final process exit before WPF base.OnExit.");
                 Environment.Exit(0);
+            }
+            base.OnExit(e);
         }
     }
 
