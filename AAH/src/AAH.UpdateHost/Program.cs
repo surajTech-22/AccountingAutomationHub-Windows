@@ -1200,7 +1200,7 @@ internal static class Program
             var pids = final.Select(process => process.Id).ToArray();
             var clean = IsOnlyExpectedRestartPid(pids, restartedPid);
             Log(clean
-                ? "PASS: v593 CL019 regression gate: exactly one restarted " +
+                ? "PASS: post-restart single-instance gate: exactly one restarted " +
                   "AAH process from the verified installation exists, PID " + restartedPid + "."
                 : "FAILED post-restart single-instance gate: expected PID " +
                   restartedPid + ", found " + string.Join(",", pids) +
