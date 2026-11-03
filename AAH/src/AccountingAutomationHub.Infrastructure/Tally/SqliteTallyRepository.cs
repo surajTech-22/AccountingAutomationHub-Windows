@@ -2424,6 +2424,49 @@ public sealed class SqliteTallyRepository
         return true;
     }
 
+    /// <summary>
+    /// Read-only status of the ORIGINAL durable consolidated Tally source bindings.
+    /// This is destination import progress, NOT an accounting source count and
+    /// never authorizes CREATE/ALTER/DELETE or changes the synchronized voucher
+    /// authority. A Tally CREATED acknowledgement without full DR/CR readback
+    /// must remain visibly separate from Verified.
+    /// </summary>
+    public (int Verified, int AwaitingVerification, int HeldForReview) ReadConsolidatedVoucherProgress(
+        long clientId, string financialYear, string companyKey)
+    {
+        if (clientId <= 0 || string.IsNullOrWhiteSpace(financialYear) ||
+            string.IsNullOrWhiteSpace(companyKey)) return (0, 0, 0);
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT State, COUNT(*)
+            FROM TallySourceBindings
+            WHERE ClientId=$ClientId AND FinancialYear=$FinancialYear
+              AND CompanyKey=$CompanyKey COLLATE NOCASE
+              AND EntityType='Consolidated Voucher' COLLATE NOCASE
+            GROUP BY State;
+            """;
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$CompanyKey", companyKey.Trim());
+        var verified = 0;
+        var awaiting = 0;
+        var held = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var state = reader.GetString(0);
+            var count = Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
+            if (state.Equals("Verified", StringComparison.OrdinalIgnoreCase))
+                verified += count;
+            else if (state.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase))
+                awaiting += count;
+            else held += count; // Includes CreatePending and unknown/error states.
+        }
+        return (verified, awaiting, held);
+    }
+
     public TallySourceBindingVersionState? GetSourceBindingVersionState(
         long clientId, string financialYear, string companyKey, string entityType, string sourceAnchor)
     {
