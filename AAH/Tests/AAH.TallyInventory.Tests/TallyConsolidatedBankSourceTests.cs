@@ -77,6 +77,44 @@ internal static class TallyConsolidatedBankSourceTests
             "unchanged bank source was not deterministic");
         Check(bank.Writes == 0, "offline bank source mutated bank repository");
 
+        // One genuine same-day matched transfer: the normal Bank DR/CR
+        // classifier produces two mirrored Contra intents if asked per row.
+        // The consolidated wrapper must include the matched BANK sides just
+        // once, not double the movement and not infer a transfer by narration.
+        bank.Accounts.Add(new BankAccountRecord {
+            Id = 29, ClientId = 19, FinancialYear = client.FinancialYear,
+            BankName = "Second Branch Bank", AccountType = "Current",
+            LedgerName = "Second Bank Account"
+        });
+        bank.Rows.Add(new BankTransactionRecord {
+            Id = 217, ClientId = 19, FinancialYear = client.FinancialYear,
+            BankAccountId = 29, Mode = "Receipt",
+            LedgerName = "Branch Bank Account",
+            TransactionDate = bank.Rows[0].TransactionDate,
+            Narration = "Matched bank movement", TransactionId = "BANK-SOURCE-217",
+            Credit = 125.50m, RecordStatus = "Active"
+        });
+        bank.Matches.Add(new BankTransferMatch {
+            ClientId = 19, FinancialYear = client.FinancialYear,
+            SourceTransactionId = 216, TargetTransactionId = 217,
+            MatchDate = bank.Rows[0].TransactionDate,
+            Amount = 125.50m, Status = "Matched"
+        });
+        var matchedContra = Prepare(repo, client, from, to);
+        Check(matchedContra.Count == 1, "one proven bank transfer was double-posted in consolidated XML");
+        var contra = matchedContra[0].GetType().GetProperty("Expectation")?.GetValue(matchedContra[0]);
+        Check(contra?.GetType().GetProperty("VoucherType")?.GetValue(contra)?.ToString() == "Contra",
+            "matched bank transfer did not reuse the normal common Contra treatment");
+        var contraLines = ((IEnumerable)(contra!.GetType().GetProperty("Lines")!.GetValue(contra)!))
+            .Cast<object>().Select(Ledger).ToArray();
+        Check(contraLines.Length == 2 &&
+              contraLines.Contains("Branch Bank Account") &&
+              contraLines.Contains("Second Bank Account"),
+            "common Contra did not retain both original bank ledgers");
+        Check(bank.Writes == 0, "consolidated Contra preview mutated original Bank transactions");
+        bank.Matches.Clear();
+        bank.Rows.RemoveAt(1);
+
         bank.Rows[0].LedgerName = "";
         try
         {
@@ -137,6 +175,7 @@ public class SafeBankReadOnlyFake : DispatchProxy
 {
     public List<BankTransactionRecord> Rows { get; set; } = [];
     public List<BankAccountRecord> Accounts { get; set; } = [];
+    public List<BankTransferMatch> Matches { get; set; } = [];
     public int Writes { get; private set; }
 
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
@@ -144,7 +183,7 @@ public class SafeBankReadOnlyFake : DispatchProxy
         var name = targetMethod?.Name ?? "";
         if (name == "GetTransactions") return Rows;
         if (name == "GetAccounts") return Accounts;
-        if (name == "GetTransferMatches") return Array.Empty<BankTransferMatch>();
+        if (name == "GetTransferMatches") return Matches;
         Writes++;
         throw new InvalidOperationException("Offline Bank attempted unexpected operation: " + name);
     }
