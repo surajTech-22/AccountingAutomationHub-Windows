@@ -207,7 +207,7 @@ internal static class Program
             // Stale random temp staging is safer than indefinitely holding the
             // exclusive update mutex. Next update will use a fresh GUID path.
             Log("Preflight temp cleanup exceeded 30 seconds; deferring only " +
-                "the disposable scratch directory. Installed AAH unchanged.");
+                "the disposable scratch directory; application data untouched.");
         }
         catch (IOException ex)
         {
@@ -441,21 +441,35 @@ internal static class Program
             await using (var output = new FileStream(absolute, FileMode.CreateNew,
                 FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous))
             {
-                await input.CopyToAsync(output, 128 * 1024, cancellationToken);
+                var buffer = new byte[128 * 1024];
+                long fileBytes = 0;
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var n = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+                    if (n == 0) break;
+                    await output.WriteAsync(buffer.AsMemory(0, n), cancellationToken);
+                    fileBytes += n;
+                    extracted += n;
+                    if (extracted - lastLoggedBytes >= 64L * 1024 * 1024)
+                    {
+                        Log("Update preflight extraction progress: " + processed +
+                            " complete files, " +
+                            extracted.ToString(CultureInfo.InvariantCulture) +
+                            " bytes (including current file). Installed AAH untouched.");
+                        lastLoggedBytes = extracted;
+                    }
+                }
                 await output.FlushAsync(cancellationToken);
-                if (output.Length != entry.Length)
+                if (fileBytes != entry.Length)
                     throw new InvalidDataException(
                         "Incomplete updater ZIP member " + relative);
-                extracted += output.Length;
             }
             processed++;
-            if (processed % 100 == 0 || extracted - lastLoggedBytes >= 64L * 1024 * 1024)
-            {
+            if (processed % 100 == 0)
                 Log("Update preflight extraction progress: " + processed +
                     " files, " + extracted.ToString(CultureInfo.InvariantCulture) +
                     " bytes. No installed files touched.");
-                lastLoggedBytes = extracted;
-            }
         }
         Log("PASS: updater ZIP extracted " + processed + " files / " +
             extracted.ToString(CultureInfo.InvariantCulture) +
