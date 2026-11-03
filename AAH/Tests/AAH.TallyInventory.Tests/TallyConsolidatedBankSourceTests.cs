@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using System.Xml.Linq;
 using AccountingAutomationHub.Application.Banking;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Clients;
@@ -141,6 +142,40 @@ internal static class TallyConsolidatedBankSourceTests
                    "TallyAccountingVoucherExportService.cs")))
             root = root.Parent;
         Check(root is not null, "source checkout unavailable");
+        // A changed mapped ledger retains the original source anchor but
+        // must cease showing the OLD verified destination as up-to-date.
+        // UI and import use the SAME original signed-content digest method.
+        var previous = XElement.Parse("""
+            <VOUCHER ACTION="Create">
+              <DATE>20250915</DATE><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+              <VOUCHERNUMBER>B-ABCDEF0123456789ABCDEF01-BANK-216</VOUCHERNUMBER>
+              <NARRATION>Original bank narration</NARRATION>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>Office Expenses</LEDGERNAME><AMOUNT>-125.50</AMOUNT></ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>Branch Bank Account</LEDGERNAME><AMOUNT>125.50</AMOUNT></ALLLEDGERENTRIES.LIST>
+            </VOUCHER>
+            """);
+        var changed = new XElement(previous);
+        changed.Descendants("LEDGERNAME").First().Value = "Office Expenses Revised";
+        var oldHash = TallyConsolidatedVoucherImportService
+            .ComputePreparedContentIdentity(previous).ContentHash;
+        var newHash = TallyConsolidatedVoucherImportService
+            .ComputePreparedContentIdentity(changed).ContentHash;
+        Check(oldHash.Length > 0 && newHash.Length > 0 && oldHash != newHash,
+            "a changed Bank Ledger did not become a pending previous-to-desired ALTER");
+        var dashboardSource = File.ReadAllText(Path.Combine(root!.FullName,
+            "AAH", "src", "AccountingAutomationHub.Desktop", "ViewModels",
+            "DashboardViewModel.cs"));
+        var bindingSource = File.ReadAllText(Path.Combine(root.FullName,
+            "AAH", "src", "AccountingAutomationHub.Infrastructure", "Tally",
+            "SqliteTallyRepository.cs"));
+        Check(dashboardSource.Contains("number.Contains(\"-BANK-\"", StringComparison.Ordinal) &&
+              dashboardSource.Contains("ComputePreparedContentIdentity(voucher)", StringComparison.Ordinal) &&
+              dashboardSource.Contains("LastVerifiedHash", StringComparison.Ordinal) &&
+              dashboardSource.Contains("moduleChanged", StringComparison.Ordinal) &&
+              bindingSource.Contains("SELECT SourceAnchor, State, LastContentHash", StringComparison.Ordinal),
+            "Consolidated panel still classifies Bank Payment/Receipt as Cash or ignores source changes.");
+
+
         var exporter = File.ReadAllText(Path.Combine(root!.FullName, "AAH", "src",
             "AccountingAutomationHub.Infrastructure", "Tally",
             "TallyAccountingVoucherExportService.cs"));
