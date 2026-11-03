@@ -476,12 +476,23 @@ public sealed class TallyConsolidatedVoucherImportService(
             // and only when no other AAH source has claimed this MASTERID.
             // Then the existing Previous->Desired / same-MASTERID ALTER path
             // below performs a SECOND fresh version+ALTERID check before POST.
-            if (state is null &&
+            // The same source may instead be Tally-accepted but still
+            // awaiting readback from the earlier cross-branch B2C collision.
+            // That state owns a LASTVCHID and an immutable PENDING old version.
+            // Recover only if the old live XML proves THAT pending version.
+            var acceptedOldSource = state is not null &&
+                state.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase) &&
+                state.MasterId.Length > 0 &&
+                state.PendingVersion.Length > 0 &&
+                state.PendingContentHash.Length > 0;
+            if (acceptedOldSource || (state is null &&
                 !tallyRepository.HasImportedSourceFingerprint(
                     link.ClientId, financialYear, link.CompanyKey,
-                    SourceEntityType, planned.SourceAnchor))
+                    SourceEntityType, planned.SourceAnchor)))
             {
                 var recoverable = candidates.Where(candidate =>
+                    (!acceptedOldSource ||
+                     IgnoreCase.Equals(candidate.MasterId, state!.MasterId)) &&
                     TryReadFirstUnboundB2cLedgerRename(
                         planned.Xml, candidate, before.FullVouchers,
                         out _, out _)).ToArray();
@@ -513,6 +524,14 @@ public sealed class TallyConsolidatedVoucherImportService(
                         throw new InvalidOperationException(
                             "Could not verify previous full B2C voucher version for " +
                             planned.SourceAnchor + "; no CREATE or ALTER is permitted.");
+                    if (acceptedOldSource &&
+                        (!IgnoreCase.Equals(state!.PendingContentHash, oldHash) ||
+                         !string.Equals(state.PendingVersion, oldVersion,
+                             StringComparison.Ordinal)))
+                        throw new InvalidOperationException(
+                            "Tally-accepted B2C source " + planned.SourceAnchor +
+                            " has a different saved pending previous version. " +
+                            "No second CREATE or unverified ALTER is allowed.");
                     var previousProof = new TallySourceBindingVersionState
                     {
                         State = "Verified", MasterId = priorLive.MasterId,
@@ -532,9 +551,10 @@ public sealed class TallyConsolidatedVoucherImportService(
                         SourceEntityType, planned.SourceAnchor, planned.SourceAnchor,
                         priorLive.MasterId, priorLive.Guid, oldHash, oldVersion,
                         oldAlterId,
-                        "Exact unbound B2C ledger-rename recovery: unique live " +
-                        "MASTERID, same original date/ref/narration/tax amounts, " +
-                        "one B2C party ledger rename; old full XML/ALTERID verified. " +
+                        "First-unbound or accepted-pending B2C ledger rename: " +
+                        "unique saved/live MASTERID, same date/ref/narration/tax " +
+                        "amounts, one party Ledger name correction; prior pending " +
+                        "version if present and old full XML/ALTERID verified. " +
                         "No CREATE or ALTER sent during baseline recovery.");
                     alterTargets.Add(planned.SourceAnchor, priorLive);
                     continue;
