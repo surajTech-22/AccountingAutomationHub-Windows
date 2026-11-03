@@ -215,6 +215,55 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "Accepted-voucher read-only reconciliation can mutate Tally or ignore original MASTERID/DRCR/version gates.");
         Console.WriteLine("PASS: CL019 accepted voucher recovery is read-only and original-binding exact MASTERID/DRCR gated.");
 
+        // CL019: user changed the accounting ledger IN AAH after the
+        // original consolidated voucher was verified in Tally. The correct
+        // operation is the established bound MASTERID Previous->Desired ALTER,
+        // never a second CREATE or a new posting/calculation engine.
+        var preparedAlterSource = System.Xml.Linq.XElement.Parse(Voucher(
+            postings: """
+            <ALLLEDGERENTRIES.LIST><LEDGERNAME>B2C Sales - Gujarat</LEDGERNAME><AMOUNT>-11120.32</AMOUNT></ALLLEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST><LEDGERNAME>Sales @ 18% - Gujarat</LEDGERNAME><AMOUNT>9424.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST><LEDGERNAME>Output CGST @ 9% - Gujarat</LEDGERNAME><AMOUNT>848.16</AMOUNT></ALLLEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST><LEDGERNAME>Output SGST @ 9% - Gujarat</LEDGERNAME><AMOUNT>848.16</AMOUNT></ALLLEDGERENTRIES.LIST>
+            """).Replace("<TALLYMESSAGE>", "").Replace("</TALLYMESSAGE>", ""));
+        var boundAlterXml = TallyAccountingVoucherExportService.BuildBoundConsolidatedVoucherAlterXml(
+            "Combined Books", preparedAlterSource, "26", "2");
+        var alterDocument = System.Xml.Linq.XDocument.Parse(boundAlterXml);
+        var alteredVoucher = alterDocument.Descendants("VOUCHER").Single();
+        if (!string.Equals((string?)alteredVoucher.Attribute("ACTION"), "Alter", StringComparison.Ordinal) ||
+            !string.Equals((string?)alteredVoucher.Attribute("TAGNAME"), "MASTER ID", StringComparison.Ordinal) ||
+            !string.Equals((string?)alteredVoucher.Attribute("TAGVALUE"), "26", StringComparison.Ordinal) ||
+            alteredVoucher.Element("VOUCHERNUMBER")?.Value != "2" ||
+            alteredVoucher.Elements("ALLLEDGERENTRIES.LIST").Count() != 4 ||
+            alteredVoucher.Descendants("LEDGERNAME").First().Value != "B2C Sales - Gujarat" ||
+            alteredVoucher.Descendants("AMOUNT").First().Value != "-11120.32")
+            throw new InvalidOperationException(
+                "Consolidated ledger edit did not reuse the normal bound-MASTERID ALTER writer " +
+                "and preserve the branch's original signed DR/CR and Tally-owned number.");
+        var alterWriterSource = File.ReadAllText(Path.Combine(
+            sourceRoot!.FullName, "AAH", "src",
+            "AccountingAutomationHub.Infrastructure", "Tally",
+            "TallyAccountingVoucherExportService.cs"));
+        var alterWriterStart = alterWriterSource.IndexOf(
+            "public static string BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal);
+        var normalWriterStart = alterWriterSource.IndexOf(
+            "private static void BeginVoucherAlter(", alterWriterStart, StringComparison.Ordinal);
+        if (alterWriterStart < 0 || normalWriterStart < alterWriterStart ||
+            !alterWriterSource.Substring(alterWriterStart, normalWriterStart - alterWriterStart)
+                .Contains("BeginVoucherAlter(", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Consolidated ledger edit bypasses the original normal Tally ALTER XML writer.");
+        if (!importerSource.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
+            !importerSource.Contains("StageSourceBindingChange(", StringComparison.Ordinal) ||
+            !importerSource.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) ||
+            !importerSource.Contains("ConfirmedAlter", StringComparison.OrdinalIgnoreCase) ||
+            !importerSource.Contains("AcceptedAwaitingVerification", StringComparison.Ordinal) ||
+            !importerSource.Contains("alterResponse.Altered != 1", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Consolidated changed ledger bypasses normal previous-version/accepted/live verification.");
+        Console.WriteLine("PASS: consolidated changed ledger uses original bound MASTERID ALTER " +
+            "with previous DRCR/ALTERID, accepted-write barrier and post-write verification.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
