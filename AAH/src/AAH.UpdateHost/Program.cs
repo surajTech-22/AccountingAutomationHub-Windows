@@ -768,7 +768,7 @@ internal static class Program
                 DateTimeStyles.AssumeUniversal, out var when)) continue;
             when = when.ToUniversalTime();
             if (when < startedUtc.AddSeconds(-2) ||
-                when > observedUtc.AddMinutes(1)) continue;
+                when > observedUtc.AddSeconds(2)) continue;
             var message = line[(pos + prefix.Length)..];
             if (message.Contains("Verified updater deferred:", StringComparison.Ordinal) ||
                 message.Contains("Verified updater shutdown check failed", StringComparison.Ordinal))
