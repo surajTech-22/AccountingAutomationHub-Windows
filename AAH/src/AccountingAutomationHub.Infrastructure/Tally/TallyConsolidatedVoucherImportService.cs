@@ -8,13 +8,17 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// <summary>
 /// The only live consolidated voucher writer. Never posts the parent client
 /// voucher set, and never infers accounting amounts from totals or GST rates.
-/// Each prepared branch voucher is CREATE-only, protected by a fresh target
-/// voucher identity snapshot and a separate post-write Tally readback.
+/// Each branch-prepared XML voucher uses the SAME durable source binding,
+/// previous-version and accepted-write protections as AAH's ordinary exporter.
+/// No foreign branch Tally identity or second mutation policy is permitted.
 /// </summary>
 public sealed class TallyConsolidatedVoucherImportService(
     TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null,
-    Action? verifiedVoucher = null)
+    Action? verifiedVoucher = null,
+    SqliteTallyRepository? tallyRepository = null,
+    Action? tallyAcknowledgedCreate = null)
 {
+    private const string SourceEntityType = "Consolidated Voucher";
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
     private static readonly string[] PriorMasters =
         ["GROUP", "VOUCHERTYPE"];
@@ -116,7 +120,26 @@ public sealed class TallyConsolidatedVoucherImportService(
             var entries = ReadPostings(voucher);
             if (entries.Count == 0)
                 throw new InvalidOperationException("Prepared voucher has no ledger posting authority: " + number);
-            source.Add(new ExpectedVoucher(date, type, number, entries, voucher));
+            var reference = Value(voucher, "REFERENCE");
+            // The already-prepared branch Voucher Number contains the scoped
+            // branch identity. The destination owns its eventual Tally number;
+            // this stable SOURCE anchor is kept only in AAH's existing
+            // Client/FY/CompanyKey source-binding table.
+            var sourceAnchor = "CONSOLIDATED|" + type + "|" + number;
+            var exactPostings = string.Join("|", entries
+                .OrderBy(e => e.Name, IgnoreCase).ThenBy(e => e.Amount)
+                .Select(e => e.Name + ":" +
+                    e.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+            var contentHash = TallyVoucherFingerprint.BuildContentHash(
+                date, type, reference, Value(voucher, "PARTYLEDGERNAME"),
+                entries.Where(e => e.Amount < 0).Sum(e => Math.Abs(e.Amount)),
+                Value(voucher, "NARRATION") + "|" + exactPostings);
+            // The existing repository retains this immutable desired version
+            // for accepted-unverified and previous->desired audit tracking.
+            var version = "CONSOLIDATED|" + date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                "|" + type + "|" + reference + "|" + exactPostings + "|" + contentHash;
+            source.Add(new ExpectedVoucher(date, type, number, entries, voucher,
+                reference, sourceAnchor, contentHash, version));
         }
 
         // A failed live read means no mutations. No cached branch or destination
@@ -353,7 +376,8 @@ public sealed class TallyConsolidatedVoucherImportService(
     }
     private sealed record ExpectedVoucher(
         DateTime Date, string Type, string Number,
-        IReadOnlyList<(string Name, decimal Amount)> Postings, XElement Xml);
+        IReadOnlyList<(string Name, decimal Amount)> Postings, XElement Xml,
+        string Reference, string SourceAnchor, string ContentHash, string DesiredVersion);
 }
 public sealed record TallyConsolidatedVoucherImportResult(
     int ImportedVouchers, int CreatedMasters, string Status);
