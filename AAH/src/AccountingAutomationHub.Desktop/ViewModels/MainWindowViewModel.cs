@@ -2680,6 +2680,30 @@ public sealed class MainWindowViewModel :
     /// transport with a fresh destination voucher and master readback.
     /// It never invokes the normal parent-client Export Selected route.
     /// </summary>
+    // A destination import has its OWN durable Tally authority. Parent/branch
+    // accounting rows are source counts and must not be displayed as the number
+    // of vouchers successfully imported into the consolidated Tally company.
+    // Local read only; never sends a voucher or creates a separate import route.
+    private string ReadConsolidatedTallyProgressStatus(long parentId, string financialYear)
+    {
+        var client = _clientContext.CurrentClient;
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        if (client is null || client.Id != parentId ||
+            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            link is null || link.ClientId != parentId)
+            return "Consolidated destination verification is unavailable until this Client/FY is linked to its own Tally company.";
+        var counts = _tallyRepository.ReadConsolidatedVoucherProgress(
+            parentId, financialYear, link.CompanyKey);
+        return "Destination Tally verification: " +
+            counts.Verified.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) +
+            " source voucher(s) live-verified · " +
+            counts.AwaitingVerification.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) +
+            " accepted by Tally awaiting exact MASTERID/DRCR verification · " +
+            counts.HeldForReview.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) +
+            " held/pending. These figures are not the original branch accounting totals. " +
+            "Accepted/pending sources are never automatically resent.";
+    }
+
     private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
@@ -2739,6 +2763,34 @@ public sealed class MainWindowViewModel :
                 tallyAcknowledgedCreateCount, exception.Message);
             throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
         }
+        finally
+        {
+            // The importer deliberately bypasses the normal export command but
+            // the ordinary Dashboard still depends on the shared Tally
+            // coordinator's synchronized read cache. Request ONE existing
+            // read-only linked synchronization AFTER the write loop (including
+            // partial acceptance), never another voucher POST or retry.
+            if (tallyAcknowledgedCreateCount > 0 &&
+                _clientContext.CurrentClient is { } visible &&
+                visible.Id == parentId &&
+                visible.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                _tallyCoordinator.GetCurrentClientLink() is { } stillLinked &&
+                stillLinked.ClientId == parentId &&
+                stillLinked.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            {
+                try { await _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true); }
+                catch (Exception readFailure)
+                {
+                    // An unsuccessful read MUST NOT undo the real accepted
+                    // statuses or allow a second CREATE. The persisted
+                    // AcceptedAwaitingVerification state is the authority.
+                    ApplicationState = "Tally created vouchers but live synchronization is pending: " +
+                        readFailure.Message;
+                }
+            }
+            _consolidatedTallyImportPage?.RefreshTallyImportProgress();
+            _consolidatedDashboardPage?.RefreshTallyImportProgress();
+        }
     }
 
     private void RebuildWorkspaceNavigation(
@@ -2775,7 +2827,9 @@ public sealed class MainWindowViewModel :
                 if (_consolidatedDashboardPage is null ||
                     _consolidatedDashboardPage.ParentClientId != client.Id ||
                     !_consolidatedDashboardPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
-                    _consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel);
+                    _consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(
+                        client, _dashboardViewModel,
+                        () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
                 if (_consolidatedTallyImportPage is null ||
                     _consolidatedTallyImportPage.ParentClientId != client.Id ||
                     !_consolidatedTallyImportPage.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase))
@@ -2783,7 +2837,8 @@ public sealed class MainWindowViewModel :
                         client.Id, client.FinancialYear, _dashboardViewModel,
                         (types, cash) => ImportConsolidatedMastersAsync(client.Id, client.FinancialYear, types, cash),
                         (types, cash) => GenerateConsolidatedPreparedXmlAsync(client.Id, client.FinancialYear, types, cash),
-                        (types, cash) => ExportConsolidatedVouchersAsync(client.Id, client.FinancialYear, types, cash));
+                        (types, cash) => ExportConsolidatedVouchersAsync(client.Id, client.FinancialYear, types, cash),
+                        () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
@@ -3638,6 +3693,8 @@ public sealed class MainWindowViewModel :
             var link = await _tallyCoordinator.ConfirmSelectedCompanyAsync();
             ApplicationState = $"Tally linked to {link.CompanyName} for {client.ClientCode}. Shared Audit ownership has been synchronized where an explicit Audit link exists.";
             _bankingViewModel.Refresh();
+            _consolidatedTallyImportPage?.RefreshTallyImportProgress();
+            _consolidatedDashboardPage?.RefreshTallyImportProgress();
         }
         catch (Exception exception)
         {
