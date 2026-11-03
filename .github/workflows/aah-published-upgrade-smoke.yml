@@ -1,0 +1,152 @@
+name: AAH Published v589-to-v593 Real Upgrade Smoke
+
+# This is a real Windows process/install regression, not only a source-code
+# assertion or synthetic file-swap fixture. No user's PC or Tally is touched.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/aah-published-upgrade-smoke.yml'
+  push:
+    branches:
+      - fix/aah-published-upgrade-smoke-20261103
+    paths:
+      - '.github/workflows/aah-published-upgrade-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  published-upgrade:
+    name: Real v589 desktop + verified v593 UpdateHost + restart
+    runs-on: windows-latest
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AAH_REPO: surajTech-22/AccountingAutomationHub-Windows
+      AAH_BASE: v4.0.0.589
+      AAH_TARGET: v4.0.0.593
+    steps:
+      - name: Prepare published release assets, not source recompilations
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'AAH-Published-Upgrade-Smoke'
+          $assets = Join-Path $root 'assets'
+          $install = Join-Path $root 'installed'
+          New-Item -ItemType Directory -Force -Path $assets,$install | Out-Null
+          $oldZip = Join-Path $assets 'AAH_App-win-x64.zip'
+          gh release download $env:AAH_BASE --repo $env:AAH_REPO --pattern AAH_App-win-x64.zip --dir $assets
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch exact published old application.' }
+          $updaterDirectory = Join-Path $assets 'updater'
+          New-Item -ItemType Directory -Force -Path $updaterDirectory | Out-Null
+          gh release download $env:AAH_TARGET --repo $env:AAH_REPO --pattern AAH_Update.exe --dir $updaterDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch exact published target updater.' }
+          $updater = Join-Path $updaterDirectory 'AAH_Update.exe'
+          foreach ($item in @(
+            @{tag=$env:AAH_BASE; name='AAH_App-win-x64.zip'; file=$oldZip},
+            @{tag=$env:AAH_TARGET; name='AAH_Update.exe'; file=$updater}
+          )) {
+            $release = gh api "repos/$env:AAH_REPO/releases/tags/$($item.tag)" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Release metadata missing: $($item.tag)" }
+            $asset = @($release.assets | Where-Object { $_.name -ceq $item.name })
+            if ($asset.Count -ne 1 -or $asset[0].digest -cnotmatch '^sha256:[0-9a-fA-F]{64}$') {
+              throw "Published GitHub asset digest unavailable: $($item.tag) $($item.name)"
+            }
+            $actual = (Get-FileHash -LiteralPath $item.file -Algorithm SHA256).Hash
+            if ($actual -ine $asset[0].digest.Substring(7)) {
+              throw "Published asset SHA256 mismatch: $($item.tag) $($item.name)"
+            }
+            Write-Host "PASS: $($item.tag) $($item.name) verified against GitHub release digest."
+          }
+          Expand-Archive -LiteralPath $oldZip -DestinationPath $install -Force
+          $exe = Join-Path $install 'AccountingAutomationHub.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'Published old ZIP lacks its root application EXE.' }
+          if ((Get-Item -LiteralPath $exe).VersionInfo.FileVersion -ne '4.0.0.589') {
+            throw 'Published old binary version differs from expected 4.0.0.589.'
+          }
+          [IO.File]::WriteAllText((Join-Path $install 'USER_DATA_MUST_SURVIVE_UPGRADE.txt'),
+            'Do not alter user-owned files')
+          Write-Host "PASS: published v589 executable staged at $install."
+
+      - name: Launch actual v589 app and perform genuine updater handoff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'AAH-Published-Upgrade-Smoke'
+          $install = Join-Path $root 'installed'
+          $exe = Join-Path $install 'AccountingAutomationHub.exe'
+          $updater = Join-Path $root 'assets/updater/AAH_Update.exe'
+          $status = Join-Path $root 'smoke-status.txt'
+          try {
+            $old = Start-Process -FilePath $exe -WorkingDirectory $install -PassThru
+            Write-Host "Old real AAH launched as PID $($old.Id)"
+            Start-Sleep -Seconds 5
+            $old.Refresh()
+            if ($old.HasExited) {
+              throw "Published v589 desktop exited on Windows runner before updater handoff (code $($old.ExitCode)); must fix actual start/exit behavior."
+            }
+            $args = @('--aah-auto-update-v1',
+              ('"--target-exe={0}"' -f $exe),
+              ('--parent-pid={0}' -f $old.Id),
+              ('--release={0}' -f $env:AAH_TARGET))
+            $hostProcess = Start-Process -FilePath $updater -ArgumentList $args -WorkingDirectory (Split-Path $updater) -PassThru
+            Write-Host "Published v593 UpdateHost launched as PID $($hostProcess.Id). Waiting for its REAL install and restart."
+            # This external bound is for CI. Production's accounting/transaction
+            # safety remains owned by the signed UpdateHost, never the test.
+            $hostProcess | Wait-Process -Timeout 1800 -ErrorAction Stop
+            $hostProcess.Refresh()
+            if ($hostProcess.ExitCode -ne 0) {
+              throw "Published UpdateHost exited with code $($hostProcess.ExitCode). See uploaded updater and AAH logs."
+            }
+            $onDisk = (Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+            if ($onDisk -ne '4.0.0.593') {
+              throw "Updater reported exit 0 but installed EXE remains $onDisk, expected 4.0.0.593."
+            }
+            $sentinel = Join-Path $install 'USER_DATA_MUST_SURVIVE_UPGRADE.txt'
+            if (-not (Test-Path -LiteralPath $sentinel) -or
+              [IO.File]::ReadAllText($sentinel) -cne 'Do not alter user-owned files') {
+              throw 'Published updater modified or deleted unrelated user-owned data.'
+            }
+            $running = @(Get-CimInstance Win32_Process -Filter "Name='AccountingAutomationHub.exe'" |
+              Where-Object { $_.ExecutablePath -ieq $exe })
+            if ($running.Count -ne 1) {
+              throw "Updated executable installed but $($running.Count) exact-install AAH processes are running; expected one restarted process."
+            }
+            [IO.File]::WriteAllText($status,
+              "PASS: real v589 app shut down; v593 installed; unrelated user file preserved; exactly one v593 app restarted.")
+            Write-Host (Get-Content -LiteralPath $status -Raw)
+          }
+          catch {
+            [IO.File]::WriteAllText($status, "FAIL: $($_.Exception.Message)")
+            throw
+          }
+      - name: Save logs and installation evidence even on failure
+        if: always()
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'AAH-Published-Upgrade-Smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $exe = Join-Path $root 'installed/AccountingAutomationHub.exe'
+          "Installed binary version: $(if(Test-Path $exe){(Get-Item $exe).VersionInfo.FileVersion}else{'MISSING'})" |
+            Out-File (Join-Path $root 'final-version.txt')
+          Get-CimInstance Win32_Process -Filter "Name='AccountingAutomationHub.exe'" |
+            Select-Object ProcessId,ExecutablePath,CommandLine |
+            Out-String | Out-File (Join-Path $root 'process-census.txt')
+          $logs = Join-Path $env:LOCALAPPDATA 'AccountingAutomationHub/AutoUpdateLogs'
+          $destination = Join-Path $root 'AutoUpdateLogs'
+          if (Test-Path $logs) { Copy-Item $logs $destination -Recurse -Force }
+          $shutdown = Join-Path $env:TEMP 'AccountingAutomationHub_v4_0_0_shutdown.log'
+          if (Test-Path $shutdown) { Copy-Item $shutdown (Join-Path $root 'shutdown.log') -Force }
+      - name: Upload smoke outcome and runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aah-published-upgrade-windows-evidence
+          path: |
+            ${{ runner.temp }}/AAH-Published-Upgrade-Smoke/*status.txt
+            ${{ runner.temp }}/AAH-Published-Upgrade-Smoke/final-version.txt
+            ${{ runner.temp }}/AAH-Published-Upgrade-Smoke/process-census.txt
+            ${{ runner.temp }}/AAH-Published-Upgrade-Smoke/shutdown.log
+            ${{ runner.temp }}/AAH-Published-Upgrade-Smoke/AutoUpdateLogs/**
+          if-no-files-found: warn
