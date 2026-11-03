@@ -779,6 +779,7 @@ internal static class Program
         completedUtc = default;
         if (pid <= 0 || startedUtc > observedUtc || markers.Length == 0) return false;
         var stage = 0;
+        var previousStageTimestamp = DateTimeOffset.MinValue;
         var prefix = " PID " + pid.ToString(CultureInfo.InvariantCulture) + ": ";
         foreach (var raw in log.Split('\n'))
         {
@@ -788,8 +789,9 @@ internal static class Program
             if (!DateTimeOffset.TryParse(line[..pos], CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal, out var when)) continue;
             when = when.ToUniversalTime();
-            if (when < startedUtc.AddSeconds(-2) ||
-                when > observedUtc.AddSeconds(2)) continue;
+            // Do not accept evidence from before this OS process began, even
+            // if Windows recycled a PID shortly after a previous exit.
+            if (when < startedUtc || when > observedUtc) continue;
             var message = line[(pos + prefix.Length)..];
             if (message.Contains("Verified updater deferred:", StringComparison.Ordinal) ||
                 message.Contains("Verified updater shutdown check failed", StringComparison.Ordinal) ||
@@ -797,11 +799,18 @@ internal static class Program
                 message.StartsWith("Exit Completely validation failed", StringComparison.Ordinal))
             {
                 stage = 0;
+                previousStageTimestamp = DateTimeOffset.MinValue;
                 completedUtc = default;
                 continue;
             }
             if (message.Equals(markers[stage], StringComparison.Ordinal))
             {
+                if (when < previousStageTimestamp)
+                {
+                    stage = 0;
+                    return false; // Audit timestamps went backwards.
+                }
+                previousStageTimestamp = when;
                 stage++;
                 if (stage == markers.Length)
                 {
@@ -863,7 +872,7 @@ internal static class Program
             // cleanup and owner release were already logged by THIS PID.
             if (!SameProcessPath(process, verifiedInstalledExe))
                 return false;
-            Log("AAH PID " + process.Id + " completed verified Tally/runtime cleanup and " +
+            Log("AAH PID " + process.Id + " completed safe Tally/runtime cleanup and " +
                 "final instance release, but remained alive. Retiring this proven-cleaned ghost only.");
             process.Kill(entireProcessTree: false);
             using var boundedWait = new CancellationTokenSource(TimeSpan.FromSeconds(15));
