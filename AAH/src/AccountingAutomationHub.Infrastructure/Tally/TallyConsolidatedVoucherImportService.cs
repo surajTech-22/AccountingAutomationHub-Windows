@@ -126,12 +126,13 @@ public sealed class TallyConsolidatedVoucherImportService(
             if (sourceReference.Length > 0 && source.Any(previous =>
                 previous.Date.Date == date.Date &&
                 IgnoreCase.Equals(previous.Type, type) &&
-                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), sourceReference) &&
-                SamePostings(previous.Postings, entries)))
+                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), sourceReference)))
                 throw new InvalidOperationException(
                     "Consolidated branch XML repeats original reference '" +
-                    sourceReference + "' with the same date/type/DR/CR under two " +
-                    "different voucher numbers. No Tally CREATE was sent.");
+                    sourceReference + "' with the same date/type, either as an " +
+                    "exact duplicate or with changed DR/CR. The original AAH " +
+                    "voucher rules require review before any CREATE/ALTER; no " +
+                    "Tally voucher was sent.");
             source.Add(new ExpectedVoucher(date, type, number, entries, voucher));
         }
 
