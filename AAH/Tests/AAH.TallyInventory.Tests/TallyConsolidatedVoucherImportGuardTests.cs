@@ -372,6 +372,148 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         Console.WriteLine("PASS: previous bound source version + full old DRCR + " +
             "same destination MASTERID/ALTERID mandatory before changed ledger ALTER.");
 
+        // Exact Nov 3 CL019 live diagnostic: existing MASTERID 337 / ALTERID
+        // 339 has the SAME Karnataka Sales B2C ref, date, signed tax/amounts,
+        // but its former debtor name includes an old two-digit B2C code.
+        // The desired branch ledger name changed; this is ONE verified
+        // PREVIOUS->DESIRED ALTER, never an additional Tally CREATE.
+        var kaOldPosts = new (string Name, decimal Amount)[]
+        {
+            ("B2C Sales - 24 - Karnataka", -49499.82m),
+            ("Sales @ 18% - Karnataka", 41949.00m),
+            ("Output IGST @ 18% - Karnataka", 7550.82m)
+        };
+        var kaDate = new DateTime(2026, 1, 31);
+        const string kaRef = "B2CS-202601-24-18-2";
+        const string kaOldName = "B2C Sales - 24 - Karnataka";
+        const string kaNewName = "B2C Sales - Karnataka";
+        var kaOldXml = new System.Xml.Linq.XElement("VOUCHER",
+            new System.Xml.Linq.XElement("DATE", "20260131"),
+            new System.Xml.Linq.XElement("VOUCHERTYPENAME", "Sales"),
+            new System.Xml.Linq.XElement("VOUCHERNUMBER", "27"),
+            new System.Xml.Linq.XElement("REFERENCE", kaRef),
+            new System.Xml.Linq.XElement("NARRATION", "Sales " + kaRef),
+            new System.Xml.Linq.XElement("PARTYLEDGERNAME", kaOldName),
+            kaOldPosts.Select(p => new System.Xml.Linq.XElement("ALLLEDGERENTRIES.LIST",
+                new System.Xml.Linq.XElement("LEDGERNAME", p.Name),
+                new System.Xml.Linq.XElement("AMOUNT",
+                    p.Amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)))));
+        var kaNewXml = new System.Xml.Linq.XElement(kaOldXml);
+        kaNewXml.SetAttributeValue("ACTION", "Create");
+        kaNewXml.Element("VOUCHERNUMBER")!.Value =
+            "B-BFF10AAEA9D095199C45F469-" + kaRef;
+        kaNewXml.Element("PARTYLEDGERNAME")!.Value = kaNewName;
+        kaNewXml.Elements("ALLLEDGERENTRIES.LIST").First()
+            .Element("LEDGERNAME")!.Value = kaNewName;
+        var kaOldIndex = new TallyVoucherIndexRecord
+        {
+            MasterId = "337", AlterId = "339", Guid = "unique-guid-337",
+            VoucherDate = kaDate, VoucherType = "Sales",
+            VoucherNumber = "27", Reference = kaRef,
+            Narration = "Sales " + kaRef, PartyLedger = kaOldName,
+            LedgerPostings = kaOldPosts.Select(p => new TallyLedgerPostingRecord
+            {
+                LedgerName = p.Name, SignedAmount = p.Amount
+            }).ToArray()
+        };
+        var kaSnapshot = new[]
+        {
+            new TallyVoucherXmlSnapshot(
+                "337", "unique-guid-337", "Sales", kaDate,
+                kaOldXml.ToString(System.Xml.Linq.SaveOptions.DisableFormatting))
+                { AlterId = "339" }
+        };
+        var renameMethod = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "TryReadFirstUnboundB2cLedgerRename",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "First-unbound B2C previous-version recovery guard is missing.");
+        bool B2cRename(
+            System.Xml.Linq.XElement newXml,
+            TallyVoucherIndexRecord existing,
+            IReadOnlyList<TallyVoucherXmlSnapshot> snapshots,
+            out string hash, out string version)
+        {
+            var args = new object?[] { newXml, existing, snapshots, "", "" };
+            var result = (bool)renameMethod.Invoke(null, args)!;
+            hash = (string)args[3]!;
+            version = (string)args[4]!;
+            return result;
+        }
+        if (!B2cRename(kaNewXml, kaOldIndex, kaSnapshot, out var kaHash, out var kaVersion))
+            throw new InvalidOperationException(
+                "Exact CL019 B2C old debtor name to latest branch ledger was rejected.");
+        var kaBaseline = new TallySourceBindingVersionState
+        {
+            State = "Verified", MasterId = "337",
+            LastVerifiedAlterId = 339,
+            VerifiedContentHash = kaHash, VerifiedVersion = kaVersion
+        };
+        if (!OldMatches(kaOldIndex, kaBaseline, kaSnapshot))
+            throw new InvalidOperationException(
+                "Recovered old exact B2C version did not pass ORIGINAL " +
+                "same-MASTERID old full DRCR/ALTERID gate.");
+        var kaAlter = System.Xml.Linq.XDocument.Parse(
+            TallyAccountingVoucherExportService.BuildBoundConsolidatedVoucherAlterXml(
+                "Combined Books", kaNewXml, "337", "27"));
+        var kaAlterVoucher = kaAlter.Descendants("VOUCHER").Single();
+        if ((string?)kaAlterVoucher.Attribute("TAGVALUE") != "337" ||
+            !string.Equals((string?)kaAlterVoucher.Attribute("ACTION"), "Alter",
+                StringComparison.Ordinal) ||
+            kaAlterVoucher.Element("VOUCHERNUMBER")?.Value != "27" ||
+            kaAlterVoucher.Descendants("LEDGERNAME").First().Value != kaNewName ||
+            !kaAlterVoucher.Descendants("AMOUNT").Select(e => e.Value)
+                .SequenceEqual(new[] { "-49499.82", "41949.00", "7550.82" }))
+            throw new InvalidOperationException(
+                "Recovered B2C invoice did not use original bound-MASTERID ALTER " +
+                "with unchanged tax and signed amounts.");
+        var wrongDate = new System.Xml.Linq.XElement(kaNewXml);
+        wrongDate.Element("DATE")!.Value = "20260130";
+        var wrongAmount = new System.Xml.Linq.XElement(kaNewXml);
+        wrongAmount.Elements("ALLLEDGERENTRIES.LIST").Last()
+            .Element("AMOUNT")!.Value = "7550.83";
+        var wrongBranch = new System.Xml.Linq.XElement(kaNewXml);
+        wrongBranch.Element("PARTYLEDGERNAME")!.Value = "B2C Sales - Gujarat";
+        wrongBranch.Elements("ALLLEDGERENTRIES.LIST").First()
+            .Element("LEDGERNAME")!.Value = "B2C Sales - Gujarat";
+        var wrongNumber = new System.Xml.Linq.XElement(kaNewXml);
+        wrongNumber.Element("VOUCHERNUMBER")!.Value = "27";
+        var wrongTax = new System.Xml.Linq.XElement(kaNewXml);
+        wrongTax.Elements("ALLLEDGERENTRIES.LIST").Last()
+            .Element("LEDGERNAME")!.Value = "Output CGST @ 9% - Karnataka";
+        foreach (var disallowed in new[] {
+            (wrongDate, "date"), (wrongAmount, "IGST amount"),
+            (wrongBranch, "cross-branch party"), (wrongNumber, "unscoped number"),
+            (wrongTax, "changed tax ledger")
+        })
+            if (B2cRename(disallowed.Item1, kaOldIndex, kaSnapshot, out _, out _))
+                throw new InvalidOperationException(
+                    "Unsafe B2C ALTER recovery ignored " + disallowed.Item2);
+        kaOldIndex.AlterId = "340";
+        if (OldMatches(kaOldIndex, kaBaseline, kaSnapshot))
+            throw new InvalidOperationException(
+                "Recovered B2C ALTER bypassed changed destination ALTERID.");
+        kaOldIndex.AlterId = "339";
+        kaOldIndex.Guid = "different-guid";
+        if (B2cRename(kaNewXml, kaOldIndex, kaSnapshot, out _, out _))
+            throw new InvalidOperationException(
+                "Recovered B2C source accepted a different destination GUID.");
+        // Guard source-level workflow wiring as well as the pure matcher.
+        if (!importerSource.Contains("acceptedOldSource", StringComparison.Ordinal) ||
+            !importerSource.Contains("state!.PendingContentHash, oldHash", StringComparison.Ordinal) ||
+            !importerSource.Contains("state.PendingVersion, oldVersion", StringComparison.Ordinal) ||
+            !importerSource.Contains("IsTallyMasterIdClaimedByAnotherSource(", StringComparison.Ordinal) ||
+            !importerSource.Contains("alterTargets.Add(planned.SourceAnchor, priorLive);", StringComparison.Ordinal) ||
+            !importerSource.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "B2C previous-accepted/first-unbound source skipped original " +
+                "Tally owner/pending-version/previous-MASTERID ALTER gates.");
+        Console.WriteLine(
+            "PASS: CL019 MASTERID 337 old ledger to desired ledger is strict " +
+            "same-MASTERID ALTER, with full GST/DRCR and prior-accepted " +
+            "version guards; cross-branch/amount/date/GUID changes rejected.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");

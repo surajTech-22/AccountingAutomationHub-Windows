@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.588)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.589)"
         required: true
-        default: "v4.0.0.588"
+        default: "v4.0.0.589"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.588: extend the ORIGINAL compulsory branch Groups to include built-in Suspense A/c classification; preserve master-first, XML wrapper, DR/CR and Tally identity/readback gates.
+# v4.0.0.589: exact CL019 accepted/unbound B2C ledger rename recovery, same original live MASTERID/ALTERID Previous->Desired ALTER, no duplicate CREATE or tax recalculation.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.588]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.589]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.588' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.589' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.588: Correct consolidated XML error Circular or unknown branch accounting group Primary after 296 Karnataka Bank Statement vouchers were prepared by the original branch exporter. The existing compulsory consolidated branch Group plan now includes the Tally built-in Suspense A/c classification for every branch, requiring master-first CREATE or verified live readback of a subgroup directly beneath Suspense A/c before voucher posting. The original consolidated XML wrapper now maps the original branch Suspense Ledger through that verified group rather than recursively treating Tally Primary as a custom group. There is no new Tally importer or group-creation bypass, no source ledger or DRCR recalculation, and no UI redesign. Unknown custom Primary groups still fail closed. Reuse existing Tally MASTERID/version/ALTER/duplicate/delete/readback protections and original BANK-row source identities. Regressions assert master-first Suspense groups, unchanged original Bank amounts, nested grouping and unknown Primary rejection."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.589: Resolve consolidated Sales B2C ledger correction that was blocked as a same-reference conflict after v588 prepared 645 vouchers including 296 Bank vouchers. CL019 January Karnataka Sales already exists in destination Tally as MASTERID 337 ALTERID 339 and old B2C Sales - 24 - Karnataka; source now specifies B2C Sales - Karnataka with the SAME date, reference, signed amount 49499.82, taxable sales and IGST. This is a PREVIOUS->DESIRED ALTER, not a CREATE or a duplicated invoice. When the same source was Tally accepted but awaiting readback, recover its saved old pending version only on an exact live MASTERID+old full DRCR+ALTERID match; for a first-unbound source permit only a strictly unique B2C two-digit ledger-name normalization with old full live voucher, unchanged tax entries, narration, date and amount, and zero other source ownership. Save the verified previous Tally version, then reuse the original normal bound-MASTERID ALTER writer, second live previous-version and ALTERID check, durable accepted-write barrier, readback and duplicate/delete gates. No changes to GST, bank vouchers, postings, or UI. Fail closed for other references, GUID mismatches, changed tax or amounts, ambiguous master IDs or unverified previous versions. The original 38 compulsory branch groups remain. Exact SHA Windows and 16-component regression gates and updater SHA256 verification required."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
