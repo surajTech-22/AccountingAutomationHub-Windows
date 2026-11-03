@@ -2342,7 +2342,7 @@ public sealed class TallyAccountingVoucherExportService
     // established strict date/type/reference and signed-side comparison rules.
     // Tally owns its Voucher Number after CREATE; source document numbers may
     // differ without authorizing a second source.
-    internal static bool VoucherStrictlyMatchesConsolidatedPrepared(
+    public static bool VoucherStrictlyMatchesConsolidatedPrepared(
         TallyVoucherIndexRecord existing, DateTime date, string voucherType,
         string reference, string narration,
         IReadOnlyList<(string Name, decimal Amount)> branchPostings)
