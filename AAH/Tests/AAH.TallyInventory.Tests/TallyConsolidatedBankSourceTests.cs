@@ -162,6 +162,19 @@ internal static class TallyConsolidatedBankSourceTests
             .ComputePreparedContentIdentity(changed).ContentHash;
         Check(oldHash.Length > 0 && newHash.Length > 0 && oldHash != newHash,
             "a changed Bank Ledger did not become a pending previous-to-desired ALTER");
+        const string bankScopedNumber = "B-ABCDEF0123456789ABCDEF01-BANK-216";
+        var paymentAnchor = TallyConsolidatedVoucherImportService
+            .BuildConsolidatedSourceAnchor("Payment", bankScopedNumber);
+        var contraAnchor = TallyConsolidatedVoucherImportService
+            .BuildConsolidatedSourceAnchor("Contra", bankScopedNumber);
+        Check(paymentAnchor.Equals(contraAnchor, StringComparison.Ordinal) &&
+              paymentAnchor.Equals("CONSOLIDATED|BANK|" + bankScopedNumber,
+                  StringComparison.Ordinal),
+            "a Bank mode change abandoned its original bound MASTERID and could CREATE a duplicate");
+        Check(TallyConsolidatedVoucherImportService
+                  .BuildConsolidatedSourceAnchor("Sales", "B-SALES-1")
+                  .Equals("CONSOLIDATED|Sales|B-SALES-1", StringComparison.Ordinal),
+            "unrelated original Sales/Purchase source-anchor formats were changed");
         var dashboardSource = File.ReadAllText(Path.Combine(root!.FullName,
             "AAH", "src", "AccountingAutomationHub.Desktop", "ViewModels",
             "DashboardViewModel.cs"));
