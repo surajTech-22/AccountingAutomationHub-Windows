@@ -18,11 +18,13 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private readonly long _parentClientId;
     private readonly string _financialYear;
     private readonly SqliteConsolidatedBranchReadbackRepository _readback = new();
+    private readonly Func<string> _tallyProgressReader;
+    private string _tallyImportProgressStatus = "Reading durable consolidated Tally import verification...";
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
     public ConsolidatedBranchDashboardViewModel(ClientProfile parent,
-        DashboardViewModel existingDashboardWorkspace)
+        DashboardViewModel existingDashboardWorkspace, Func<string> tallyProgressReader)
         : base("Dashboard", "Detailed consolidated client workspace overview")
     {
         if (parent is null) throw new ArgumentNullException(nameof(parent));
@@ -30,12 +32,15 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
         // normal client. The dedicated Tally Import page is not the dashboard.
         ExistingDashboardWorkspace = existingDashboardWorkspace
             ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
+        _tallyProgressReader = tallyProgressReader
+            ?? throw new ArgumentNullException(nameof(tallyProgressReader));
         _parentClientId = parent.Id;
         _financialYear = parent.FinancialYear;
         ClientName = parent.ClientName;
         Pan = parent.Pan ?? string.Empty;
         PrimaryGstin = parent.Gstin ?? string.Empty;
         State = parent.State ?? string.Empty;
+        RefreshTallyImportProgress();
         _ = RefreshAsync();
     }
 
@@ -44,6 +49,17 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string PrimaryGstin { get; }
     public string State { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
+    public string TallyImportProgressStatus
+    {
+        get => _tallyImportProgressStatus;
+        private set => SetProperty(ref _tallyImportProgressStatus, value);
+    }
+
+    public void RefreshTallyImportProgress()
+    {
+        try { TallyImportProgressStatus = _tallyProgressReader(); }
+        catch (Exception ex) { TallyImportProgressStatus = "Tally progress unavailable: " + ex.Message; }
+    }
     public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
     public ObservableCollection<BranchLedgerReadbackRow> Branches { get; } = [];
