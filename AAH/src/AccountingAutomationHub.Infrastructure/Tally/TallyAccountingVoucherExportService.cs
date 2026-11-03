@@ -1002,6 +1002,63 @@ public sealed class TallyAccountingVoucherExportService
         AddCashEntryVouchers(client, company, ranges, ledgerParents, prepared, result);
         AddManualJournals(client, company, ranges, prepared, result);
         AddAutomaticGstJournals(client, company, ranges, prepared, result);
+
+        // Only the OFFLINE CONSOLIDATED branch transport collects the bank
+        // exporter's existing DR/CR treatment as source XML. Normal individual
+        // Bank export remains in its original dedicated service. No Tally
+        // import or source transaction mutation happens during preview.
+        var offlineBank = offlineConsolidatedBranchSource
+            ? TallyBankVoucherImportService.PrepareOfflineConsolidatedBankVouchers(
+                _bankingRepository, client, fromDate, toDate)
+            : [];
+        var originalBankExpectations = offlineBank.Select(row => row.Expectation).ToArray();
+        string originalBankXml = string.Empty;
+        if (originalBankExpectations.Length > 0)
+        {
+            originalBankXml = TallyBankCreateAlterXmlBuilder.Build(
+                company.Name, originalBankExpectations);
+            TallyBankCreateAlterXmlValidator.Validate(
+                originalBankXml, company.Name, originalBankExpectations);
+        }
+        var bankAccountNames = _bankingRepository.GetAccounts(client.Id, client.FinancialYear)
+            .Select(x => x.AuthorityName.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownLedgerNames = allMasters
+            .Where(x => x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                        x.Name.Trim().Length > 0)
+            .Select(x => x.Name.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var bank in offlineBank)
+        {
+            // Ledger master authority comes from the ORIGINAL branch, not
+            // from a newly synthesized consolidated tax or bank ledger.
+            var missing = bank.Expectation.Lines.Where(line =>
+                !bankAccountNames.Contains(line.LedgerName.Trim()) &&
+                !knownLedgerNames.Contains(line.LedgerName.Trim()))
+                .Select(line => line.LedgerName.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (missing.Length > 0)
+                throw new InvalidOperationException(
+                    "Bank row " + bank.TransactionRowId +
+                    " references a Ledger missing from the original branch Masters: " +
+                    string.Join(", ", missing) +
+                    ". The existing Bank Ledger Mapping/Master must be completed first.");
+            var lines = bank.Expectation.Lines.Select(line =>
+                new VoucherLedgerEntry(line.LedgerName, line.Amount,
+                    line.IsDebit, false,
+                    bankAccountNames.Contains(line.LedgerName.Trim()) ?
+                        "Bank Accounts" : "")).ToArray();
+            prepared.Add(new PreparedVoucher(
+                "Bank Voucher",
+                TallyVoucherFingerprint.BuildSourceKey(
+                    client.Id, client.FinancialYear,
+                    "BANK-" + bank.TransactionRowId, bank.TransactionRowId),
+                string.Empty, bank.Expectation.Date, null,
+                bank.Expectation.VoucherType, bank.SourceNumber,
+                bank.Expectation.Reference, "", "", "",
+                bank.Expectation.Narration, lines,
+                SourceAnchor: "AAH|BANK|" + client.Id + "|" +
+                              client.FinancialYear + "|" + bank.TransactionRowId));
+        }
         result.Ready = prepared.Count;
 
         var stockItems = _stockMasterRepository.GetStockItems(client.Id, client.FinancialYear);
@@ -1026,6 +1083,55 @@ public sealed class TallyAccountingVoucherExportService
             godowns,
             costCentres,
             offlineConsolidatedBranchSource: offlineConsolidatedBranchSource);
+
+        if (originalBankExpectations.Length > 0)
+        {
+            // The normal accounting builder was used ONLY to include its
+            // verified source Ledger masters. Replace its placeholder Bank
+            // voucher bodies with the Bank importer's EXACT original writer
+            // XML (date, type, narration and signed lines unchanged).
+            // Stable BANK-row numbers are source anchors here; destination
+            // Tally assigns its own identity through the normal wrapper.
+            var complete = TallyConsolidatedXmlTextSafety.ParseDocument(
+                xml, "offline source with original Bank masters", LoadOptions.PreserveWhitespace);
+            var bankEnvelope = TallyConsolidatedXmlTextSafety.ParseDocument(
+                originalBankXml, "original Bank Voucher Create writer", LoadOptions.PreserveWhitespace);
+            var bankBodies = bankEnvelope.Descendants().Where(x =>
+                x.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (bankBodies.Length != offlineBank.Count)
+                throw new InvalidOperationException(
+                    "Original Bank voucher writer produced an unexpected source count.");
+            for (var i = 0; i < offlineBank.Count; i++)
+            {
+                var original = new XElement(bankBodies[i]);
+                original.AddFirst(new XElement("VOUCHERNUMBER", offlineBank[i].SourceNumber));
+                var replacements = complete.Descendants().Where(x =>
+                    x.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase) &&
+                    x.Elements().Any(y =>
+                        y.Name.LocalName.Equals("VOUCHERNUMBER", StringComparison.OrdinalIgnoreCase) &&
+                        y.Value.Trim().Equals(offlineBank[i].SourceNumber, StringComparison.Ordinal)))
+                    .ToArray();
+                if (replacements.Length != 1)
+                    throw new InvalidOperationException(
+                        "Source Bank " + offlineBank[i].SourceNumber +
+                        " cannot be uniquely replaced by its original writer.");
+                var placeholder = replacements[0];
+                // Both paths must have the exact original two DR/CR entries,
+                // including Bank ledger and signs, before replacing XML.
+                var originalLines = original.Elements().Where(x =>
+                    x.Name.LocalName.Equals("ALLLEDGERENTRIES.LIST", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => (
+                        Name: x.Elements().FirstOrDefault(y => y.Name.LocalName == "LEDGERNAME")?.Value.Trim() ?? "",
+                        Amount: x.Elements().FirstOrDefault(y => y.Name.LocalName == "AMOUNT")?.Value.Trim() ?? ""))
+                    .ToArray();
+                if (originalLines.Length != 2 ||
+                    originalLines.Any(x => x.Name.Length == 0 || x.Amount.Length == 0))
+                    throw new InvalidOperationException(
+                        "Exact original Bank writer DR/CR lines are incomplete.");
+                placeholder.ReplaceWith(original);
+            }
+            xml = complete.ToString(SaveOptions.DisableFormatting);
+        }
 
         return new TallyLiveAccountingXmlSnapshot
         {
