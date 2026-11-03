@@ -120,6 +120,15 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         MustReject(Prepared(Voucher(postings: "")), "missing verified DR/CR");
         MustReject(Prepared(Voucher() + Voucher("KA-1", "20250506"), 2),
             "same FY voucher type and number on different dates");
+        // Different branch-prefixed voucher numbers MUST NOT evade duplicate
+        // detection when the original reference/date/type/full DR/CR are identical.
+        var repeatedOriginal = Voucher("BRANCH-KA-100")
+            .Replace("</VOUCHERNUMBER>", "</VOUCHERNUMBER><REFERENCE>INVOICE-100</REFERENCE>");
+        var repeatedOtherNumber = Voucher("BRANCH-GJ-200")
+            .Replace("</VOUCHERNUMBER>", "</VOUCHERNUMBER><REFERENCE>INVOICE-100</REFERENCE>");
+        MustReject(Prepared(repeatedOriginal + repeatedOtherNumber, 2),
+            "same original invoice repeated inside two branch-prefixed vouchers");
+
         MustReject(Prepared(Voucher(), company: "Wrong Company"),
             "XML destination does not equal the confirmed link");
         MustReject(Prepared(Voucher(number: ""), 1), "voucher without stable number");
