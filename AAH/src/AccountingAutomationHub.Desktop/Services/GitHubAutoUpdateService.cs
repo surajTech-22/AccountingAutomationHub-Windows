@@ -49,6 +49,10 @@ internal static class GitHubAutoUpdateService
     // application instance. Do not run overlapping downloads in the same process.
     private static readonly SemaphoreSlim CheckGate = new(1, 1);
     private static int _duplicateInstallationNotified;
+    // A transient failed host (for example a stalled HTTPS body) gets one
+    // bounded same-session recovery. Never poll GitHub on an interval and never
+    // restart an unsafe/blocked Tally operation.
+    private static int _oneShotFailedHostRetryUsed;
 
     // A verified update host has exclusive ownership of this installation.
     // Avoid a second updater launch when release events replay.
@@ -402,14 +406,23 @@ internal static class GitHubAutoUpdateService
             // release signal or reconnection can attempt a verified update.
             _ = Task.Run(async () =>
             {
+                var shouldRetry = false;
                 using (updater)
                 {
                     try
                     {
                         await updater.WaitForExitAsync().ConfigureAwait(false);
                         if (updater.ExitCode != 0)
+                        {
                             Log("updater exited unsuccessfully (code " + updater.ExitCode +
-                                "); next release event may retry");
+                                "); no installation success claimed.");
+                            // Exit 1 is a preflight, transport or verified host
+                            // error. One retry may recover transient DNS or a
+                            // stalled download; exit 2 means Tally/AAH remains
+                            // busy and must never be turned into a blind retry.
+                            shouldRetry = updater.ExitCode == 1 &&
+                                Interlocked.CompareExchange(ref _oneShotFailedHostRetryUsed, 1, 0) == 0;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -421,6 +434,16 @@ internal static class GitHubAutoUpdateService
                         try { Directory.Delete(root, recursive: true); }
                         catch (IOException) { /* A transient OS lock can defer cache cleanup. */ }
                         catch (UnauthorizedAccessException) { /* Never force-delete in-use files. */ }
+                    }
+                }
+                if (shouldRetry)
+                {
+                    Log("one bounded verified retry scheduled after updater exit 1; no force-close or repeated polling.");
+                    await Task.Delay(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+                    try { await CheckOnceAsync().ConfigureAwait(false); }
+                    catch (Exception ex)
+                    {
+                        Log("one-shot retry failed: " + ex.GetType().Name + ": " + ex.Message);
                     }
                 }
             });
