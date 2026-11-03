@@ -235,4 +235,32 @@ Require(!GitHubAutoUpdateService.IsForeignAahRegistration(
     "Unrelated applications were falsely identified as AAH.");
 Pass("block update when Windows registers legacy and new AAH copies separately");
 
+// AAH v578 incident: the listener preflight succeeded, but the host received
+// a partial HTTPS stream and stayed alive holding its exclusive update mutex.
+// Guard the actual production desktop download and exactly ONE failed-host retry.
+DirectoryInfo? updaterSourceRoot = new(Environment.CurrentDirectory);
+while (updaterSourceRoot is not null &&
+       !File.Exists(Path.Combine(updaterSourceRoot.FullName, "AAH", "src",
+           "AccountingAutomationHub.Desktop", "Services", "GitHubAutoUpdateService.cs")))
+    updaterSourceRoot = updaterSourceRoot.Parent;
+Require(updaterSourceRoot is not null, "Updater source is unavailable to contract regression.");
+var desktopUpdaterSource = File.ReadAllText(Path.Combine(updaterSourceRoot!.FullName,
+    "AAH", "src", "AccountingAutomationHub.Desktop", "Services",
+    "GitHubAutoUpdateService.cs"));
+Require(desktopUpdaterSource.Contains(
+            "source.ReadAsync(buffer.AsMemory(), downloadIdle.Token)", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "downloadDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(12))",
+            StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains("downloadIdle.CancelAfter(TimeSpan.FromSeconds(90))",
+            StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains("shouldRetry = updater.ExitCode == 1", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "Interlocked.CompareExchange(ref _oneShotFailedHostRetryUsed, 1, 0) == 0",
+            StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains("await Task.Delay(TimeSpan.FromSeconds(30))",
+            StringComparison.Ordinal),
+    "Streaming updater or bounded host retry could hold mutex / loop indefinitely.");
+Pass("updater host download and failed-host recovery are bounded, not recurring polling");
+
 Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
