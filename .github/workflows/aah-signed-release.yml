@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.591)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.592)"
         required: true
-        default: "v4.0.0.591"
+        default: "v4.0.0.592"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.591: permanent auto-update host preflight hang fix. SHA256, extraction, Authenticode and disposable cleanup now bounded and stage-logged; preserve original release authority and transactional update.
+# v4.0.0.592: bound the installed AAH desktop launcher SHA256 and Authenticode stages; avoid silent prelaunch latch/cache-cleanup hangs, preserve v591 UpdateHost and original installer.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.591]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.592]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.591' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.592' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.591: Permanently address recurring installed-client automatic updater hangs in UpdateHost preflight. On November 3, v590 release event was received and AAH_Update.exe downloaded correctly, but UpdateHost remained alive after logging that the complete 166500679-byte application ZIP was being SHA256-verified, leaving installed AAH at v589 and future release signals suppressed by its exclusive mutex. The existing download already had idle/absolute deadlines but SHA256 hashing, ZIP extraction, the spawned PowerShell Authenticode verifier, and scratch cleanup had no bounded completion or individual progress stages. Version 591 adds cancellable SHA256 verification with a 3-minute deadline, cancellable strict ZIP extraction with an 8-minute deadline and file/byte progress, 90-second Authenticode subprocess verification with termination of ONLY its own disposable verifier child on timeout (never AAH), and a bounded 30-second disposable scratch cleanup. The updater never requests AAH shutdown or touches installed app files until full SHA256, strict ZIP, publisher and version checks succeed; failed preflight releases the updater mutex and retains the old AAH safely. Retains exact-GitHub-commit and release manifest validation, SHA256, same-publisher, existing transaction/rollback, shutdown/Tally gates, and no polling, new installer, app UI changes, or accounting changes. Tests reproduce corrupt archive, canceled extraction and hung signature helper. Windows compilation, updater-host regression, full components and exact-SHA gated release required."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.592: Correct installed AAH v589 desktop release launcher stalling after v591 release manifest and checksum passed, as confirmed in November 3 diagnostics at 21:27 and 21:28 with no new updater launch. The previous v591 bounded UpdateHost does not run until the desktop launcher finishes. This release bounds the desktop SHA256 verification to 3 minutes, the isolated PowerShell Authenticode verifier to 90 seconds and terminates ONLY its own child process on timeout, never AAH/Tally or an active updater. Adds clear progress and no-duplicate staging latch logs; moves disposable cache cleanup after successful updater launch with a 20-second bounded wait. Existing checksum/manifest, exact release identity, signing comparison, staging mutex, unique updater attempt, v591 bounded UpdateHost, Tally shutdown/MASTERID safety, original transactional installer and rollback stay unchanged. Regressions cover checksum mismatch, signature helper stuck 15 seconds, timeout without killing AAH, and repeated release signals. No redesign, installer bypass, accounting recalculation, or direct user data changes. Windows compile and 16-component regression exact SHA release gates are required."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
