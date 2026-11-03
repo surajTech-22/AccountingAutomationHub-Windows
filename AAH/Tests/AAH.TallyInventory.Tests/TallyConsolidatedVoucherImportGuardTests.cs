@@ -117,6 +117,71 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // CL019 2026-11-03 13:42:40: the 333rd CREATE had LASTVCHID
+        // 337, while earlier branch voucher 26 shared the SAME original
+        // B2CS-202601-24-18-2 reference and date/type. Reference-only
+        // matching falsely found 2 and quarantined a successful Tally CREATE.
+        var b2cDate = new DateTime(2026, 1, 31);
+        const string b2cReference = "B2CS-202601-24-18-2";
+        const string earlierBranchNumber =
+            "B-92E9C2807A128C8B141395FA-B2CS-202601-24-18-2";
+        const string acceptedBranchNumber =
+            "B-BFF10AAEA9D095199C45F469-B2CS-202601-24-18-2";
+        var acceptedPostings = new (string Name, decimal Amount)[]
+        {
+            ("B2C Sales - 24 - Karnataka", -49499.82m),
+            ("Sales @ 18% - Karnataka", 41949.00m),
+            ("Output IGST @ 18% - Karnataka", 7550.82m)
+        };
+        var unrelatedPostings = new (string Name, decimal Amount)[]
+        {
+            ("B2C Sales - 24 - Gujarat", -11120.32m),
+            ("Sales @ 18% - Gujarat", 9424.00m),
+            ("Output CGST @ 9% - Gujarat", 848.16m),
+            ("Output SGST @ 9% - Gujarat", 848.16m)
+        };
+        static TallyVoucherIndexRecord B2cIndex(string id, string number,
+            IReadOnlyList<(string Name, decimal Amount)> postings) => new()
+        {
+            MasterId = id, AlterId = "231", VoucherDate = new DateTime(2026, 1, 31),
+            VoucherType = "Sales", VoucherNumber = number,
+            Reference = "B2CS-202601-24-18-2",
+            Narration = "Sales B2CS-202601-24-18-2",
+            LedgerPostings = postings.Select(x => new TallyLedgerPostingRecord
+            {
+                LedgerName = x.Name, SignedAmount = x.Amount
+            }).ToArray()
+        };
+        var earlier = B2cIndex("26", earlierBranchNumber, unrelatedPostings);
+        var accepted = B2cIndex("337", acceptedBranchNumber, acceptedPostings);
+        var sameReferenceCandidates = new[] { earlier, accepted };
+        if (sameReferenceCandidates.Count(x =>
+                x.VoucherType == "Sales" && x.VoucherDate == b2cDate &&
+                x.Reference == b2cReference) != 2)
+            throw new InvalidOperationException("CL019 two-branch reference collision fixture is invalid.");
+        var exact = sameReferenceCandidates.Where(x =>
+            TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                x, b2cDate, "Sales", b2cReference,
+                "Sales B2CS-202601-24-18-2", acceptedPostings)).ToArray();
+        if (exact.Length != 1 || exact[0].MasterId != "337")
+            throw new InvalidOperationException(
+                "Same B2C reference across branches matched wrong destination MASTERID or DR/CR.");
+        var differentScopes = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("HasDifferentPreparedBranchScopes",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Consolidated branch-scope classifier is missing.");
+        bool DistinctScopes(string a, string b) =>
+            (bool)differentScopes.Invoke(null, new object[] { a, b })!;
+        if (!DistinctScopes(earlierBranchNumber, acceptedBranchNumber) ||
+            DistinctScopes(acceptedBranchNumber, acceptedBranchNumber) ||
+            DistinctScopes("TALLY-AUTO-337", acceptedBranchNumber))
+            throw new InvalidOperationException(
+                "Only two distinct proven prepared branch scopes may share a source reference; " +
+                "unscoped or same-branch conflicts must stay blocked.");
+        Console.WriteLine(
+            "PASS: CL019 MASTERID 337 selected over same-reference branch MASTERID 26 " +
+            "only by exact branch-signed DR/CR; no resend or unsafe cross-branch rebind.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
