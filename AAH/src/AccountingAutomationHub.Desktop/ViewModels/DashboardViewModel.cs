@@ -226,10 +226,10 @@ public sealed class DashboardViewModel :
     // Never used to authorize Tally writes or to replace the source binding
     // version/MASTERID gate. The ordinary Client/FY export matrix is separate.
     private sealed record ConsolidatedDisplayVoucher(
-        DateTime Date, string Type, string Module, string SourceAnchor);
+        DateTime Date, string Type, string Module, string SourceAnchor, string ContentHash);
     private IReadOnlyList<ConsolidatedDisplayVoucher> _consolidatedDisplayVouchers = [];
-    private IReadOnlyDictionary<string, string> _consolidatedDisplayBindingStates =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, (string State, string LastVerifiedHash)> _consolidatedDisplayBindingStates =
+        new Dictionary<string, (string State, string LastVerifiedHash)>(StringComparer.OrdinalIgnoreCase);
     private long _consolidatedDisplayClientId = -1;
     private string _consolidatedDisplayFinancialYear = string.Empty;
     private string _consolidatedDisplayCompanyKey = string.Empty;
@@ -4457,14 +4457,24 @@ public sealed class DashboardViewModel :
             if (!seen.Add(anchor))
                 throw new InvalidDataException(
                     "Consolidated preview repeats original source identity " + anchor);
-            var module = type.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase" :
+            // Payment/Receipt/Contra also occur in CASH. Only the original
+            // bank-source BANK-row anchor identifies a Bank Statement voucher.
+            // Classifying by voucher TYPE alone made all 296 Bank rows look
+            // like Cash in the reused monthly Tally panel.
+            var bankSource = number.StartsWith("BANK-", StringComparison.OrdinalIgnoreCase) ||
+                number.Contains("-BANK-", StringComparison.OrdinalIgnoreCase);
+            var module = bankSource ? "Bank" :
+                type.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase" :
                 type.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales" :
                 type.Equals("Journal", StringComparison.OrdinalIgnoreCase) ? "Journal" :
                 type.Equals("Debit Note", StringComparison.OrdinalIgnoreCase) ? "Debit Note" :
-                type.Equals("Contra", StringComparison.OrdinalIgnoreCase) ? "Bank" :
+                type.Equals("Contra", StringComparison.OrdinalIgnoreCase) ||
                 type.Equals("Receipt", StringComparison.OrdinalIgnoreCase) ||
                 type.Equals("Payment", StringComparison.OrdinalIgnoreCase) ? "Cash" : type;
-            rows.Add(new ConsolidatedDisplayVoucher(date, type, module, anchor));
+            var (preparedHash, _) =
+                TallyConsolidatedVoucherImportService.ComputePreparedContentIdentity(voucher);
+            rows.Add(new ConsolidatedDisplayVoucher(
+                date, type, module, anchor, preparedHash));
         }
         _consolidatedDisplayVouchers = rows;
         _consolidatedDisplayClientId = clientId;
@@ -4484,7 +4494,8 @@ public sealed class DashboardViewModel :
         {
             _consolidatedDisplayVouchers = [];
             _consolidatedDisplayBindingStates =
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                new Dictionary<string, (string State, string LastVerifiedHash)>(
+                    StringComparer.OrdinalIgnoreCase);
         }
         var key = link is not null && client is not null && link.ClientId == client.Id
             ? link.CompanyKey : string.Empty;
@@ -4494,14 +4505,19 @@ public sealed class DashboardViewModel :
             _consolidatedDisplayBindingStates = client is not null && key.Length > 0
                 ? _tallyRepository.ReadConsolidatedVoucherStates(
                     client.Id, client.FinancialYear, key)
-                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                : new Dictionary<string, (string State, string LastVerifiedHash)>(
+                    StringComparer.OrdinalIgnoreCase);
         }
         catch
         {
             // Do not present existing records as unimported/ready if the
             // source-binding database is unreadable. Keep an unknown state.
-            _consolidatedDisplayBindingStates = new Dictionary<string, string>(
-                StringComparer.OrdinalIgnoreCase) { ["__AUTHORITY_UNAVAILABLE"] = "ReadError" };
+            _consolidatedDisplayBindingStates =
+                new Dictionary<string, (string State, string LastVerifiedHash)>(
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    ["__AUTHORITY_UNAVAILABLE"] = ("ReadError", "")
+                };
         }
 
         // The existing original month tiles are regenerated from prepared
@@ -4511,9 +4527,14 @@ public sealed class DashboardViewModel :
         var (fyFrom, _) = client is null
             ? (new DateTime(2000, 4, 1), new DateTime(2001, 3, 31))
             : TallyLiveConnectionCoordinator.FinancialYearDates(client.FinancialYear);
-        var verified = _consolidatedDisplayBindingStates
-            .Where(x => x.Value.Equals("Verified", StringComparison.OrdinalIgnoreCase))
-            .Select(x => x.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var verified = _consolidatedDisplayVouchers
+            .Where(x => _consolidatedDisplayBindingStates.TryGetValue(
+                            x.SourceAnchor, out var state) &&
+                        state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                        state.LastVerifiedHash.Length > 0 &&
+                        state.LastVerifiedHash.Equals(
+                            x.ContentHash, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.SourceAnchor).ToHashSet(StringComparer.OrdinalIgnoreCase);
         void Fill(ObservableCollection<TallyExportMonthOption> target, string module)
         {
             target.Clear();
@@ -4554,6 +4575,7 @@ public sealed class DashboardViewModel :
         var accepted = 0;
         var held = 0;
         var pending = 0;
+        var changed = 0;
         foreach (var module in new[] { "Bank", "Purchase", "Sales", "Cash", "Journal", "Debit Note" }
                      .Concat(_consolidatedDisplayVouchers.Select(v => v.Module)
                          .Except(new[] { "Bank", "Purchase", "Sales", "Cash", "Journal", "Debit Note" },
@@ -4562,19 +4584,32 @@ public sealed class DashboardViewModel :
         {
             var entries = _consolidatedDisplayVouchers.Where(v =>
                 v.Module.Equals(module, StringComparison.OrdinalIgnoreCase)).ToArray();
-            var moduleVerified = entries.Count(row =>
+            bool SavedSameVersion(ConsolidatedDisplayVoucher row)
+            {
+                return _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor,
+                           out var state) &&
+                       state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                       state.LastVerifiedHash.Length > 0 &&
+                       state.LastVerifiedHash.Equals(
+                           row.ContentHash, StringComparison.OrdinalIgnoreCase);
+            }
+            var moduleVerified = entries.Count(SavedSameVersion);
+            var moduleChanged = entries.Count(row =>
                 _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
-                state.Equals("Verified", StringComparison.OrdinalIgnoreCase));
+                state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                !SavedSameVersion(row));
             var moduleAccepted = entries.Count(row =>
                 _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
-                state.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
+                state.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
             var moduleHeld = entries.Count(row =>
                 _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
-                !state.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
-                !state.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
-            var modulePending = entries.Length - moduleVerified - moduleAccepted - moduleHeld;
+                !state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                !state.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
+            var modulePending = entries.Length - moduleVerified -
+                moduleChanged - moduleAccepted - moduleHeld;
             total += entries.Length;
             verified += moduleVerified;
+            changed += moduleChanged;
             accepted += moduleAccepted;
             held += moduleHeld;
             pending += modulePending;
@@ -4584,19 +4619,20 @@ public sealed class DashboardViewModel :
                 TotalCount = entries.Length,
                 SelectedCount = entries.Length,
                 ImportedCount = moduleVerified,
-                ReadyCount = modulePending,
+                ReadyCount = modulePending + moduleChanged,
                 State = entries.Length == 0 ? "Neutral" :
-                    modulePending == 0 && moduleAccepted == 0 && moduleHeld == 0 ? "Green" : "Red",
-                Detail = $"Prepared {entries.Length:N0} · live verified {moduleVerified:N0} · " +
+                    modulePending == 0 && moduleChanged == 0 &&
+                    moduleAccepted == 0 && moduleHeld == 0 ? "Green" : "Red",
+                Detail = $"Prepared {entries.Length:N0} · current version verified {moduleVerified:N0} · " +
                          $"Tally accepted awaiting readback {moduleAccepted:N0} · " +
-                         $"unverified new source {modulePending:N0} · held {moduleHeld:N0}. " +
-                         "Ready tile means source awaiting the original fresh Tally duplicate/preflight gate."
+                         $"new source {modulePending:N0} · changed source needing previous-version ALTER {moduleChanged:N0} · " +
+                         $"held {moduleHeld:N0}. Only the original full Tally safety gate authorizes writes."
             });
         }
         TallyExportTotalTransactions = total;
         TallyExportSelectedTransactions = total;
         TallyExportHealthState = total == 0 ? "Neutral" :
-            accepted == 0 && pending == 0 && held == 0 ? "Green" : "Red";
+            accepted == 0 && pending == 0 && changed == 0 && held == 0 ? "Green" : "Red";
         // Existing status strip only: no extra panel, no new buttons.
         // Show the different denominators instead of claiming local source
         // rows are already present in destination Tally.
@@ -4604,7 +4640,8 @@ public sealed class DashboardViewModel :
             ? "Consolidated source preview is not loaded. Generate Consolidated XML to load the original branch-prepared counts."
             : $"Consolidated prepared {total:N0} · AAH verified {verified:N0} · " +
               $"Tally accepted awaiting exact readback {accepted:N0} · " +
-              $"not yet verified in destination {pending:N0} · held {held:N0}" +
+              $"new sources {pending:N0} · changed sources awaiting verified ALTER {changed:N0} · " +
+              $"held {held:N0}" +
               (_consolidatedDisplayFromSavedPreview ? " · counts from last saved XML preview" : "") +
               ". A fresh live Tally check is required before every voucher write.";
         // Avoid setting TallyExportStatus inside this getter-like method:
