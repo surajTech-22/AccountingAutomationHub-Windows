@@ -694,6 +694,20 @@
                                 </Grid>
                                 <TextBlock Text="{Binding TallyAutoSyncStatus}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" TextWrapping="Wrap" Margin="0,7,0,0"/>
 
+                                <!-- The normal Client/FY source month selectors must not
+                                     masquerade as destination import progress in Consolidated.
+                                     That workflow uses original branch-prepared full XML and
+                                     has separate durable verified/pending Tally status. -->
+                                <StackPanel x:Name="NormalTallyExportSelection">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsConsolidatedTallyScope}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0"><TextBlock Text="Total exportable: " FontSize="10"/><TextBlock Text="{Binding TallyExportTotalTransactions, StringFormat={}{0:N0}}" FontSize="10" FontWeight="SemiBold"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,1,0,0"><TextBlock Text="Selected period: " FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/><TextBlock Text="{Binding TallyExportSelectedTransactions, StringFormat={}{0:N0}}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" FontWeight="SemiBold"/></StackPanel><ItemsControl ItemsSource="{Binding TallyExportModuleStatuses}" Margin="0,6,0,0">
  <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
  <ItemsControl.ItemTemplate><DataTemplate>
@@ -873,6 +887,7 @@
                                     </StackPanel>
                                 </Border>
 
+                                </StackPanel>
                                 <!-- Place consolidated actions at the ORIGINAL export control.
                                      No standalone master import panel above the Tally link. -->
                                 <ContentControl Content="{Binding ConsolidatedImportWorkspace, ElementName=DashboardRoot}"
