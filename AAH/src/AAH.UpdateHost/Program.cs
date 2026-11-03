@@ -105,8 +105,23 @@ internal static class Program
             {
                 var archivePath = Path.Combine(scratch, AssetName);
                 await DownloadVerifiedAsync(archiveUrl, archivePath, expectedHash);
+                // All of these stages happen BEFORE the first request to
+                // close AAH. Bound each one and record start/finish so a slow
+                // disk, antivirus or PowerShell signature check cannot hold
+                // the exclusive updater mutex silently and indefinitely.
                 var staged = Path.Combine(scratch, "publish");
-                ExtractStrict(archivePath, staged);
+                Log("Release " + tag + " SHA256 verified; starting bounded ZIP extraction.");
+                using (var extractDeadline = new CancellationTokenSource(AppArchiveExtractionDeadline))
+                {
+                    try { await ExtractStrictAsync(archivePath, staged, extractDeadline.Token); }
+                    catch (OperationCanceledException) when (extractDeadline.IsCancellationRequested)
+                    {
+                        throw new TimeoutException(
+                            "Updater ZIP extraction exceeded " + AppArchiveExtractionDeadline +
+                            " before any application shutdown. Installed AAH unchanged.");
+                    }
+                }
+                Log("Release " + tag + " extraction complete; validating staged EXE publisher/version.");
                 var stagedExe = Path.Combine(staged, "AccountingAutomationHub.exe");
                 if (!File.Exists(stagedExe) ||
                     !PublisherIdentityCompatible(installedPublisher, await VerifiedPublisherAsync(stagedExe)))
@@ -165,13 +180,42 @@ internal static class Program
             }
             finally
             {
-                try { Directory.Delete(scratch, true); } catch { }
+                // This is temporary preflight staging only, never a Tally/
+                // accounting directory. An antivirus/disk filter can also
+                // hang recursive cleanup; don't keep the updater mutex alive
+                // forever AFTER a failed bounded verification.
+                await CleanupScratchBoundedAsync(scratch);
             }
         }
         catch (Exception exception)
         {
             Log("FAILED (no success claimed): " + exception);
             return 1;
+        }
+    }
+
+    internal static async Task CleanupScratchBoundedAsync(string scratch)
+    {
+        try
+        {
+            if (!Directory.Exists(scratch)) return;
+            await Task.Run(() => Directory.Delete(scratch, true))
+                .WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            // Stale random temp staging is safer than indefinitely holding the
+            // exclusive update mutex. Next update will use a fresh GUID path.
+            Log("Preflight temp cleanup exceeded 30 seconds; deferring only " +
+                "the disposable scratch directory; application data untouched.");
+        }
+        catch (IOException ex)
+        {
+            Log("Preflight temp cleanup deferred (locked scratch file): " + ex.Message);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log("Preflight temp cleanup deferred (access denied): " + ex.Message);
         }
     }
 
@@ -265,6 +309,9 @@ internal static class Program
     // A failed download is only a staging failure; no installed files are touched.
     internal static readonly TimeSpan AppArchiveDownloadDeadline = TimeSpan.FromMinutes(15);
     internal static readonly TimeSpan AppArchiveIdleTimeout = TimeSpan.FromSeconds(90);
+    internal static readonly TimeSpan AppArchiveSha256Deadline = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan AppArchiveExtractionDeadline = TimeSpan.FromMinutes(8);
+    internal static readonly TimeSpan PublisherVerificationDeadline = TimeSpan.FromSeconds(90);
 
     private static async Task DownloadVerifiedAsync(Uri uri, string destination, string sha)
     {
@@ -312,8 +359,9 @@ internal static class Program
                     "Incomplete application download: " + received + " of " + exact + " bytes.");
             Log("Updater application archive received " + received +
                 " bytes. Verifying SHA256 before any application shutdown.");
-            if (!Hash(destination).Equals(sha, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Downloaded application archive SHA256 mismatch.");
+            await VerifyDownloadedArchiveSha256Async(destination, sha);
+            Log("PASS: update application ZIP SHA256 verified (" +
+                received.ToString(CultureInfo.InvariantCulture) + " bytes); installed app untouched.");
         }
         catch (OperationCanceledException ex) when (deadline.IsCancellationRequested)
         {
@@ -329,14 +377,47 @@ internal static class Program
         }
     }
 
-    internal static void ExtractStrict(string zipPath, string dest)
+    internal static async Task VerifyDownloadedArchiveSha256Async(
+        string path, string expectedSha, TimeSpan? maximumDuration = null)
     {
+        var limit = maximumDuration ?? AppArchiveSha256Deadline;
+        using var deadline = new CancellationTokenSource(limit);
+        try
+        {
+            await using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var actual = Convert.ToHexString(
+                await SHA256.HashDataAsync(file, deadline.Token)).ToLowerInvariant();
+            if (!actual.Equals(expectedSha, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Downloaded application archive SHA256 mismatch.");
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Updater SHA256 verification exceeded " + limit +
+                " before any application shutdown. Installed AAH unchanged.");
+        }
+    }
+
+    // Keep the strict synchronous form for existing safety contract tests.
+    // Production ALWAYS calls the bounded async version.
+    internal static void ExtractStrict(string zipPath, string dest) =>
+        ExtractStrictAsync(zipPath, dest, CancellationToken.None).GetAwaiter().GetResult();
+
+    internal static async Task ExtractStrictAsync(
+        string zipPath, string dest, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(dest);
         using var zip = ZipFile.OpenRead(zipPath);
         if (zip.Entries.Count > 2500) throw new InvalidDataException("Too many release files.");
         long bytes = 0;
+        long extracted = 0;
+        long lastLoggedBytes = 0;
+        var processed = 0;
         foreach (var entry in zip.Entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\'))
                 continue;
             var relative = entry.FullName.Replace('\\','/');
@@ -356,8 +437,43 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("ZIP path traversal.");
             Directory.CreateDirectory(Path.GetDirectoryName(absolute)!);
-            entry.ExtractToFile(absolute, overwrite: false);
+            await using (var input = entry.Open())
+            await using (var output = new FileStream(absolute, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous))
+            {
+                var buffer = new byte[128 * 1024];
+                long fileBytes = 0;
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var n = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+                    if (n == 0) break;
+                    await output.WriteAsync(buffer.AsMemory(0, n), cancellationToken);
+                    fileBytes += n;
+                    extracted += n;
+                    if (extracted - lastLoggedBytes >= 64L * 1024 * 1024)
+                    {
+                        Log("Update preflight extraction progress: " + processed +
+                            " complete files, " +
+                            extracted.ToString(CultureInfo.InvariantCulture) +
+                            " bytes (including current file). Installed AAH untouched.");
+                        lastLoggedBytes = extracted;
+                    }
+                }
+                await output.FlushAsync(cancellationToken);
+                if (fileBytes != entry.Length)
+                    throw new InvalidDataException(
+                        "Incomplete updater ZIP member " + relative);
+            }
+            processed++;
+            if (processed % 100 == 0)
+                Log("Update preflight extraction progress: " + processed +
+                    " files, " + extracted.ToString(CultureInfo.InvariantCulture) +
+                    " bytes. No installed files touched.");
         }
+        Log("PASS: updater ZIP extracted " + processed + " files / " +
+            extracted.ToString(CultureInfo.InvariantCulture) +
+            " bytes; no application shutdown yet.");
     }
 
     private sealed class UpdateRuntimeBusyException(string message) : Exception(message) { }
@@ -987,6 +1103,8 @@ internal static class Program
 
     private static async Task<string?> VerifiedPublisherAsync(string path)
     {
+        Log("Update preflight starting bounded Authenticode verification of " +
+            Path.GetFileName(path) + "; installed files untouched.");
         var info = new ProcessStartInfo("powershell.exe") { UseShellExecute=false, CreateNoWindow=true,
             RedirectStandardOutput=true };
         info.ArgumentList.Add("-NoProfile"); info.ArgumentList.Add("-NonInteractive");
@@ -995,13 +1113,42 @@ internal static class Program
             "if($s.Status -eq 'Valid' -and $s.SignerCertificate){" +
             "[Console]::Out.Write($s.SignerCertificate.Thumbprint);exit 0};exit 1");
         info.Environment["AAH_UPDATE_VERIFY"]=path;
-        using var proc = Process.Start(info);
-        if (proc is null) return null;
-        var result = await proc.StandardOutput.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        var output = result.Trim();
-        return proc.ExitCode == 0 && Regex.IsMatch(output, @"\A[a-fA-F0-9]{40}\z")
+        var result = await RunVerifierChildAsync(info, PublisherVerificationDeadline);
+        var output = result.Output.Trim();
+        Log("PASS: bounded Authenticode verification finished for " +
+            Path.GetFileName(path) + " (trusted signature " +
+            (result.ExitCode == 0 ? "present" : "absent") + ").");
+        return result.ExitCode == 0 && Regex.IsMatch(output, @"\A[a-fA-F0-9]{40}\z")
             ? output.ToUpperInvariant() : null;
+    }
+
+    internal static async Task<(int ExitCode, string Output)> RunVerifierChildAsync(
+        ProcessStartInfo info, TimeSpan timeout)
+    {
+        using var proc = Process.Start(info) ??
+            throw new InvalidOperationException("Could not start isolated Authenticode verifier.");
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            // Read stdout concurrently with waiting for process exit; neither
+            // may wait forever. This process is ONLY the verifier helper.
+            var output = await proc.StandardOutput.ReadToEndAsync(deadline.Token);
+            await proc.WaitForExitAsync(deadline.Token);
+            return (proc.ExitCode, output);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            // Never terminate AAH or the UpdateHost: only our own spawned
+            // preflight signature-checking PowerShell child is disposable.
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            try { await proc.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (Exception) { /* timed-out verifier is still a hard failure */ }
+            throw new TimeoutException(
+                "Updater Authenticode helper exceeded " + timeout +
+                " before application shutdown; installed AAH unchanged.");
+        }
     }
 
     private static string Hash(string file)

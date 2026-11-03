@@ -1,0 +1,32 @@
+name: AAH UpdateHost post-download safety regression
+
+on:
+  pull_request:
+    paths:
+      - 'AAH/src/AAH.UpdateHost/**'
+      - 'AAH/Tests/AAH.UpdateHost.Tests/**'
+      - '.github/workflows/aah-updatehost-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-preflight-deadlines:
+    name: Windows UpdateHost actual timeout and rollback tests
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore pinned original installer components
+        shell: pwsh
+        run: |
+          python ci/restore_extra_components.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned installer source restoration failed.' }
+      - name: Run UpdateHost safety fixtures including stalled preflight
+        shell: pwsh
+        run: |
+          dotnet run --project AAH/Tests/AAH.UpdateHost.Tests/AAH.UpdateHost.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'UpdateHost preflight regression failed.' }
