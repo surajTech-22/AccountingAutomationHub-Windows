@@ -66,6 +66,93 @@ internal static class EntryPoint
             "UpdateHost release preflight lacks bounded streaming reads or early progress logs.");
         Console.WriteLine("PASS: update host preflight and archive body cannot hold installation lock indefinitely.");
 
+        // Nov 3 CL019: v590 downloaded the complete 166.5MB release ZIP,
+        // logged "Verifying SHA256", then held PID 8968 and the updater
+        // mutex while the installed app stayed v589. The missing bounds
+        // were AFTER the HTTP stream, not in release event delivery.
+        Assert(Program.AppArchiveSha256Deadline > TimeSpan.Zero &&
+               Program.AppArchiveSha256Deadline <= TimeSpan.FromMinutes(5) &&
+               Program.AppArchiveExtractionDeadline > TimeSpan.Zero &&
+               Program.AppArchiveExtractionDeadline <= TimeSpan.FromMinutes(10) &&
+               Program.PublisherVerificationDeadline > TimeSpan.Zero &&
+               Program.PublisherVerificationDeadline <= TimeSpan.FromMinutes(2),
+            "Post-download SHA256, extraction or signature check could hold update mutex indefinitely.");
+        var shaStage = hostSource.IndexOf(
+            "await VerifyDownloadedArchiveSha256Async(destination, sha);", StringComparison.Ordinal);
+        var extractStage = hostSource.IndexOf(
+            "await ExtractStrictAsync(archivePath, staged, extractDeadline.Token);", StringComparison.Ordinal);
+        var liveShutdown = hostSource.IndexOf(
+            "if (!await ShutdownAllVerifiedInstallProcessesAsync(target))", StringComparison.Ordinal);
+        Assert(shaStage > 0 && extractStage > shaStage &&
+               liveShutdown > extractStage &&
+               hostSource.Contains("deadline.Token", StringComparison.Ordinal) &&
+               hostSource.Contains("RunVerifierChildAsync(info, PublisherVerificationDeadline)", StringComparison.Ordinal) &&
+               hostSource.Contains("proc.Kill(entireProcessTree: true)", StringComparison.Ordinal) &&
+               hostSource.Contains("SHA256 verified; starting bounded ZIP extraction", StringComparison.Ordinal),
+            "Preflight must be bounded/observable before ANY AAH shutdown, and only the owned verifier child may be killed.");
+        var knownZip = Path.Combine(root, "verified-release.zip");
+        using (var stream = File.Open(knownZip, FileMode.CreateNew))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        {
+            var member = archive.CreateEntry("AAH_Update.exe");
+            using var writer = new StreamWriter(member.Open());
+            writer.Write("VERIFIED UPDATE HOST");
+        }
+        var sha = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(knownZip)));
+        Program.VerifyDownloadedArchiveSha256Async(knownZip, sha.ToLowerInvariant())
+            .GetAwaiter().GetResult();
+        var hashRejected = false;
+        try
+        {
+            Program.VerifyDownloadedArchiveSha256Async(knownZip,
+                new string('0', 64)).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException) { hashRejected = true; }
+        Assert(hashRejected, "Incorrect release archive hash was allowed to reach extraction.");
+        var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var canceledExtraction = false;
+        try
+        {
+            Program.ExtractStrictAsync(knownZip,
+                Path.Combine(root, "canceled-preflight"), cancelled.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) { canceledExtraction = true; }
+        Assert(canceledExtraction &&
+               !Directory.Exists(Path.Combine(root, "canceled-preflight")),
+            "Cancelled ZIP extraction modified staging or ignored cancellation before AAH shutdown.");
+        var extracted = Path.Combine(root, "verified-preflight");
+        using (var extractionDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            Program.ExtractStrictAsync(knownZip, extracted, extractionDeadline.Token)
+                .GetAwaiter().GetResult();
+        Assert(File.ReadAllText(Path.Combine(extracted, "AAH_Update.exe")) == "VERIFIED UPDATE HOST",
+            "Bounded ZIP extraction lost the update payload.");
+        if (OperatingSystem.IsWindows())
+        {
+            var verifier = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
+            };
+            verifier.ArgumentList.Add("-NoProfile");
+            verifier.ArgumentList.Add("-NonInteractive");
+            verifier.ArgumentList.Add("-Command");
+            verifier.ArgumentList.Add("Start-Sleep -Seconds 15");
+            var timedOut = false;
+            try
+            {
+                Program.RunVerifierChildAsync(verifier, TimeSpan.FromMilliseconds(500))
+                    .GetAwaiter().GetResult();
+            }
+            catch (TimeoutException) { timedOut = true; }
+            Assert(timedOut,
+                "Hung PowerShell Authenticode verification was not bounded and safely stopped.");
+        }
+        Console.WriteLine("PASS: after-download SHA256/extraction/signature stages are bounded; corrupted ZIP, canceled extraction and hung verifier cannot leave the preflight mutex held.");
+
         var desktopSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
             "AccountingAutomationHub.Desktop", "App.xaml.cs"));
         var automationSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
