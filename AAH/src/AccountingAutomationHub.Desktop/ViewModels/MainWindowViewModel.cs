@@ -2702,6 +2702,7 @@ public sealed class MainWindowViewModel :
         };
         var exchangeNumber = 0;
         var verifiedVoucherCount = 0;
+        var tallyAcknowledgedCreateCount = 0;
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
             (stage, requestXml, responseXml) =>
             {
@@ -2713,7 +2714,9 @@ public sealed class MainWindowViewModel :
                 evidence[prefix + (responseXml.StartsWith("Transport exception:", StringComparison.Ordinal)
                     ? "-Error.txt" : "-Response.xml")] = responseXml;
             },
-            () => verifiedVoucherCount++);
+            () => verifiedVoucherCount++,
+            _tallyRepository,
+            () => tallyAcknowledgedCreateCount++);
         try
         {
             var result = await importer.ImportAsync(link, company, prepared,
