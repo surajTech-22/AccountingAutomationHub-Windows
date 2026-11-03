@@ -1279,7 +1279,8 @@ public sealed class TallyHttpService : IDisposable
         TallyCompanyInfo company,
         DateTime fromDate,
         DateTime toDate,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, string>? diagnosticExchange = null)
     {
         ArgumentNullException.ThrowIfNull(company);
 
@@ -1303,6 +1304,8 @@ public sealed class TallyHttpService : IDisposable
             try
             {
                 var response = await PostAsync(attempts[index], cancellationToken).ConfigureAwait(false);
+                try { diagnosticExchange?.Invoke(attempts[index], response); }
+                catch { /* A diagnostic observer must never influence Tally authority. */ }
                 return ValidateVoucherIndexRange(
                     ParseVoucherIndex(response, company.CompanyKey, company.FinancialYear),
                     fromDate,
@@ -1334,7 +1337,8 @@ public sealed class TallyHttpService : IDisposable
             TallyCompanyInfo company,
             DateTime fromDate,
             DateTime toDate,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Action<string, string>? diagnosticExchange = null)
     {
         ArgumentNullException.ThrowIfNull(company);
         fromDate = fromDate.Date;
@@ -1352,6 +1356,8 @@ public sealed class TallyHttpService : IDisposable
 
         var request = BuildVoucherAuthorityRequest(company.Name, fromDate, toDate);
         var response = await PostAsync(request, cancellationToken, TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+        try { diagnosticExchange?.Invoke(request, response); }
+        catch { /* A diagnostic observer must never influence Tally authority. */ }
         var index = ValidateVoucherIndexRange(
             ParseVoucherIndex(response, company.CompanyKey, company.FinancialYear),
             fromDate,
@@ -1401,6 +1407,41 @@ public sealed class TallyHttpService : IDisposable
         return (index, full);
     }
 
+
+    /// <summary>
+    /// Read-only recovery of the exact native Voucher MASTERID returned by
+    /// Tally's LASTVCHID in a successful CREATE response. This is a CANDIDATE
+    /// identity only: callers must independently verify type, date, number,
+    /// reference, full ledger DR/CR and destination before accepting it.
+    /// Never infer MASTERID from the source branch or an exported voucher number.
+    /// </summary>
+    public async Task<TallyVoucherXmlSnapshot> ExportVoucherByKnownMasterIdForConsolidatedReadbackAsync(
+        TallyCompanyInfo company, string nativeMasterId, DateTime voucherDate,
+        CancellationToken cancellationToken = default,
+        Action<string, string>? diagnosticExchange = null)
+    {
+        ArgumentNullException.ThrowIfNull(company);
+        if (!long.TryParse(nativeMasterId, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var id) || id <= 0)
+            throw new InvalidOperationException(
+                "Tally CREATE reply did not provide one positive native LASTVCHID for exact readback.");
+
+        var request = BuildVoucherFullObjectByMasterIdsRequest(
+            company.Name, new[] { nativeMasterId }, voucherDate.Date, voucherDate.Date);
+        var response = await PostAsync(request, cancellationToken,
+            TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+        try { diagnosticExchange?.Invoke(request, response); }
+        catch { /* Diagnostic-only; must not authorize a voucher resend. */ }
+        var snapshots = ParseVoucherXmlSnapshots(
+            response, exactRequestedMasterId: nativeMasterId);
+        if (snapshots.Count != 1 ||
+            !string.Equals(snapshots[0].MasterId, nativeMasterId,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Exact destination Voucher MASTERID " + nativeMasterId +
+                " did not return exactly one full Voucher object. No automatic resend is safe.");
+        return snapshots[0];
+    }
 
     /// <summary>
     /// Fix49/Fix50 compatibility helper retained for inherited callers and source gates.
