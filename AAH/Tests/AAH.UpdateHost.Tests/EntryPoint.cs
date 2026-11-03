@@ -100,7 +100,7 @@ internal static class EntryPoint
         var idleSamples = desktopSource.LastIndexOf("quietSamples >= 3", verifiedRequest, StringComparison.Ordinal);
         var cleanupDone = desktopSource.IndexOf("_verifiedUpdaterCleanupCompleted = true;", StringComparison.Ordinal);
         var cleanupGuard = desktopSource.IndexOf(
-            "if (_verifiedUpdaterExit && _runtimeCleaned && _verifiedUpdaterCleanupCompleted &&", StringComparison.Ordinal);
+            "if ((_verifiedUpdaterExit || _explicitSafeUserExit) &&", StringComparison.Ordinal);
         var ownerRelease = desktopSource.IndexOf("Process exit releasing final single-instance ownership.", StringComparison.Ordinal);
         var finalExit = desktopSource.IndexOf("Environment.Exit(0);", cleanupGuard, StringComparison.Ordinal);
         var normalWpfExit = desktopSource.IndexOf("base.OnExit(e);", finalExit, StringComparison.Ordinal);
@@ -109,6 +109,9 @@ internal static class EntryPoint
                cleanupGuard > ownerRelease && ownerRelease > verifiedRequest &&
                finalExit > cleanupGuard && normalWpfExit > finalExit &&
                desktopSource.Contains("!_ownsSingleInstanceMutex)", StringComparison.Ordinal) &&
+               desktopSource.Contains("_explicitSafeUserExit = true;", StringComparison.Ordinal) &&
+               desktopSource.IndexOf("User requested Exit Completely: no in-flight accounting/Tally work.", StringComparison.Ordinal) <
+                   desktopSource.IndexOf("_explicitSafeUserExit = true;", StringComparison.Ordinal) &&
                desktopSource.Contains("finally { Shutdown(); }", StringComparison.Ordinal),
             "Verified update can remain stuck inside WPF base.OnExit after safe cleanup, or exit before accounting/Tally safety gates.");
         Console.WriteLine("PASS: verified updater ends cleaned process before WPF exit can block; normal exits unchanged.");
@@ -258,6 +261,57 @@ internal static class EntryPoint
                     incomplete, 17296, processStartedAt, finishedAt.AddSeconds(15), out _),
                 "Updater accepted partial Tally/runtime/OnExit cleanup evidence: stage " + omitted);
         }
+        // AAH v579 user Exit Completely also left PID 8896 alive despite
+        // confirmed no Tally/import work and completed runtime/WAL/OnExit.
+        // Never treat normal X-to-tray as a request for process termination.
+        var explicitUserExitMarkers = new[]
+        {
+            "User requested Exit Completely: no in-flight accounting/Tally work.",
+            "Application shutdown started; stopping Accounting/Tally runtime.",
+            "Tally coordinator disposal completed.",
+            "Workspace cache disposal completed.",
+            "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
+            "Process exit releasing final single-instance ownership."
+        };
+        var manualExit = string.Join("\n", explicitUserExitMarkers.Select((message, index) =>
+            EvidenceLine(finishedAt.AddSeconds(index - explicitUserExitMarkers.Length + 1),
+                8896, message)));
+        Assert(Program.HasCompletedSafeUserExitEvidence(
+                   manualExit, 8896, processStartedAt, finishedAt.AddSeconds(15), out var manualCompleted) &&
+               manualCompleted == finishedAt,
+            "AAH user Exit Completely ghost not recognized after full safe cleanup.");
+        Assert(!Program.HasCompletedSafeUserExitEvidence(
+                   manualExit, 17952, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "AAH live tray PID accepted another PID's safe manual exit.");
+        Assert(!Program.HasCompletedSafeUserExitEvidence(
+                   manualExit, 8896, finishedAt.AddSeconds(10), finishedAt.AddSeconds(15), out _),
+            "Recycled manual-exit PID reused an earlier process's cleanup.");
+        foreach (var omitted in Enumerable.Range(0, explicitUserExitMarkers.Length))
+        {
+            var incompleteManual = string.Join("\n", explicitUserExitMarkers
+                .Where((_, index) => index != omitted)
+                .Select((message, index) => EvidenceLine(
+                    finishedAt.AddSeconds(index - explicitUserExitMarkers.Length + 1),
+                    8896, message)));
+            Assert(!Program.HasCompletedSafeUserExitEvidence(
+                    incompleteManual, 8896, processStartedAt, finishedAt.AddSeconds(15), out _),
+                "Partial manual exit cleanup authorized old PID retirement: stage " + omitted);
+        }
+        var trayOnly = EvidenceLine(finishedAt, 17952,
+            "Main window close intercepted; AAH remains alive in tray for background workers and auto-update.");
+        Assert(!Program.HasCompletedSafeUserExitEvidence(
+                   trayOnly, 17952, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "Ordinary X-to-tray authorized running AAH termination.");
+        var manualDeferred = EvidenceLine(finishedAt.AddSeconds(-6), 8896,
+                explicitUserExitMarkers[0]) + "\n" +
+            EvidenceLine(finishedAt.AddSeconds(-5), 8896,
+                "User exit deferred: tally=True automation=False distributed=False") + "\n" +
+            string.Join("\n", explicitUserExitMarkers.Skip(1).Select((message, index) =>
+                EvidenceLine(finishedAt.AddSeconds(index - 4), 8896, message)));
+        Assert(!Program.HasCompletedSafeUserExitEvidence(
+                   manualDeferred, 8896, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "Manual Exit deferred for active Tally must not authorize process retirement.");
+
         var outOfOrder = shutdownMarkers.ToArray();
         (outOfOrder[3], outOfOrder[4]) = (outOfOrder[4], outOfOrder[3]);
         var mixed = string.Join("\n", outOfOrder.Select((message, index) =>
@@ -276,6 +330,8 @@ internal static class EntryPoint
                    "await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe)", StringComparison.Ordinal) &&
                updaterSource.Contains(
                    "HasCompletedVerifiedExitEvidence(", StringComparison.Ordinal) &&
+               updaterSource.Contains(
+                   "HasCompletedSafeUserExitEvidence(", StringComparison.Ordinal) &&
                updaterSource.Contains(
                    "IsExactInstallationProcess(process.ProcessName, actualPath, verifiedInstalledExe)", StringComparison.Ordinal) &&
                updaterSource.Contains("SameProcessPath(process, verifiedInstalledExe)", StringComparison.Ordinal) &&
