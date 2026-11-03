@@ -240,7 +240,31 @@ public static class TallyConsolidatedPreparedXmlBuilder
                     string.IsNullOrWhiteSpace(groups[0].Parent))
                     throw new InvalidOperationException("Circular or unknown branch accounting group: " + sourceParent);
                 var original = groups[0];
-                var parent = ResolveParentGroup(original.Parent.Trim(), ancestors);
+                var originalParent = original.Parent.Trim();
+                string parent;
+                if (originalParent.Equals("Primary", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Primary is Tally's ROOT, not a group that can be
+                    // re-created below a branch. Suspense A/c and the other
+                    // canonical built-in Primary children already exist in
+                    // Tally; preserve their source accounting classification
+                    // and create only a branch-owned subgroup beneath them.
+                    // Never infer a Group Nature for a custom Primary child.
+                    var canonical = new MasterRecord
+                    {
+                        Name = original.Name.Trim(), Parent = originalParent,
+                        Type = "Group", Source = "Standard hierarchy"
+                    };
+                    if (!TallyAccountingVoucherExportService.IsCanonicalOfflineTallyBuiltInGroup(canonical))
+                        throw new InvalidOperationException(
+                            "Unverified custom branch Group directly under Primary: " +
+                            original.Name + ". A verified Tally Group Nature is required.");
+                    parent = original.Name.Trim();
+                }
+                else
+                {
+                    parent = ResolveParentGroup(originalParent, ancestors);
+                }
                 var mapped = branch.Branch.DisplayName.Trim() + " " + original.Name.Trim();
                 if (!stagedCustomGroups.Add(mapped)) return mapped;
                 // Preserve the source hierarchy below the mandatory branch
