@@ -296,7 +296,12 @@ internal static class GitHubAutoUpdateService
             return;
         }
         Log("release " + tag + " manifest and checksum verified");
-        if (Interlocked.CompareExchange(ref _updateLaunched, 1, 0) != 0) return;
+        if (Interlocked.CompareExchange(ref _updateLaunched, 1, 0) != 0)
+        {
+            Log("release " + tag +
+                " already being staged by this AAH instance; no duplicate download or launcher.");
+            return;
+        }
         var cacheRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AccountingAutomationHub", "GitHubAutoUpdate");
@@ -366,12 +371,13 @@ internal static class GitHubAutoUpdateService
                         " bytes; existing application and updater left unchanged.", ex);
                 }
             }
-            await using (var stream = File.OpenRead(incoming))
-            {
-                var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream).ConfigureAwait(false));
-                if (!hash.Equals(checksum, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Downloaded updater SHA256 verification failed.");
-            }
+            // v590/v591 incident: the old launcher could hang here with its
+            // local _updateLaunched latch held even after the UpdateHost was
+            // safely stopped. Do not reuse the host's preflight deadline here;
+            // this is a DIFFERENT PowerShell/Hash path in installed desktop.
+            Log("release " + tag + " updater download finished; starting bounded SHA256 verification.");
+            await VerifyUpdaterAssetSha256Async(incoming, checksum!);
+            Log("PASS: release " + tag + " SHA256 verified; checking publisher with a bounded child.");
             var updateSigner = await GetVerifiedPublisherAsync(incoming).ConfigureAwait(false);
             if (!PublisherIdentityCompatible(signer, updateSigner))
                 throw new InvalidDataException("Updater has an unexpected Authenticode signing identity.");
@@ -379,7 +385,9 @@ internal static class GitHubAutoUpdateService
             // verifying the complete incoming file. A running previous updater is
             // left untouched; Windows will refuse overwriting its executable.
             File.Move(incoming, path);
-            CleanupStaleUpdaterFolders(cacheRoot, tag);
+            // Never let unrelated locked cache folders delay the first
+            // verified updater launch. Clean these best-effort only AFTER
+            // an updater has been launched and without holding staging lock.
             if (IsUpdateInProgress())
             {
                 Log("Existing verified updater became active during staging; no competing updater launched.");
@@ -407,6 +415,21 @@ internal static class GitHubAutoUpdateService
             _ = Task.Run(async () =>
             {
                 var shouldRetry = false;
+                // Cleanup is NOT part of the verified launch gate.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Run(() => CleanupStaleUpdaterFolders(cacheRoot, tag))
+                            .WaitAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        Log("Updater cache cleanup deferred after 20 seconds; verified launch continues.");
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                });
                 using (updater)
                 {
                     try
@@ -569,15 +592,43 @@ internal static class GitHubAutoUpdateService
         (installed is not null && updater is not null &&
          installed.Equals(updater, StringComparison.OrdinalIgnoreCase));
 
+    internal static readonly TimeSpan UpdaterSha256Deadline = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan UpdaterPublisherDeadline = TimeSpan.FromSeconds(90);
+
+    internal static async Task VerifyUpdaterAssetSha256Async(
+        string path, string expectedHash, TimeSpan? maximumDuration = null)
+    {
+        using var deadline = new CancellationTokenSource(maximumDuration ?? UpdaterSha256Deadline);
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var actual = Convert.ToHexString(
+                await SHA256.HashDataAsync(stream, deadline.Token)).ToLowerInvariant();
+            if (!actual.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Downloaded updater SHA256 verification failed.");
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "AAH launcher SHA256 verification timed out before updater launch; installed application unchanged.");
+        }
+    }
+
     internal static async Task<string?> GetVerifiedPublisherAsync(string file)
     {
-        // OS Authenticode trust must be valid, not merely a certificate attached to a file.
+        // The separate UpdateHost was bounded in v591; the DESKTOP
+        // launcher still had an unbounded PowerShell read/WaitForExit,
+        // silently holding _updateLaunched after SHA+manifest success.
+        // Only terminate this disposable child, never AAH/UpdateHost/Tally.
+        Log("AAH launcher starting bounded Authenticode verification of " +
+            Path.GetFileName(file) + ".");
         var psi = new ProcessStartInfo("powershell.exe")
         {
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = false
         };
         psi.ArgumentList.Add("-NoProfile");
         psi.ArgumentList.Add("-NonInteractive");
@@ -587,13 +638,40 @@ internal static class GitHubAutoUpdateService
             "if ($s.Status -eq 'Valid' -and $null -ne $s.SignerCertificate) {" +
             "[Console]::Out.Write($s.SignerCertificate.Thumbprint);exit 0};exit 1");
         psi.Environment["AAH_VERIFY_EXE"] = file;
-        using var proc = Process.Start(psi);
-        if (proc is null) return null;
-        var output = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-        await proc.WaitForExitAsync().ConfigureAwait(false);
-        var thumbprint = output.Trim();
-        return proc.ExitCode == 0 && Regex.IsMatch(thumbprint, @"\A[A-Fa-f0-9]{40}\z")
+        var result = await RunBoundedPublisherVerifierAsync(
+            psi, UpdaterPublisherDeadline).ConfigureAwait(false);
+        var thumbprint = result.Output.Trim();
+        Log("PASS: AAH launcher Authenticode child completed for " +
+            Path.GetFileName(file) + ".");
+        return result.ExitCode == 0 && Regex.IsMatch(thumbprint, @"\A[A-Fa-f0-9]{40}\z")
             ? thumbprint.ToUpperInvariant() : null;
+    }
+
+    internal static async Task<(int ExitCode, string Output)> RunBoundedPublisherVerifierAsync(
+        ProcessStartInfo psi, TimeSpan timeout)
+    {
+        using var proc = Process.Start(psi) ??
+            throw new InvalidOperationException("Could not start AAH isolated publisher verifier.");
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            var output = await proc.StandardOutput.ReadToEndAsync(deadline.Token)
+                .ConfigureAwait(false);
+            await proc.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            return (proc.ExitCode, output);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            try { await proc.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5))
+                .ConfigureAwait(false); }
+            catch (Exception) { /* never claim signature verification success */ }
+            throw new TimeoutException(
+                "AAH launcher Authenticode verifier exceeded " + timeout +
+                "; only the spawned verifier was stopped. AAH and Tally remain untouched.");
+        }
     }
 
     // Log in Windows-local time with an explicit UTC offset. This preserves
