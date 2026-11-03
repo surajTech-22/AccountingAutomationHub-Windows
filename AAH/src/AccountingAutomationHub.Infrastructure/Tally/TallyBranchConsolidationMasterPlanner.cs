@@ -28,6 +28,12 @@ public static class TallyBranchConsolidationMasterPlanner
         ("Direct Incomes", "Direct Incomes"),
         ("Indirect Incomes", "Incomes"),
         ("Duties & Taxes", "Taxes"),
+        // The original individual Bank exporter puts unmapped Final Ledger
+        // rows into Tally's built-in Suspense A/c. It is a direct child of
+        // Primary, so the consolidated wrapper must map it through a
+        // VERIFIED branch subgroup under Suspense A/c, not synthesize a
+        // custom group beneath Primary or bypass the master-first gate.
+        ("Suspense A/c", "Suspense A/c"),
         ("Fixed Assets", "Fixed Assets"),
         ("Current Assets", "Current Assets"),
         ("Current Liabilities", "Current Liabilities"),
