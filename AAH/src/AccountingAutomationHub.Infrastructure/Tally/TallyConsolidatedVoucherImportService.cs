@@ -519,16 +519,25 @@ public sealed class TallyConsolidatedVoucherImportService(
         {
             var reference = Value(planned.Xml, "REFERENCE");
             if (reference.Length == 0) continue;
-            var matching = actual.FirstOrDefault(live =>
-                IsStrongOriginalReferenceDuplicate(
-                    live, planned.Date, planned.Type, reference, planned.Postings));
-            if (matching is not null)
+            var referenced = actual.Where(live =>
+                live.VoucherDate?.Date == planned.Date.Date &&
+                IgnoreCase.Equals(live.VoucherType, planned.Type) &&
+                IgnoreCase.Equals(live.Reference, reference)).ToArray();
+            foreach (var matching in referenced)
+            {
+                var identical = IsStrongOriginalReferenceDuplicate(
+                    matching, planned.Date, planned.Type, reference, planned.Postings);
                 throw new InvalidOperationException(
-                    "Destination Tally already contains a matching source Reference " +
-                    reference + " / type " + planned.Type + " / complete DR/CR " +
-                    "under Voucher Number '" + matching.VoucherNumber +
+                    (identical ? "DUPLICATE: " : "REFERENCE CONFLICT: ") +
+                    "Destination Tally already contains original Reference '" + reference +
+                    "' / type " + planned.Type +
+                    " under Voucher Number '" + matching.VoucherNumber +
                     "' and native MASTERID " + matching.MasterId +
-                    ". Possible Tally auto-numbering; reconcile, never blindly CREATE or ALTER.");
+                    (identical
+                        ? " with identical complete signed DR/CR."
+                        : " but the signed DR/CR is different or incomplete.") +
+                    " No CREATE/ALTER/DELETE was sent. Reconcile this saved target Voucher first.");
+            }
         }
     }
 
