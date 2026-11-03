@@ -91,21 +91,27 @@ internal static class EntryPoint
             "Update listener absent during startup, disposed before process exit or uses a wall-clock deadline.");
         Console.WriteLine("PASS: listener covers startup and cleanup; update waits for safe initialized idle.");
 
-        // Previously OnExit finished and logged mutex release, but a
-        // foreground helper thread left the old AccountingAutomationHub.exe
-        // process alive. Only a verified updater request, after the three
-        // idle samples and full runtime/OnExit cleanup, may end the process.
+        // v580 regression missed that Environment.Exit followed base.OnExit.
+        // The observed 15912 and 17296 processes logged final mutex release
+        // yet remained alive for >10 minutes while the updater held its mutex.
+        // Force the verified-updater-only exit BEFORE WPF base.OnExit, and only
+        // after a cleanup-COMPLETED marker, not the cleanup-entered flag.
         var verifiedRequest = desktopSource.IndexOf("_verifiedUpdaterExit = true;", StringComparison.Ordinal);
         var idleSamples = desktopSource.LastIndexOf("quietSamples >= 3", verifiedRequest, StringComparison.Ordinal);
-        var cleanupGuard = desktopSource.IndexOf("if (_verifiedUpdaterExit && _runtimeCleaned)", StringComparison.Ordinal);
+        var cleanupDone = desktopSource.IndexOf("_verifiedUpdaterCleanupCompleted = true;", StringComparison.Ordinal);
+        var cleanupGuard = desktopSource.IndexOf(
+            "if (_verifiedUpdaterExit && _runtimeCleaned && _verifiedUpdaterCleanupCompleted &&", StringComparison.Ordinal);
         var ownerRelease = desktopSource.IndexOf("Process exit releasing final single-instance ownership.", StringComparison.Ordinal);
         var finalExit = desktopSource.IndexOf("Environment.Exit(0);", cleanupGuard, StringComparison.Ordinal);
+        var normalWpfExit = desktopSource.IndexOf("base.OnExit(e);", finalExit, StringComparison.Ordinal);
         Assert(verifiedRequest > idleSamples && idleSamples > 0 &&
+               cleanupDone > cleanup && cleanupDone < onExit &&
                cleanupGuard > ownerRelease && ownerRelease > verifiedRequest &&
-               finalExit > cleanupGuard &&
+               finalExit > cleanupGuard && normalWpfExit > finalExit &&
+               desktopSource.Contains("!_ownsSingleInstanceMutex)", StringComparison.Ordinal) &&
                desktopSource.Contains("finally { Shutdown(); }", StringComparison.Ordinal),
-            "Verified update can leave an already-cleaned ghost PID or exit before accounting/Tally safety gates.");
-        Console.WriteLine("PASS: verified updater completes process exit only after idle, accounting cleanup and mutex release.");
+            "Verified update can remain stuck inside WPF base.OnExit after safe cleanup, or exit before accounting/Tally safety gates.");
+        Console.WriteLine("PASS: verified updater ends cleaned process before WPF exit can block; normal exits unchanged.");
 
 
         Assert(automationSource.Contains("if (IsQuiescingForVerifiedUpdate && !manualReimport) return false;", StringComparison.Ordinal) &&
