@@ -2337,6 +2337,63 @@ public sealed class TallyAccountingVoucherExportService
             .Select(item => new VoucherLedgerEntry(item.AccountingLedger,
                 Math.Abs(item.AccountingAmount), item.IsDeemedPositive, false)));
 
+    /// <summary>
+    /// The consolidated wrapper calls the EXISTING normal Purchase/Sales/
+    /// Cash/Journal voucher comparator. Only the adapter transforms the
+    /// original signed branch XML entries into its existing PreparedVoucher
+    /// contract. Do not introduce another consolidated duplicate algorithm.
+    /// </summary>
+    public static bool VoucherStrictlyMatchesConsolidatedSource(
+        TallyVoucherIndexRecord existing,
+        DateTime date, string type, string reference, string partyLedger,
+        string narration,
+        IReadOnlyList<(string Name, decimal Amount)> originalSignedPostings)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        ArgumentNullException.ThrowIfNull(originalSignedPostings);
+        if (originalSignedPostings.Count == 0 || existing.LedgerPostings.Count == 0 ||
+            existing.LedgerPostings.Count != originalSignedPostings.Count)
+            return false;
+
+        // Original branch amount signs are not recalculated, only adapted to
+        // the same existing VoucherLedgerEntry input fields used by normal.
+        var entries = originalSignedPostings.Select(item =>
+            new VoucherLedgerEntry(
+                item.Name, Math.Abs(item.Amount),
+                item.Amount < 0m,
+                item.Name.Equals(partyLedger, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var source = new PreparedVoucher(
+            SourceType: "Consolidated Voucher",
+            SourceKey: reference,
+            ContentHash: string.Empty,
+            Date: date,
+            ReferenceDate: null,
+            VoucherType: type,
+            VoucherNumber: existing.VoucherNumber, // Tally may auto-number; original rule uses REFERENCE.
+            ReferenceNumber: reference,
+            PartyLedger: partyLedger,
+            PartyGstin: string.Empty,
+            PlaceOfSupply: string.Empty,
+            Narration: narration,
+            Entries: entries);
+        if (!VoucherStrictlyMatchesPrepared(existing, source)) return false;
+
+        // The normal classifier validates date/type/reference/party/amount/
+        // narration/both posting sides. The wrapper additionally requires
+        // every signed line for source-to-consolidated readback parity.
+        var original = originalSignedPostings
+            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Amount).ToArray();
+        var live = existing.LedgerPostings
+            .Select(item => (Name: item.LedgerName, Amount: item.SignedAmount))
+            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Amount).ToArray();
+        return original.Zip(live).All(pair =>
+            pair.First.Name.Equals(pair.Second.Name, StringComparison.OrdinalIgnoreCase) &&
+            pair.First.Amount == pair.Second.Amount);
+    }
+
     private static bool VoucherStrictlyMatchesPrepared(
         TallyVoucherIndexRecord existing,
         PreparedVoucher incoming,
