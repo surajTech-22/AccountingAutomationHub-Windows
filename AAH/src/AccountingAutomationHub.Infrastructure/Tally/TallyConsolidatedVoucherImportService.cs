@@ -67,26 +67,36 @@ public sealed class TallyConsolidatedVoucherImportService(
         if (primary.Index.Count > 0)
             return primary;
 
-        // A zero-row response is not proof of a duplicate-free Tally company.
-        // An independent, lighter Voucher collection is needed when there
-        // is a known live voucher or Tally has acknowledged one new CREATE.
-        if (!requireVisibleVoucherAfterCreate && destination.VoucherCount <= 0)
-            return primary;
+        // An empty response is NEVER evidence that a Tally company is empty.
+        // Always ask an independent existing Voucher collection for the same FY.
+        // Do not trust destination.VoucherCount: UI discovery may silently fall
+        // back to zero when Tally times out or returns an unsupported function.
         var alternate = await tally.ExportVoucherIndexFreshAsync(
             destination, from, to, cancellationToken, Trace(stage + "-IndependentIndex"))
             .ConfigureAwait(false);
         if (alternate.Count > 0)
             throw new InvalidOperationException(
-                "Consolidated Tally duplicate authority is inconsistent: the full Voucher reader " +
-                "returned zero but an independent live Voucher index returned " +
-                alternate.Count + " row(s). The source XML was NOT posted again. " +
-                "Inspect both original HTTP readbacks inside the detailed diagnostic ZIP.");
-        if (!requireVisibleVoucherAfterCreate && destination.VoucherCount > 0)
-            throw new InvalidOperationException(
-                "Consolidated duplicate check cannot establish an empty financial-year Voucher " +
-                "collection: live Tally reports " + destination.VoucherCount +
-                " existing voucher(s), but both fresh export readers returned zero. " +
-                "Import stopped BEFORE any voucher POST; do not assume duplicates are absent.");
+                "Consolidated Tally duplicate authority is inconsistent: full Voucher " +
+                "authority returned zero, but the independent live index returned " +
+                alternate.Count + " record(s). No new voucher was authorized. " +
+                "Inspect both read-only HTTP responses in the original diagnostic ZIP.");
+
+        if (!requireVisibleVoucherAfterCreate)
+        {
+            // The 03-Nov CL019 issue had LASTVCHID=2 but an empty diagnostic
+            // voucher-index CSV. A successful-shaped empty XML read must NOT
+            // override Tally's actual count of saved Voucher objects.
+            var liveCount = await tally.ReadAuthoritativeVoucherCountForConsolidatedAsync(
+                destination, cancellationToken, Trace(stage + "-TallyNumVouchers"))
+                .ConfigureAwait(false);
+            if (liveCount != 0)
+                throw new InvalidOperationException(
+                    "DUPLICATE SAFETY STOP: Tally reports " + liveCount +
+                    " existing Voucher(s), yet both independent fresh Voucher " +
+                    "collections returned zero for the requested FY. The target " +
+                    "company is NOT certified empty. No CREATE was sent; do not " +
+                    "blindly retry. Inspect original diagnostic HTTP evidence.");
+        }
         return primary;
     }
 
