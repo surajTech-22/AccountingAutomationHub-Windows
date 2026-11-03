@@ -1045,7 +1045,12 @@ public sealed class TallyAccountingVoucherExportService
                 Name = spec.Name,
                 Parent = spec.Parent,
                 Type = "Ledger",
-                Source = "Ledger Mapping",
+                Source = spec.Name.Equals("Suspense", StringComparison.OrdinalIgnoreCase) ||
+                         spec.Name.Equals("Cash", StringComparison.OrdinalIgnoreCase) ||
+                         spec.Name.Equals("Cash A/c", StringComparison.OrdinalIgnoreCase) ||
+                         spec.Name.Equals("Bank Charges", StringComparison.OrdinalIgnoreCase) ||
+                         spec.Name.Equals("Bank Interest", StringComparison.OrdinalIgnoreCase)
+                    ? "Banking" : "Ledger Mapping",
                 IsUserEdited = true
             }); // Source XML template only; no repository write or Tally ID.
             originalMasterNames.Add(key);
