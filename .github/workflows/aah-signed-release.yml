@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.581)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.582)"
         required: true
-        default: "v4.0.0.581"
+        default: "v4.0.0.582"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.581: verified-update-only final process exit after completed cleanup, before WPF base.OnExit. CI gates retained.
+    # v4.0.0.582: auto-retire ONLY path/PID/start-matched AAH ghosts with complete verified shutdown evidence; retain full CI gates.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.581]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.582]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.581' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.582' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.581: fix v580 verified-updater shutdown hang after AAH has recorded completed accounting/Tally disposal, SQLite WAL checkpoint, and final single-instance owner release. The update-only cleanup-completed exit runs before potentially blocking WPF base.OnExit, preventing already-cleaned ghost AAH PIDs from holding the updater for repeated 11-minute waits. New regression asserts exact safe shutdown ordering. Regular Close-to-tray and user Exit behavior unchanged; active Tally/import and manual reimport still defer verified shutdown. Preserves v580 full DR/CR Tally duplicate and delete-safety controls, consolidated import, v579 bounded archive download, SHA256 verified transaction, startup readiness and rollback. Release requires exact main SHA Windows and full-component regression success."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.582: the existing GitHub SHA256-verified UpdateHost now automatically recovers old AAH processes that have already COMPLETED the verified-update idle gate, Tally and workspace disposal, SQLite WAL-safe cleanup, and final instance lock release but remain alive due to old WPF foreground threads. This is not broad task killing: process executable path, start time, PID and ordered shutdown evidence are all checked against the existing AAH shutdown log; unknown/reused or still-busy processes remain untouched. The updater then performs a fresh census and uses the ORIGINAL transactional installer with SHA256 and startup verification. This also bundles v581 verified-update exit ordering, v580 consolidated duplicate/ALTER/DELETE and bank protections, v579 HTTP deadlines, and untouched close-to-tray/manual exit behavior. AAH Windows + all-component CI and updater host regressions are mandatory."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
