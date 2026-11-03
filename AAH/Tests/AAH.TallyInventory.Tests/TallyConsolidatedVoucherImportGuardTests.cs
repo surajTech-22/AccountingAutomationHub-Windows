@@ -214,6 +214,25 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             throw new InvalidOperationException(
                 "Accepted-voucher read-only reconciliation can mutate Tally or ignore original MASTERID/DRCR/version gates.");
         Console.WriteLine("PASS: CL019 accepted voucher recovery is read-only and original-binding exact MASTERID/DRCR gated.");
+        // CL019 B2CS-202601-29-18-1: two branches, one already-imported
+        // voucher (MASTERID 27, Tally auto-number 3). The second branch
+        // may proceed only if the first one is PROVEN owned by another
+        // persisted consolidated source anchor at that same MASTERID.
+        if (!importerSource.Contains("IsAlreadyOwnedByOtherVerifiedBranch(", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "IgnoreCase.Equals(otherBinding.MasterId, live.MasterId)", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "otherBinding.State.Equals(\"Verified\"", StringComparison.Ordinal) ||
+            !importerSource.Contains("exactMatches.Any(candidate =>", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "!IsAlreadyOwnedByOtherVerifiedBranch(live, planned)", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "CL019 auto-numbered shared B2C reference is still classified " +
+                "without original AAH source-to-MASTERID authority.");
+        Console.WriteLine(
+            "PASS: CL019 other branch ownership requires its original verified " +
+            "source binding; same-ref auto-number does not authorize cross-branch rebind.");
+
 
         // CL019: user changed the accounting ledger IN AAH after the
         // original consolidated voucher was verified in Tally. The correct
