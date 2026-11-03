@@ -2018,7 +2018,9 @@ public sealed class TallyLiveConnectionCoordinator :
         ClientProfile parent, TallyCompanyInfo destination,
         string operationStatus, int preparedVouchers, int verifiedImported,
         IReadOnlyDictionary<string, string>? consolidatedEvidence = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? acknowledgedVoucherCreates = null,
+        string? readbackError = null)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(destination);
@@ -2027,7 +2029,10 @@ public sealed class TallyLiveConnectionCoordinator :
             !current.FinancialYear.Equals(parent.FinancialYear, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Consolidated diagnostics require the same active parent Client/FY.");
-        if (preparedVouchers < 0 || verifiedImported < 0 || verifiedImported > preparedVouchers)
+        var accepted = acknowledgedVoucherCreates ?? verifiedImported;
+        if (preparedVouchers < 0 || verifiedImported < 0 ||
+            verifiedImported > preparedVouchers || accepted < verifiedImported ||
+            accepted > preparedVouchers)
             throw new InvalidOperationException("Invalid consolidated diagnostic voucher counts.");
         var (from, to) = FinancialYearDates(parent.FinancialYear);
         var result = new TallyVoucherExportResult
@@ -2035,9 +2040,17 @@ public sealed class TallyLiveConnectionCoordinator :
             FromDate = from, ToDate = to,
             Selected = preparedVouchers, Ready = preparedVouchers,
             ReadyCreates = preparedVouchers, Imported = verifiedImported,
-            TallyCreated = verifiedImported,
+            // CL019: CREATED=1 is not equivalent to 0 merely because a live
+            // readback failed. Keep both independent facts in the original ZIP.
+            TallyCreated = accepted,
+            UnverifiedAfterImport = accepted - verifiedImported,
             Status = "Consolidated Tally (existing wrapper): " + operationStatus
         };
+        if (!string.IsNullOrWhiteSpace(readbackError))
+        {
+            result.LiveReadErrors = 1;
+            result.LiveReadErrorDetails.Add(readbackError);
+        }
         // No app-log fallback: the user explicitly needs the linked AutoFolder.
         // Missing/unavailable links produce a visible error instead of a
         // misleading success or a ZIP silently written elsewhere.

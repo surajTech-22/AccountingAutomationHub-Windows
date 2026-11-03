@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.579)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.580)"
         required: true
-        default: "v4.0.0.579"
+        default: "v4.0.0.580"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-    # v4.0.0.579: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
+    # v4.0.0.580: isolated updater staging, early graceful-exit listener and safe startup/exit recovery. Release only after all required checks pass.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.579]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.580]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.579' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.580' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.579: Windows updater network reliability. Both desktop updater-host download and UpdateHost application archive streaming now enforce absolute and 90-second no-progress timeouts after HTTP headers. Log updater mutex acquisition, release-preflight progress and verified download bytes, preventing silent indefinite update lock after a DNS/router dropout. On a transient updater exit code 1 the running desktop attempts exactly one release-verified retry after 30 seconds; an active accounting/Tally shutdown deferral (exit 2) never triggers a blind retry. Original SHA256, publisher identity, exact-install graceful shutdown, master-first Tally, v578 detailed consolidated AutoFolder diagnostics, v577 VAT labels, existing transactional installer and data rollback protections retained. Unsigned checksum-verified release."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.580: consolidated Tally Voucher export now reuses existing normal accounting Tally source-binding and version/fingerprint repository, full FY bounded fresh Tally authority and strict reference/ledger signed DR/CR comparison. Previously created invoices are read and verified without another CREATE even if Tally owns a different Voucher Number. Any accepted or uncertain CREATE is durably staged as AcceptedAwaitingVerification before live readback; failed/ambiguous readback blocks reimport and ALTER/DELETE. No foreign branch MASTERID/ALTERID/GUID is transferred; master-first, GST and original branch postings remain unchanged. Existing detailed linked AutoFolder ZIP now reports Tally CREATED independently from live-verified count (CL019 response CREATED=1 LASTVCHID=2). Changes to previously verified vouchers are held for established previous-to-desired review; no new destructive ALTER or DELETE shortcut. Retains v579 bounded updater host, SHA256 verification, rollback and prior safeguards. Release requires exact SHA full Windows and Tally regressions. Unsigned checksum verified release."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
