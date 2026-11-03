@@ -103,6 +103,23 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
               normalDashboardXaml.Contains("SalesTallyExportMonths", StringComparison.Ordinal),
             "The original Tally Export module/month design must be restored unchanged.");
         Console.WriteLine("PASS: consolidated dashboard restores scoped folder/diagnostic actions and live Tally status without parent export or duplicate writes.");
+        // Original CL019 report counted only Tally CREATED, which would
+        // falsely reject any ALTER-only export (verified 1, CREATED 0) and
+        // skip the existing Tally coordinator refresh after bound ALTER.
+        // The existing detailed ZIP and coordinator must count independent
+        // accepted CREATE and ALTER without issuing any additional POST.
+        Check(coordinator.Contains("TallyCreated = acceptedCreates", StringComparison.Ordinal) &&
+              coordinator.Contains("TallyAltered = acceptedAlters", StringComparison.Ordinal) &&
+              coordinator.Contains("acceptedCreates + acceptedAlters", StringComparison.Ordinal) &&
+              main.Contains("tallyAcknowledgedAlterCount", StringComparison.Ordinal) &&
+              main.Contains("acknowledgedVoucherAlters: tallyAcknowledgedAlters", StringComparison.Ordinal) &&
+              main.Contains("tallyAcknowledgedCreateCount > 0 || tallyAcknowledgedAlterCount > 0", StringComparison.Ordinal) &&
+              main.Contains("RefreshNowAsync(forceLinkedSynchronization: true)", StringComparison.Ordinal) &&
+              importer.Contains("tallyAcknowledgedAlter?.Invoke()", StringComparison.Ordinal),
+            "Original Tally diagnostic/linked cache ignores successful bound ALTER acceptance or merges ALTER into CREATE.");
+        Console.WriteLine("PASS: original detailed Tally ZIP and linked coordinator count/refresh verified ALTER separately from CREATE.");
+
+
         Console.WriteLine("PASS: consolidated Tally reuses existing full diagnostic ZIP in parent AutoFolder, captures live evidence and preserves previous ZIP.");
     }
 }
