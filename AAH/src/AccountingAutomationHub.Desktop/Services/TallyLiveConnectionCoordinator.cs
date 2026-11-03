@@ -2020,7 +2020,8 @@ public sealed class TallyLiveConnectionCoordinator :
         IReadOnlyDictionary<string, string>? consolidatedEvidence = null,
         CancellationToken cancellationToken = default,
         int? acknowledgedVoucherCreates = null,
-        string? readbackError = null)
+        string? readbackError = null,
+        int? acknowledgedVoucherAlters = null)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(destination);
@@ -2029,9 +2030,16 @@ public sealed class TallyLiveConnectionCoordinator :
             !current.FinancialYear.Equals(parent.FinancialYear, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Consolidated diagnostics require the same active parent Client/FY.");
-        var accepted = acknowledgedVoucherCreates ?? verifiedImported;
+        // CREATE and ALTER are different accepted accounting events. The
+        // original detailed diagnostic must never call a bound ALTER a new
+        // CREATE or reject a successfully verified ALTER-only import because
+        // acknowledgedVoucherCreates=0.
+        var acceptedCreates = acknowledgedVoucherCreates ?? verifiedImported;
+        var acceptedAlters = acknowledgedVoucherAlters ?? 0;
+        var accepted = checked(acceptedCreates + acceptedAlters);
         if (preparedVouchers < 0 || verifiedImported < 0 ||
-            verifiedImported > preparedVouchers || accepted < verifiedImported ||
+            verifiedImported > preparedVouchers || acceptedCreates < 0 ||
+            acceptedAlters < 0 || accepted < verifiedImported ||
             accepted > preparedVouchers)
             throw new InvalidOperationException("Invalid consolidated diagnostic voucher counts.");
         var (from, to) = FinancialYearDates(parent.FinancialYear);
@@ -2039,10 +2047,13 @@ public sealed class TallyLiveConnectionCoordinator :
         {
             FromDate = from, ToDate = to,
             Selected = preparedVouchers, Ready = preparedVouchers,
-            ReadyCreates = preparedVouchers, Imported = verifiedImported,
-            // CL019: CREATED=1 is not equivalent to 0 merely because a live
-            // readback failed. Keep both independent facts in the original ZIP.
-            TallyCreated = accepted,
+            ReadyCreates = Math.Max(0, preparedVouchers - acceptedAlters),
+            ReadyAlters = acceptedAlters,
+            Imported = verifiedImported,
+            // Acceptance (CREATED or ALTERED) is saved even if readback fails.
+            // Only exact live readback makes a voucher VERIFIED.
+            TallyCreated = acceptedCreates,
+            TallyAltered = acceptedAlters,
             UnverifiedAfterImport = accepted - verifiedImported,
             Status = "Consolidated Tally (existing wrapper): " + operationStatus
         };
