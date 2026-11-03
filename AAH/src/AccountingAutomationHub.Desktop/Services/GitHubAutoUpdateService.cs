@@ -312,14 +312,24 @@ internal static class GitHubAutoUpdateService
         var incoming = Path.Combine(root, UpdateAssetName + ".pending.exe");
         try
         {
-            using var stagingLock = TryAcquireStagingLock(cacheRoot);
+            // CL019 21:27: v591's MANIFEST was verified but the desktop
+            // launcher never reached the very next download-start log.
+            // This gap also contains synchronous filesystem operations on
+            // the updater cache (antivirus/filter driver sensitive). Give
+            // them observable stage checkpoints and bounded waits.
+            Log("release " + tag + " acquiring bounded cross-process staging lock.");
+            using var stagingLock = await AcquireStagingLockBoundedAsync(cacheRoot)
+                .ConfigureAwait(false);
             if (stagingLock is null)
             {
                 Log("Another AAH process is staging an updater; skipping duplicate attempt.");
                 Interlocked.Exchange(ref _updateLaunched, 0);
                 return;
             }
-            Directory.CreateDirectory(root);
+            Log("release " + tag + " staging lock acquired; preparing immutable attempt directory.");
+            await Task.Run(() => Directory.CreateDirectory(root))
+                .WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+            Log("release " + tag + " attempt directory ready; starting official updater transfer.");
             var path = Path.Combine(root, UpdateAssetName);
             // ResponseHeadersRead does not guarantee a response-body timeout.
             // Bound an inactive connection and the total transfer so a partial
@@ -473,8 +483,20 @@ internal static class GitHubAutoUpdateService
         }
         catch
         {
-            try { if (File.Exists(incoming)) File.Delete(incoming); } catch { }
+            // Never let antivirus-blocked temp cleanup hold the in-memory
+            // staging latch forever. Do not delete installed AAH/Tally files.
             Interlocked.Exchange(ref _updateLaunched, 0);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Run(() =>
+                    {
+                        if (File.Exists(incoming)) File.Delete(incoming);
+                    }).WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+                }
+                catch (Exception) { /* only disposable staging file */ }
+            });
             throw;
         }
     }
@@ -496,6 +518,30 @@ internal static class GitHubAutoUpdateService
         }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
+    }
+
+    internal static async Task<FileStream?> AcquireStagingLockBoundedAsync(
+        string cacheRoot, TimeSpan? timeout = null)
+    {
+        // FileStream's synchronous open can be delayed by an antivirus file
+        // filter. If the caller gives up, ALWAYS dispose an eventual late
+        // acquisition rather than leaving the cross-process lock orphaned.
+        var task = Task.Run(() => TryAcquireStagingLock(cacheRoot));
+        try { return await task.WaitAsync(timeout ?? TimeSpan.FromSeconds(30))
+            .ConfigureAwait(false); }
+        catch (TimeoutException)
+        {
+            _ = task.ContinueWith(completed =>
+            {
+                if (completed.Status == TaskStatus.RanToCompletion)
+                    completed.Result?.Dispose();
+            }, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw new TimeoutException(
+                "AAH launcher could not acquire staging file lock within 30 seconds; " +
+                "updater launch canceled without touching installed AAH.");
+        }
     }
 
     // The same identity guard exists in AAH_GitHubSetup.iss. Two separately
