@@ -126,7 +126,9 @@ public sealed class TallyConsolidatedVoucherImportService(
             if (sourceReference.Length > 0 && source.Any(previous =>
                 previous.Date.Date == date.Date &&
                 IgnoreCase.Equals(previous.Type, type) &&
-                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), sourceReference)))
+                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), sourceReference) &&
+                IgnoreCase.Equals(Value(previous.Xml, "PARTYLEDGERNAME"),
+                    Value(voucher, "PARTYLEDGERNAME"))))
                 throw new InvalidOperationException(
                     "Consolidated branch XML repeats original reference '" +
                     sourceReference + "' with the same date/type, either as an " +
@@ -441,7 +443,9 @@ public sealed class TallyConsolidatedVoucherImportService(
     {
         if (!IgnoreCase.Equals(live.VoucherType, source.Type)) return false;
         var reference = Value(source.Xml, "REFERENCE");
-        return (reference.Length > 0 && IgnoreCase.Equals(live.Reference, reference)) ||
+        return (reference.Length > 0 &&
+                IgnoreCase.Equals(live.Reference, reference) &&
+                IgnoreCase.Equals(live.PartyLedger, Value(source.Xml, "PARTYLEDGERNAME"))) ||
                IgnoreCase.Equals(live.VoucherNumber, source.Number);
     }
 
