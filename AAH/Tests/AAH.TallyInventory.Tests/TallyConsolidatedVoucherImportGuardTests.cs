@@ -182,6 +182,39 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "PASS: CL019 MASTERID 337 selected over same-reference branch MASTERID 26 " +
             "only by exact branch-signed DR/CR; no resend or unsafe cross-branch rebind.");
 
+        // The new user-requested recovery must ONLY Export fresh live
+        // Tally vouchers and confirm existing AcceptedAwaitingVerification
+        // source bindings. Never permit an ImportXml POST in that method.
+        DirectoryInfo? sourceRoot = new(Environment.CurrentDirectory);
+        while (sourceRoot is not null &&
+               !File.Exists(Path.Combine(sourceRoot.FullName, "AAH", "src",
+                   "AccountingAutomationHub.Infrastructure", "Tally",
+                   "TallyConsolidatedVoucherImportService.cs")))
+            sourceRoot = sourceRoot.Parent;
+        if (sourceRoot is null)
+            throw new InvalidOperationException("Consolidated writer source missing.");
+        var importerSource = File.ReadAllText(Path.Combine(
+            sourceRoot.FullName, "AAH", "src",
+            "AccountingAutomationHub.Infrastructure", "Tally",
+            "TallyConsolidatedVoucherImportService.cs"));
+        var readonlyStart = importerSource.IndexOf(
+            "public async Task<int> ReconcileAcceptedReadOnlyAsync(", StringComparison.Ordinal);
+        var normalStart = importerSource.IndexOf(
+            "public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(", StringComparison.Ordinal);
+        if (readonlyStart <= 0 || normalStart <= readonlyStart)
+            throw new InvalidOperationException("Read-only accepted reconciliation route is missing.");
+        var readOnlyBody = importerSource.Substring(readonlyStart, normalStart - readonlyStart);
+        if (readOnlyBody.Contains("ImportWithEvidenceAsync(", StringComparison.Ordinal) ||
+            readOnlyBody.Contains("ImportXmlAsync(", StringComparison.Ordinal) ||
+            !readOnlyBody.Contains("AcceptedAwaitingVerification", StringComparison.Ordinal) ||
+            !readOnlyBody.Contains("FullVoucherMatches(", StringComparison.Ordinal) ||
+            !readOnlyBody.Contains("candidate.MasterId, item.AcknowledgedMasterId", StringComparison.Ordinal) ||
+            !readOnlyBody.Contains("state.PendingContentHash", StringComparison.Ordinal) ||
+            !readOnlyBody.Contains("RequireUniqueLiveDestination(", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Accepted-voucher read-only reconciliation can mutate Tally or ignore original MASTERID/DRCR/version gates.");
+        Console.WriteLine("PASS: CL019 accepted voucher recovery is read-only and original-binding exact MASTERID/DRCR gated.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
