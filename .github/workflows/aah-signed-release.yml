@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.585: original bound ALTER, exact branch identity, distinct ALTERED diagnostic and shared cache refresh; original UI. Exact SHA full tests.
+# v4.0.0.585: existing Bank writer included in consolidated branch source, one proven matched Contra, bank/mapping-aware fingerprint, original Tally counters and manual refresh, prior same-MASTERID ALTER and duplicate safety. Exact SHA Windows + 16-component tests mandatory.
     # pull requests, branch drift, failed builds, or unrelated commits.
     if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.585]') }}
     name: Build AAH Setup and verified auto-update release
