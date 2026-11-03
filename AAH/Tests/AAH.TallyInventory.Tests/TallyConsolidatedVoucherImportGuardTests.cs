@@ -60,6 +60,63 @@ internal static class TallyConsolidatedVoucherImportGuardTests
 
     public static void Run()
     {
+        // CL019 2026-11-03: Tally CREATE returned LASTVCHID=2, but
+        // diagnostic voucher index returned 0. On a later run a Tally-owned
+        // auto-number must not authorize creating the same original invoice.
+        var original = new (string Name, decimal Amount)[]
+        {
+            ("Creditor KA", -7.08m), ("Taxable KA", 6.00m), ("IGST KA", 1.08m)
+        };
+        var live = new TallyVoucherIndexRecord
+        {
+            MasterId = "2",
+            AlterId = "12",
+            VoucherDate = new DateTime(2026, 2, 28),
+            VoucherType = "Debit Note",
+            VoucherNumber = "TALLY-AUTO-002",
+            Reference = "KA-C-26-1924192",
+            Narration = "Imported from branch",
+            LedgerPostings = new TallyLedgerPostingRecord[]
+            {
+                new() { LedgerName = "Creditor KA", SignedAmount = -7.08m },
+                new() { LedgerName = "Taxable KA", SignedAmount = 6.00m },
+                new() { LedgerName = "IGST KA", SignedAmount = 1.08m }
+            }
+        };
+        static bool Match(TallyVoucherIndexRecord actual, string refNumber,
+            IReadOnlyList<(string Name, decimal Amount)> posts) =>
+            TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                actual, new DateTime(2026, 2, 28), "Debit Note",
+                refNumber, "Imported from branch", posts);
+        if (!Match(live, "KA-C-26-1924192", original))
+            throw new InvalidOperationException(
+                "Existing normal Tally strict classifier failed to recognise live " +
+                "auto-numbered same-source and complete DR/CR.");
+        if (Match(live, "DIFFERENT-INVOICE", original) ||
+            Match(live, "KA-C-26-1924192",
+                new (string Name, decimal Amount)[]
+                {
+                    ("Creditor KA", -7.08m), ("Taxable KA", 6.00m),
+                    ("IGST KA", 1.09m)
+                }))
+            throw new InvalidOperationException(
+                "Tally strict classifier ignored different original reference " +
+                "or altered the source GST posting.");
+        var noMasterId = new TallyVoucherIndexRecord
+        {
+            VoucherDate = live.VoucherDate,
+            VoucherType = live.VoucherType,
+            VoucherNumber = live.VoucherNumber,
+            Reference = live.Reference,
+            Narration = live.Narration,
+            LedgerPostings = live.LedgerPostings
+        };
+        if (Match(noMasterId, live.Reference, original))
+            throw new InvalidOperationException(
+                "A live voucher with no durable destination MASTERID " +
+                "must never be confirmed exact.");
+        Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
