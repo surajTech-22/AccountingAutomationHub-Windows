@@ -56,6 +56,49 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
             "the prior diagnostic ZIP is deleted before the replacement exists");
         Check(watcher.Contains("AAH_TALLY_REPORTS", StringComparison.OrdinalIgnoreCase),
             "Auto Import watcher could ingest its own detailed diagnostic ZIP");
+        // v583 CL019: after 333 Tally CREATE acknowledgements, 332
+        // exact-live verified and 1 AcceptedAwaitingVerification must be
+        // visible from original Client/FY/CompanyKey source-binding rows.
+        // Never show the NORMAL parent monthly "677 exportable" selector as
+        // if it represented the consolidated destination's imported count.
+        var tallyRepository = Source("AccountingAutomationHub.Infrastructure/Tally",
+            "SqliteTallyRepository.cs");
+        var dashboardVm = Source("AccountingAutomationHub.Desktop/ViewModels",
+            "ConsolidatedBranchDashboardViewModel.cs");
+        var tallyPageVm = Source("AccountingAutomationHub.Desktop/ViewModels",
+            "ConsolidatedTallyImportViewModel.cs");
+        var dashboardXaml = Source("AccountingAutomationHub.Desktop/Views",
+            "ConsolidatedBranchDashboardView.xaml");
+        var tallyPageXaml = Source("AccountingAutomationHub.Desktop/Views",
+            "ConsolidatedTallyImportView.xaml");
+        var normalDashboardXaml = Source("AccountingAutomationHub.Desktop/Views",
+            "DashboardView.xaml");
+        Check(tallyRepository.Contains("ReadConsolidatedVoucherProgress(", StringComparison.Ordinal) &&
+              tallyRepository.Contains("FROM TallySourceBindings", StringComparison.Ordinal) &&
+              tallyRepository.Contains("AcceptedAwaitingVerification", StringComparison.Ordinal),
+            "Consolidated destination status is not read from the durable original binding repository");
+        Check(main.Contains("ReadConsolidatedTallyProgressStatus(", StringComparison.Ordinal) &&
+              main.Contains("RefreshNowAsync(forceLinkedSynchronization: true)", StringComparison.Ordinal) &&
+              main.Contains("_consolidatedTallyImportPage?.RefreshTallyImportProgress();", StringComparison.Ordinal) &&
+              main.Contains("_consolidatedDashboardPage?.RefreshTallyImportProgress();", StringComparison.Ordinal),
+            "Consolidated Tally partial acceptance does not refresh its durable status/shared authority");
+        Check(dashboardVm.Contains("TallyImportProgressStatus", StringComparison.Ordinal) &&
+              tallyPageVm.Contains("TallyImportProgressStatus", StringComparison.Ordinal) &&
+              tallyPageVm.Contains("finally", StringComparison.Ordinal),
+            "Consolidated pages do not show current verified / accepted-awaiting status after import");
+        Check(dashboardXaml.Contains("ExistingDashboardWorkspace.OpenLinkedFolderCommand", StringComparison.Ordinal) &&
+              dashboardXaml.Contains("ExistingDashboardWorkspace.OpenTallyDiagnosticFolderCommand", StringComparison.Ordinal) &&
+              dashboardXaml.Contains("RefreshConsolidatedCommand", StringComparison.Ordinal) &&
+              tallyPageXaml.Contains("TallyImportProgressStatus", StringComparison.Ordinal) &&
+              tallyPageXaml.Contains("ExistingDashboardWorkspace.OpenLinkedFolderCommand", StringComparison.Ordinal),
+            "Original consolidated dashboard folder/diagnostics or read-only verification actions are missing");
+        Check(!dashboardXaml.Contains("ClearAllDataCommand", StringComparison.Ordinal) &&
+              !dashboardXaml.Contains("ExportDiagnosticExcelCommand", StringComparison.Ordinal),
+            "Consolidated dashboard exposed dangerous parent-accounting mutation/export buttons");
+        Check(normalDashboardXaml.Contains("NormalTallyExportSelection", StringComparison.Ordinal) &&
+              normalDashboardXaml.Contains("IsConsolidatedTallyScope", StringComparison.Ordinal),
+            "Parent/branch month selection is shown as if it were consolidated destination progress.");
+        Console.WriteLine("PASS: consolidated dashboard restores scoped folder/diagnostic actions and live Tally status without parent export or duplicate writes.");
         Console.WriteLine("PASS: consolidated Tally reuses existing full diagnostic ZIP in parent AutoFolder, captures live evidence and preserves previous ZIP.");
     }
 }
