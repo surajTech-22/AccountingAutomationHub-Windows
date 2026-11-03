@@ -174,6 +174,22 @@ internal static class TallyConsolidatedBankSourceTests
         Check(suspenseLines.Any(line => Ledger(line) == "Suspense") &&
               suspenseLines.Any(line => Ledger(line) == "Branch Bank Account"),
             "Existing Suspense Ledger and the original Bank Account were not both present.");
+        // Original BuildRequiredLedgerSpecs MUST recognize Suspense as a
+        // Ledger whose parent is Suspense A/c (a GROUP, never a voucher Ledger).
+        var opaqueSuspense = prepareMethod.Invoke(null, [repo, client, from, to]);
+        var suspenseAuthorities = ((IEnumerable)(originalMasterMethod.Invoke(
+                null, [repo, masters, client, opaqueSuspense])
+                ?? throw new InvalidOperationException(
+                    "Original Bank Suspense master group is unavailable.")))
+            .Cast<object>().ToArray();
+        var suspenseAuthority = suspenseAuthorities.FirstOrDefault(item =>
+            item.GetType().GetField("Item1")?.GetValue(item)?.ToString() == "Suspense");
+        Check(suspenseAuthority is not null &&
+              suspenseAuthority.GetType().GetField("Item2")
+                  ?.GetValue(suspenseAuthority)?.ToString() == "Suspense A/c" &&
+              (bool)(suspenseAuthority.GetType().GetField("Item3")
+                  ?.GetValue(suspenseAuthority) ?? false),
+            "Manual Bank mapped Suspense to the wrong Group or lost original create authority.");
         bank.Rows.Add(new BankTransactionRecord {
             Id = 218, ClientId = 19, FinancialYear = client.FinancialYear,
             BankAccountId = 28, Mode = "Receipt",
