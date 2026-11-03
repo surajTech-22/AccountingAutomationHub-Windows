@@ -263,6 +263,95 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "Consolidated changed ledger bypasses normal previous-version/accepted/live verification.");
         Console.WriteLine("PASS: consolidated changed ledger uses original bound MASTERID ALTER " +
             "with previous DRCR/ALTERID, accepted-write barrier and post-write verification.");
+        // Same actual destination voucher BEFORE the user renamed its
+        // assigned debtor ledger in the branch. AAH saved its previous exact
+        // source version + content hash + destination MASTERID/ALTERID.
+        // Reconstruct from the old full Tally XML; never invent a prior value
+        // from the new branch voucher being exported.
+        var oldPostings = new (string Name, decimal Amount)[]
+        {
+            ("B2C Sales - 24 - Gujarat", -11120.32m),
+            ("Sales @ 18% - Gujarat", 9424m),
+            ("Output CGST @ 9% - Gujarat", 848.16m),
+            ("Output SGST @ 9% - Gujarat", 848.16m)
+        };
+        var oldIndex = new TallyVoucherIndexRecord
+        {
+            MasterId = "26", AlterId = "28", VoucherType = "Sales",
+            VoucherDate = new DateTime(2026, 1, 31),
+            VoucherNumber = "2", Reference = "B2CS-202601-24-18-2",
+            PartyLedger = "B2C Sales - 24 - Gujarat",
+            Narration = "Sales B2CS-202601-24-18-2",
+            LedgerPostings = oldPostings.Select(posting =>
+                new TallyLedgerPostingRecord
+                {
+                    LedgerName = posting.Name, SignedAmount = posting.Amount
+                }).ToArray()
+        };
+        var previousXml = new System.Xml.Linq.XElement("VOUCHER",
+            new System.Xml.Linq.XElement("DATE", "20260131"),
+            new System.Xml.Linq.XElement("VOUCHERTYPENAME", "Sales"),
+            new System.Xml.Linq.XElement("REFERENCE", oldIndex.Reference),
+            new System.Xml.Linq.XElement("PARTYLEDGERNAME", oldIndex.PartyLedger),
+            new System.Xml.Linq.XElement("NARRATION", oldIndex.Narration),
+            oldPostings.Select(p => new System.Xml.Linq.XElement(
+                "ALLLEDGERENTRIES.LIST",
+                new System.Xml.Linq.XElement("LEDGERNAME", p.Name),
+                new System.Xml.Linq.XElement("AMOUNT",
+                    p.Amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)))));
+        var fullOld = new[] {
+            new TallyVoucherXmlSnapshot("26", "old-guid", "Sales",
+                oldIndex.VoucherDate, previousXml.ToString(
+                    System.Xml.Linq.SaveOptions.DisableFormatting))
+        };
+        var oldSigned = string.Join("|", oldPostings
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Amount).Select(x => x.Name + ":" +
+                x.Amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+        var previousHash = TallyVoucherFingerprint.BuildContentHash(
+            oldIndex.VoucherDate, oldIndex.VoucherType, oldIndex.Reference,
+            oldIndex.PartyLedger, 11120.32m, oldIndex.Narration + "|" + oldSigned);
+        var previousVersion = "CONSOLIDATED|20260131|Sales|" +
+            oldIndex.Reference + "|" + oldSigned + "|" + previousHash;
+        var oldBinding = new AccountingAutomationHub.Domain.Tally.TallySourceBindingVersionState
+        {
+            State = "Verified", MasterId = "26", VerifiedContentHash = previousHash,
+            VerifiedVersion = previousVersion, LastVerifiedAlterId = 28
+        };
+        var verifier = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "PreviousConsolidatedVersionMatches",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original previous-version verification gate missing.");
+        bool OldMatches(
+            TallyVoucherIndexRecord oldLive,
+            AccountingAutomationHub.Domain.Tally.TallySourceBindingVersionState binding,
+            IReadOnlyList<TallyVoucherXmlSnapshot>? xml = null) =>
+            (bool)verifier.Invoke(null, new object[] {
+                oldLive, xml ?? fullOld, binding })!;
+        if (!OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Original AAH-saved PreviousVersion + full DR/CR is not accepted for normal ALTER.");
+        oldIndex.AlterId = "29";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "External Tally ALTERID change was allowed to overwrite previous version.");
+        oldIndex.AlterId = "28";
+        oldBinding.VerifiedContentHash = "WRONG";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Incorrect previous content fingerprint authorized bound ALTER.");
+        oldBinding.VerifiedContentHash = previousHash;
+        oldBinding.MasterId = "337";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Different branch's destination MASTERID authorized incorrect source ALTER.");
+        oldBinding.MasterId = "26";
+        oldBinding.State = "AcceptedAwaitingVerification";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Unverified accepted voucher was allowed a new second ALTER.");
+        Console.WriteLine("PASS: previous bound source version + full old DRCR + " +
+            "same destination MASTERID/ALTERID mandatory before changed ledger ALTER.");
 
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
