@@ -180,13 +180,42 @@ internal static class Program
             }
             finally
             {
-                try { Directory.Delete(scratch, true); } catch { }
+                // This is temporary preflight staging only, never a Tally/
+                // accounting directory. An antivirus/disk filter can also
+                // hang recursive cleanup; don't keep the updater mutex alive
+                // forever AFTER a failed bounded verification.
+                await CleanupScratchBoundedAsync(scratch);
             }
         }
         catch (Exception exception)
         {
             Log("FAILED (no success claimed): " + exception);
             return 1;
+        }
+    }
+
+    internal static async Task CleanupScratchBoundedAsync(string scratch)
+    {
+        try
+        {
+            if (!Directory.Exists(scratch)) return;
+            await Task.Run(() => Directory.Delete(scratch, true))
+                .WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            // Stale random temp staging is safer than indefinitely holding the
+            // exclusive update mutex. Next update will use a fresh GUID path.
+            Log("Preflight temp cleanup exceeded 30 seconds; deferring only " +
+                "the disposable scratch directory. Installed AAH unchanged.");
+        }
+        catch (IOException ex)
+        {
+            Log("Preflight temp cleanup deferred (locked scratch file): " + ex.Message);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log("Preflight temp cleanup deferred (access denied): " + ex.Message);
         }
     }
 
