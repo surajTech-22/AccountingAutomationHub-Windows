@@ -24,6 +24,97 @@ internal static class Program
     private static string LogPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "AccountingAutomationHub", "AutoUpdateLogs", "github-update-host.log");
 
+    /// <summary>
+    /// Cross-process exclusive lease for the entire ASYNC updater lifetime.
+    /// A named mutex can EXIST without being OWNED; creation status is not
+    /// lock status. Only a WaitOne(0) result (or abandoned ownership) decides.
+    /// The owner thread stays alive across all awaited download / extraction /
+    /// Tally drainage / transactional install phases, and always releases
+    /// the mutex from that SAME thread on disposal.
+    /// </summary>
+    internal static IDisposable? TryAcquireUpdateOwnership(string mutexName)
+    {
+        var lease = new UpdateOwnershipLease(mutexName);
+        if (lease.Acquired) return lease;
+        lease.Dispose();
+        return null;
+    }
+
+    private sealed class UpdateOwnershipLease : IDisposable
+    {
+        private readonly string _name;
+        private readonly ManualResetEventSlim _started = new(false);
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly Thread _owner;
+        private bool _acquired;
+        private Exception? _error;
+        private int _disposed;
+
+        internal bool Acquired => _acquired;
+
+        internal UpdateOwnershipLease(string mutexName)
+        {
+            _name = mutexName;
+            _owner = new Thread(OwnForLifetime)
+            {
+                IsBackground = true,
+                Name = "AAH verified updater mutex owner"
+            };
+            _owner.Start();
+            if (!_started.Wait(TimeSpan.FromSeconds(10)))
+            {
+                _release.Set();
+                throw new TimeoutException(
+                    "Could not check actual updater mutex ownership in 10 seconds.");
+            }
+            if (_error is not null)
+            {
+                _release.Set();
+                _owner.Join(TimeSpan.FromSeconds(10));
+                throw new InvalidOperationException(
+                    "Could not verify the updater lock safely.", _error);
+            }
+        }
+
+        private void OwnForLifetime()
+        {
+            try
+            {
+                using var mutex = new Mutex(false, _name);
+                var owns = false;
+                try { owns = mutex.WaitOne(0); }
+                catch (AbandonedMutexException)
+                {
+                    // Prior updater exited without releasing its owned lock.
+                    // .NET transfers ownership to this exact thread; this is
+                    // safe and does NOT authorize terminating another PID.
+                    owns = true;
+                }
+                _acquired = owns;
+                _started.Set();
+                if (!owns) return;
+                try { _release.Wait(); }
+                finally { mutex.ReleaseMutex(); }
+            }
+            catch (Exception ex)
+            {
+                _error = ex;
+                _started.Set();
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            _release.Set();
+            if (!_owner.Join(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException(
+                    "Updater mutex-owner thread did not release within 15 seconds.");
+            _started.Dispose();
+            _release.Dispose();
+        }
+    }
+
     private static async Task<int> Main(string[] args)
     {
         try
@@ -48,8 +139,22 @@ internal static class Program
                     .Equals("LanClient", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("GitHub update cannot target an AAH LAN client or missing install.");
 
-            using var oneUpdate = new Mutex(true, @"Local\AccountingAutomationHub.GitHubUpdate.v1", out var created);
-            if (!created) throw new InvalidOperationException("Another AAH GitHub updater is running.");
+            // v592 local recovery exposed a long-standing mutex bug:
+            // createdNew=false only means the named kernel object already
+            // EXISTS. A lingering/cleaned updater can leave that object alive
+            // WITHOUT owning it. Rejecting on createdNew prevented v592 from
+            // installing even though a read-only WaitOne(0) proved it free.
+            //
+            // A Mutex is also owned by a THREAD, not an async Task. Do not
+            // acquire it here and later release on a different thread after
+            // an await. The lifetime lease below owns/releases on ONE
+            // dedicated thread, while this async installer runs normally.
+            using var oneUpdate = TryAcquireUpdateOwnership(
+                @"Local\AccountingAutomationHub.GitHubUpdate.v1");
+            if (oneUpdate is null)
+                throw new InvalidOperationException(
+                    "Another AAH updater currently OWNS the update mutex; " +
+                    "no competing installer will start.");
             // Always log the FIRST preflight stage. Previously no host message
             // appeared until after the entire application archive had arrived,
             // making a stalled download indistinguishable from a shutdown hang.

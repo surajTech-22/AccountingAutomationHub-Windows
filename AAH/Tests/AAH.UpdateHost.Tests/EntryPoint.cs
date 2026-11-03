@@ -24,6 +24,43 @@ internal static class EntryPoint
             "UpdateHost log timestamp did not retain the UTC instant and PC-local offset.");
         Console.WriteLine("PASS: updater host logs PC-local offset timestamps without UTC instant loss.");
 
+        // CL019 November 3: recovery observed a FREE mutex and zero
+        // kernel-active updaters, yet a newly verified v592 UpdateHost
+        // rejected immediately because the NAME already existed.
+        // The name/object can outlive its previous owner. Only real mutex
+        // ownership, not createdNew, is a legitimate update-busy test.
+        // Also prove the updater lease survives async/threadpool hops:
+        // a Mutex is thread-owned; it must not be released on an arbitrary
+        // continuation after awaited download/transaction work.
+        var testMutex = @"Local\AAH.GitHubUpdate.Regression." +
+            Guid.NewGuid().ToString("N");
+        using (var preexistingUnowned = new Mutex(false, testMutex))
+        {
+            // This exact condition previously caused a FALSE "another
+            // updater running" and prevented installing v592.
+            using (var owner = Program.TryAcquireUpdateOwnership(testMutex))
+            {
+                Assert(owner is not null,
+                    "Previously-created but unowned updater mutex was rejected as busy.");
+                using (var competingHost = Program.TryAcquireUpdateOwnership(testMutex))
+                    Assert(competingHost is null,
+                        "A second updater acquired ownership during an active transaction.");
+                awaitOwnerAcrossThreadpoolBoundary();
+                using (var listener = new Mutex(false, testMutex))
+                    Assert(!listener.WaitOne(0),
+                        "Updater lock stopped protecting the install after an async/thread hop.");
+            }
+            using var reacquired = Program.TryAcquireUpdateOwnership(testMutex);
+            Assert(reacquired is not null,
+                "Updater ownership lock was not released on the original owner thread.");
+        }
+        // The original multi-instance graceful shutdown must still act on
+        // EVERY executable belonging to the installed AAH path before files
+        // are replaced. It must not terminate running Tally or arbitrary PIDs.
+        void awaitOwnerAcrossThreadpoolBoundary() =>
+            Task.Run(async () => await Task.Delay(50)).GetAwaiter().GetResult();
+        Console.WriteLine("PASS: named mutex may exist unowned; exclusive lease survives awaited work, rejects actual second owner, and releases cleanly.");
+
         // An update request must never be able to stop an unrelated process.
         // The production host only signals the already-verified AAH PID.
         var unrelatedShutdownRejected = false;
