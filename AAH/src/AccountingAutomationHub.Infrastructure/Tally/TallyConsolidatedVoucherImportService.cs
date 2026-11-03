@@ -832,6 +832,67 @@ public sealed class TallyConsolidatedVoucherImportService(
         }
         return result;
     }
+    // Keep the existing AAH Previous->Desired safety contract. CL019's
+    // prior verified version was saved with full original signed branch
+    // postings and a source fingerprint. Reconstruct both strictly from
+    // the CURRENT LIVE old destination voucher, not from changed branch
+    // accounting rows. Only that exact earlier version (plus same ALTERID)
+    // authorizes using the original AAH bound-MASTERID ALTER writer.
+    internal static bool PreviousConsolidatedVersionMatches(
+        TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        TallySourceBindingVersionState previous)
+    {
+        if (previous is null ||
+            !previous.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+            !IgnoreCase.Equals(previous.MasterId, live.MasterId) ||
+            previous.VerifiedContentHash.Length == 0 ||
+            previous.VerifiedVersion.Length == 0 ||
+            previous.LastVerifiedAlterId <= 0 ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var currentAlterId) ||
+            currentAlterId != previous.LastVerifiedAlterId ||
+            live.VoucherDate is not DateTime originalDate)
+            return false;
+        var full = fullAuthority.Where(item =>
+            IgnoreCase.Equals(item.MasterId, live.MasterId)).ToArray();
+        if (full.Length != 1) return false;
+        var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
+            full[0].OriginalXml, "original previous voucher version")
+            .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+        if (voucher is null) return false;
+        var postings = ReadPostings(voucher);
+        // The full XML and index must agree on both signed sides before
+        // comparing to the previous snapshot. This is never a ledger
+        // relabeling/amount recalculation.
+        if (postings.Count == 0 || live.LedgerPostings.Count != postings.Count ||
+            !SamePostings(postings, live.LedgerPostings.Select(p =>
+                (p.LedgerName, p.SignedAmount)).ToArray()))
+            return false;
+        var originalParty = Value(voucher, "PARTYLEDGERNAME");
+        var originalReference = Value(voucher, "REFERENCE");
+        var originalType = Value(voucher, "VOUCHERTYPENAME");
+        if (!IgnoreCase.Equals(originalType, live.VoucherType) ||
+            !IgnoreCase.Equals(originalReference, live.Reference) ||
+            !IgnoreCase.Equals(originalParty, live.PartyLedger))
+            return false;
+        var exactPostings = string.Join("|", postings
+            .OrderBy(entry => entry.Name, IgnoreCase).ThenBy(entry => entry.Amount)
+            .Select(entry => entry.Name + ":" +
+                entry.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+        var verifiedHash = TallyVoucherFingerprint.BuildContentHash(
+            originalDate.Date, originalType, originalReference, originalParty,
+            postings.Where(entry => entry.Amount < 0)
+                .Sum(entry => Math.Abs(entry.Amount)),
+            Value(voucher, "NARRATION") + "|" + exactPostings);
+        var verifiedVersion =
+            "CONSOLIDATED|" + originalDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+            "|" + originalType + "|" + originalReference + "|" +
+            exactPostings + "|" + verifiedHash;
+        return IgnoreCase.Equals(previous.VerifiedContentHash, verifiedHash) &&
+            string.Equals(previous.VerifiedVersion, verifiedVersion, StringComparison.Ordinal);
+    }
+
     // Exact voucher matching reuses the established ordinary Tally
     // classifier, then independently confirms the full Tally XML posting
     // lines. Branch amounts/taxes are NEVER recalculated here.
