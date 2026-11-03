@@ -89,15 +89,19 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
         Check(dashboardXaml.Contains("ExistingDashboardWorkspace.OpenLinkedFolderCommand", StringComparison.Ordinal) &&
               dashboardXaml.Contains("ExistingDashboardWorkspace.OpenTallyDiagnosticFolderCommand", StringComparison.Ordinal) &&
               dashboardXaml.Contains("RefreshConsolidatedCommand", StringComparison.Ordinal) &&
-              tallyPageXaml.Contains("TallyImportProgressStatus", StringComparison.Ordinal) &&
-              tallyPageXaml.Contains("ExistingDashboardWorkspace.OpenLinkedFolderCommand", StringComparison.Ordinal),
-            "Original consolidated dashboard folder/diagnostics or read-only verification actions are missing");
+              dashboardXaml.Contains("Text=\"Client Identity\"", StringComparison.Ordinal) &&
+              !dashboardXaml.Contains("Workspace &amp; Tally Actions", StringComparison.Ordinal) &&
+              tallyPageXaml.Contains("views:DashboardView TallyOnlyMode=\"True\"", StringComparison.Ordinal) &&
+              !tallyPageXaml.Contains("DockPanel", StringComparison.Ordinal),
+            "Consolidated original dashboard/Tally design was changed or linked actions are missing.");
         Check(!dashboardXaml.Contains("ClearAllDataCommand", StringComparison.Ordinal) &&
               !dashboardXaml.Contains("ExportDiagnosticExcelCommand", StringComparison.Ordinal),
             "Consolidated dashboard exposed dangerous parent-accounting mutation/export buttons");
-        Check(normalDashboardXaml.Contains("NormalTallyExportSelection", StringComparison.Ordinal) &&
-              normalDashboardXaml.Contains("IsConsolidatedTallyScope", StringComparison.Ordinal),
-            "Parent/branch month selection is shown as if it were consolidated destination progress.");
+        Check(!normalDashboardXaml.Contains("NormalTallyExportSelection", StringComparison.Ordinal) &&
+              normalDashboardXaml.Contains("BankTallyExportMonths", StringComparison.Ordinal) &&
+              normalDashboardXaml.Contains("PurchaseTallyExportMonths", StringComparison.Ordinal) &&
+              normalDashboardXaml.Contains("SalesTallyExportMonths", StringComparison.Ordinal),
+            "The original Tally Export module/month design must be restored unchanged.");
         Console.WriteLine("PASS: consolidated dashboard restores scoped folder/diagnostic actions and live Tally status without parent export or duplicate writes.");
         Console.WriteLine("PASS: consolidated Tally reuses existing full diagnostic ZIP in parent AutoFolder, captures live evidence and preserves previous ZIP.");
     }
