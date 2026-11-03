@@ -263,4 +263,96 @@ Require(desktopUpdaterSource.Contains(
     "Streaming updater or bounded host retry could hold mutex / loop indefinitely.");
 Console.WriteLine("PASS: updater host download and failed-host recovery are bounded, not recurring polling");
 
+// CL019 v590->v591 failure at 21:27/21:28: desktop AAH 4.0.0.589
+// received release events and validated the MANIFEST but never logged a
+// new updater download or launched host. The desktop's own SHA256 and
+// Authenticode child were unbounded (the host was already fixed in v591).
+Require(GitHubAutoUpdateService.UpdaterSha256Deadline > TimeSpan.Zero &&
+        GitHubAutoUpdateService.UpdaterSha256Deadline <= TimeSpan.FromMinutes(5) &&
+        GitHubAutoUpdateService.UpdaterPublisherDeadline > TimeSpan.Zero &&
+        GitHubAutoUpdateService.UpdaterPublisherDeadline <= TimeSpan.FromMinutes(2),
+    "AAH desktop updater SHA256 or Authenticode process lacks a finite deadline");
+Require(desktopUpdaterSource.Contains(
+            "await VerifyUpdaterAssetSha256Async(incoming, checksum!)", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "RunBoundedPublisherVerifierAsync(", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "proc.Kill(entireProcessTree: true)", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "already being staged by this AAH instance", StringComparison.OrdinalIgnoreCase) &&
+        desktopUpdaterSource.Contains(
+            "Updater cache cleanup deferred after 20 seconds", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "await AcquireStagingLockBoundedAsync(cacheRoot)", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "attempt directory ready; starting official updater transfer", StringComparison.Ordinal),
+    "Desktop update still has a silent prelaunch latch, blocked signature helper or cache cleanup");
+var launcherFixture = Path.Combine(Path.GetTempPath(),
+    "AAH-BoundedLauncher-" + Guid.NewGuid().ToString("N") + ".bin");
+try
+{
+    await File.WriteAllTextAsync(launcherFixture, "NO ACCOUNTING DATA IN TEST");
+    var goodHash = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(
+            await File.ReadAllBytesAsync(launcherFixture)));
+    await GitHubAutoUpdateService.VerifyUpdaterAssetSha256Async(
+        launcherFixture, goodHash.ToLowerInvariant());
+    bool hashRejected = false;
+    try
+    {
+        await GitHubAutoUpdateService.VerifyUpdaterAssetSha256Async(
+            launcherFixture, new string('0', 64));
+    }
+    catch (InvalidDataException) { hashRejected = true; }
+    Require(hashRejected, "AAH launcher let corrupt release bytes reach updater launch");
+}
+finally { try { File.Delete(launcherFixture); } catch { } }
+Console.WriteLine("PASS: desktop release asset SHA256 verified asynchronously; corrupt payload rejected before launch");
+
+var stagingProbe = Path.Combine(Path.GetTempPath(),
+    "AAH-StagingBound-" + Guid.NewGuid().ToString("N"));
+try
+{
+    using (var held = GitHubAutoUpdateService.TryAcquireStagingLock(stagingProbe))
+    {
+        Require(held is not null, "Could not establish normal cross-process lock test fixture.");
+        var duplicate = await GitHubAutoUpdateService.AcquireStagingLockBoundedAsync(
+            stagingProbe, TimeSpan.FromSeconds(5));
+        Require(duplicate is null,
+            "Launcher bounded staging path allowed duplicate concurrent updater staging.");
+    }
+    using var acquired = await GitHubAutoUpdateService.AcquireStagingLockBoundedAsync(
+        stagingProbe, TimeSpan.FromSeconds(5));
+    Require(acquired is not null,
+        "Launcher staging lock was not released after prior ownership exited.");
+}
+finally { try { Directory.Delete(stagingProbe, true); } catch { } }
+Console.WriteLine("PASS: desktop staging lock acquisitions are bounded and release after ownership exits.");
+
+if (OperatingSystem.IsWindows())
+{
+    var fakePublisherChild = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = false
+    };
+    fakePublisherChild.ArgumentList.Add("-NoProfile");
+    fakePublisherChild.ArgumentList.Add("-NonInteractive");
+    fakePublisherChild.ArgumentList.Add("-Command");
+    fakePublisherChild.ArgumentList.Add("Start-Sleep -Seconds 15");
+    bool childTimeout = false;
+    try
+    {
+        await GitHubAutoUpdateService.RunBoundedPublisherVerifierAsync(
+            fakePublisherChild, TimeSpan.FromMilliseconds(500));
+    }
+    catch (TimeoutException) { childTimeout = true; }
+    Require(childTimeout,
+        "Hung desktop PowerShell signature helper was not stopped on deadline");
+    Console.WriteLine("PASS: hung desktop signature-check child times out safely without killing AAH or Tally");
+}
+
+
 Console.WriteLine($"PASS: {passed}/{passed} AAH GitHub auto-update protocol scenarios.");
