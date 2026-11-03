@@ -281,7 +281,11 @@ Require(desktopUpdaterSource.Contains(
         desktopUpdaterSource.Contains(
             "already being staged by this AAH instance", StringComparison.OrdinalIgnoreCase) &&
         desktopUpdaterSource.Contains(
-            "Updater cache cleanup deferred after 20 seconds", StringComparison.Ordinal),
+            "Updater cache cleanup deferred after 20 seconds", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "await AcquireStagingLockBoundedAsync(cacheRoot)", StringComparison.Ordinal) &&
+        desktopUpdaterSource.Contains(
+            "attempt directory ready; starting official updater transfer", StringComparison.Ordinal),
     "Desktop update still has a silent prelaunch latch, blocked signature helper or cache cleanup");
 var launcherFixture = Path.Combine(Path.GetTempPath(),
     "AAH-BoundedLauncher-" + Guid.NewGuid().ToString("N") + ".bin");
@@ -304,6 +308,26 @@ try
 }
 finally { try { File.Delete(launcherFixture); } catch { } }
 Console.WriteLine("PASS: desktop release asset SHA256 verified asynchronously; corrupt payload rejected before launch");
+
+var stagingProbe = Path.Combine(Path.GetTempPath(),
+    "AAH-StagingBound-" + Guid.NewGuid().ToString("N"));
+try
+{
+    using (var held = GitHubAutoUpdateService.TryAcquireStagingLock(stagingProbe))
+    {
+        Require(held is not null, "Could not establish normal cross-process lock test fixture.");
+        var duplicate = await GitHubAutoUpdateService.AcquireStagingLockBoundedAsync(
+            stagingProbe, TimeSpan.FromSeconds(5));
+        Require(duplicate is null,
+            "Launcher bounded staging path allowed duplicate concurrent updater staging.");
+    }
+    using var acquired = await GitHubAutoUpdateService.AcquireStagingLockBoundedAsync(
+        stagingProbe, TimeSpan.FromSeconds(5));
+    Require(acquired is not null,
+        "Launcher staging lock was not released after prior ownership exited.");
+}
+finally { try { Directory.Delete(stagingProbe, true); } catch { } }
+Console.WriteLine("PASS: desktop staging lock acquisitions are bounded and release after ownership exits.");
 
 if (OperatingSystem.IsWindows())
 {
