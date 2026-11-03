@@ -149,15 +149,16 @@ public sealed class TallyBankVoucherImportService
             }
             var bankLedger = account.AuthorityName.Trim();
             var mapped = (transaction.LedgerName ?? string.Empty).Trim();
-            if (mapped.Length == 0)
-            {
-                // Manual Bank export requires a FINAL mapped ledger. The
-                // auto-import-only Suspense exception is not implicit here.
-                issues.Add("Bank row " + transaction.Id + ": Final Ledger is not mapped");
-                continue;
-            }
-            var counterpart = NormalizeCounterpartLedger(
-                mapped, BankingPreferenceKeys.DefaultEmptyLedgerName);
+            // The existing MANUAL Bank export (coordinator and Dashboard)
+            // explicitly sets allowUnmappedSuspense=true. Match that original
+            // policy: no user Final Ledger -> the dedicated Suspense Ledger
+            // under Suspense A/c, not a skipped source and not a new rule.
+            // Leave the branch mapping unchanged; later user mapping follows
+            // the original previous-version same-MASTERID ALTER gate.
+            var counterpart = mapped.Length == 0
+                ? UnmappedBankSuspenseLedger
+                : NormalizeCounterpartLedger(
+                    mapped, BankingPreferenceKeys.DefaultEmptyLedgerName);
             if (IsPaymentReturnTransaction(transaction))
             {
                 if (TryResolvePaymentReturnTreatment(
