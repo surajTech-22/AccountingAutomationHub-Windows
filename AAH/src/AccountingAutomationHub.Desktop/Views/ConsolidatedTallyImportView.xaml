@@ -3,9 +3,33 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:AccountingAutomationHub.Desktop.Views"
              Background="{DynamicResource AppBackgroundBrush}">
-    <!-- Reuse the ORIGINAL Tally Link + Export/Auto Sync card. The
-         consolidated commands belong at its existing Export position. -->
-    <views:DashboardView TallyOnlyMode="True"
-                         ConsolidatedImportWorkspace="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type views:ConsolidatedTallyImportView}}}"
-                         DataContext="{Binding ExistingDashboardWorkspace}"/>
+    <!-- The original Dashboard Tally link and import card remain authoritative.
+         The compact header is destination SOURCE-BINDING progress, not branch
+         accounting source counts and never initiates a voucher CREATE. -->
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top" Margin="20,14,20,0" Padding="13,10"
+                CornerRadius="9" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+            <StackPanel>
+                <TextBlock Text="Consolidated Tally Import Verification"
+                           FontWeight="SemiBold" FontSize="14"/>
+                <TextBlock Text="{Binding TallyImportProgressStatus}" Margin="0,6,0,0"
+                           TextWrapping="Wrap"/>
+                <WrapPanel Margin="0,8,0,0">
+                    <Button Content="Open / Link Folder"
+                            Command="{Binding ExistingDashboardWorkspace.OpenLinkedFolderCommand}"
+                            Padding="10,6" Margin="0,0,9,0"/>
+                    <Button Content="Open Last Export Diagnostics"
+                            Command="{Binding ExistingDashboardWorkspace.OpenTallyDiagnosticFolderCommand}"
+                            Padding="10,6" Margin="0,0,9,0"/>
+                    <Button Content="Refresh Live Tally"
+                            Command="{Binding DataContext.RefreshTallyCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                            Padding="10,6"/>
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+        <views:DashboardView TallyOnlyMode="True"
+                             ConsolidatedImportWorkspace="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type views:ConsolidatedTallyImportView}}}"
+                             DataContext="{Binding ExistingDashboardWorkspace}"/>
+    </DockPanel>
 </UserControl>
