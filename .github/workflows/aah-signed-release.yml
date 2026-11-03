@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.585)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.586)"
         required: true
-        default: "v4.0.0.585"
+        default: "v4.0.0.586"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.585 FINAL: original Bank Payment/Receipt/Contra signed source, one proven common Contra, stable BANK-row anchor across mode change, source-version hash Pending ALTER counts, original Tally UI, bank-aware source-cache fingerprint. No new importer. Publish only if exact SHA Windows + 16 components all pass.
+# v4.0.0.586 FINAL: link existing MANUAL Bank Suspense=true, original Bank BuildRequiredLedgerSpecs/MasterGroup and source V4 fingerprint; preserve same-MASTERID ALTER, one matched Contra, original Tally UI and full SHA CI release gates.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.585]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.586]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.585' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.586' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.585: consolidate original Bank Statement vouchers along with existing Purchase/Sales/Cash/Journal branch XML using the original read-only Bank Payment/Receipt/Contra treatment and TallyBankCreateAlterXmlBuilder signed DRCR, no independent bank importer or modification of source transactions. A matched proven same-date, opposite-direction intra-branch bank transfer emits one common Contra; unresolved modes, ledger mappings and mismatched transfers hold safely before sending. V3 branch XML fingerprint includes all bank transactions, Bank Ledger Mappings and transfer matches to invalidate stale prior 349-voucher XML. Original consolidated Tally panel/month tiles and module strip now display actual branch prepared voucher counts and source binding Verified/current-hash, Pending ALTER, Tally Accepted and unverified states, not 677 unrelated parent accounting rows. Bank first-import preflight also checks auto-numbered blank-reference live vouchers conservatively before CREATE; full signed posting identity and original MASTERID version gates remain authoritative. No new UI controls or separate client/GST/accounting calculation. Includes v584 verified previous-to-desired same-MASTERID ALTER, CL019 cross-branch B2C duplicate safety, original Tally diagnostics and v582 safe auto-update. Release requires exact SHA Windows compile, all 16 component regressions, original Bank writer validator and updater-host tests."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.586: Correct the v585 consolidated Bank XML abort for 208 unmapped Final Ledger rows. This version REUSES the ORIGINAL manual Bank export's allowUnmappedSuspense=true behavior from Dashboard Export Selected and TallyLiveConnectionCoordinator: blank Final Ledger maps for this export to the existing Suspense Ledger under the Suspense A/c Group, leaving the AAH Bank row and mapping untouched for later verified same-MASTERID ALTER. Do NOT confuse ImportAsync's default false with the actual manual Bank export path. The consolidated offline wrapper now calls the original Bank BuildRequiredLedgerSpecs against existing Bank Accounts, Master records and saved Ledger Mapping Group authority instead of demanding every mapped ledger already exists as a separate branch Master. Unsupported/treatment-review rows remain excluded individually without stopping unrelated prepared Purchase/Sales/Journal vouchers; no silent bank mutations, duplicates, extra Tally import paths, GST recalculation or new UI. Stable BANK-row source anchors, matched one-Contra logic, bank-aware source V4 fingerprint, exact original Bank two-sided voucher XML and original Tally MASTERID/version/duplicate/delete gates remain. Source diagnostics show selected and prepared Bank counts. The release requires exact SHA Windows compile, 16-component regressions, Bank validator and updater host checks."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
