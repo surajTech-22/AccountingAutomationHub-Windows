@@ -411,7 +411,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                   IgnoreCase.Equals(live.Reference, planned.Reference)) ||
                  IgnoreCase.Equals(live.VoucherNumber, planned.Number) ||
                  (state?.MasterId.Length > 0 &&
-                  IgnoreCase.Equals(live.MasterId, state.MasterId)))).ToArray();
+                  IgnoreCase.Equals(live.MasterId, state.MasterId)) ||
+                 PotentialExistingUnboundBankVoucher(live, planned))).ToArray();
 
             // CL019: B2C vouchers in two DIFFERENT branches may share the
             // same source REFERENCE/date/type. Reference alone is not a
@@ -938,6 +939,29 @@ public sealed class TallyConsolidatedVoucherImportService(
     // Exact voucher matching reuses the established ordinary Tally
     // classifier, then independently confirms the full Tally XML posting
     // lines. Branch amounts/taxes are NEVER recalculated here.
+    // The original Bank voucher importer compares same-date BANK ledger
+    // direction/amount and strict narration/reference before deciding CREATE.
+    // Tally may auto-assign a number AND leave Reference blank: matching only
+    // planned.VOUCHERNUMBER or non-empty reference would miss that existing
+    // voucher and create a duplicate. This is a conservative read-only
+    // collision candidate, NOT an authority to ALTER or DELETE. Exact full
+    // XML signed DR/CR is still required to adopt an unbound voucher.
+    private static bool PotentialExistingUnboundBankVoucher(
+        TallyVoucherIndexRecord live, ExpectedVoucher planned)
+    {
+        if (planned.Type is not ("Payment" or "Receipt" or "Contra") ||
+            !IgnoreCase.Equals(live.VoucherType, planned.Type) ||
+            live.VoucherDate?.Date != planned.Date.Date ||
+            !IgnoreCase.Equals((live.Reference ?? "").Trim(), planned.Reference.Trim()) ||
+            !IgnoreCase.Equals((live.Narration ?? "").Trim(), Value(planned.Xml, "NARRATION")))
+            return false;
+        var actual = live.LedgerPostings
+            .Select(x => (Name: x.LedgerName, Amount: x.SignedAmount)).ToArray();
+        return planned.Postings.Any(expected =>
+            actual.Any(p => IgnoreCase.Equals(p.Name, expected.Name) &&
+                            p.Amount == expected.Amount));
+    }
+
     private static bool FullVoucherMatches(ExpectedVoucher expected,
         TallyVoucherIndexRecord live, IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
     {
