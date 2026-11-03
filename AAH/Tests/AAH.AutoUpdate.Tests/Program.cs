@@ -279,7 +279,7 @@ Require(desktopUpdaterSource.Contains(
         desktopUpdaterSource.Contains(
             "proc.Kill(entireProcessTree: true)", StringComparison.Ordinal) &&
         desktopUpdaterSource.Contains(
-            "updater already being staged", StringComparison.OrdinalIgnoreCase) &&
+            "already being staged by this AAH instance", StringComparison.OrdinalIgnoreCase) &&
         desktopUpdaterSource.Contains(
             "Updater cache cleanup deferred after 20 seconds", StringComparison.Ordinal),
     "Desktop update still has a silent prelaunch latch, blocked signature helper or cache cleanup");
