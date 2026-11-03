@@ -501,7 +501,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "Recovered B2C source accepted a different destination GUID.");
         // Guard source-level workflow wiring as well as the pure matcher.
         if (!importerSource.Contains("acceptedOldSource", StringComparison.Ordinal) ||
-            !importerSource.Contains("state.PendingContentHash, oldHash", StringComparison.Ordinal) ||
+            !importerSource.Contains("state!.PendingContentHash, oldHash", StringComparison.Ordinal) ||
             !importerSource.Contains("state.PendingVersion, oldVersion", StringComparison.Ordinal) ||
             !importerSource.Contains("IsTallyMasterIdClaimedByAnotherSource(", StringComparison.Ordinal) ||
             !importerSource.Contains("alterTargets.Add(planned.SourceAnchor, priorLive);", StringComparison.Ordinal) ||
