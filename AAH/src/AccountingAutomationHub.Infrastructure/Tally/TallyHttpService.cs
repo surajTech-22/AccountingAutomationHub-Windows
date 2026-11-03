@@ -5472,7 +5472,7 @@ public sealed class TallyHttpService : IDisposable
           <BODY>
             <DESC>
               <STATICVARIABLES>
-                <SVEXPORTFORMAT>$SysName:XML</SVEXPORTFORMAT>
+                <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
                 <SVCURRENTCOMPANY>{XmlEscape(companyName)}</SVCURRENTCOMPANY>
               </STATICVARIABLES>
               <TDL><TDLMESSAGE>
