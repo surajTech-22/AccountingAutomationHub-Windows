@@ -876,17 +876,36 @@ internal static class Program
             {
                 try
                 {
-                    if (process.HasExited) { process.Dispose(); continue; }
+                    // CL019 v593 regression: PID 15308 had a completed-shutdown
+                    // audit and Process.HasExited said true, yet Win32_Process
+                    // and Task Manager STILL listed its one-thread process.
+                    // Never ignore an enumerated AAH PID merely because a
+                    // managed process handle claims it has exited.
+                    var handleSaysExited = process.HasExited;
                     var fullPath = process.MainModule?.FileName;
                     if (string.IsNullOrWhiteSpace(fullPath))
                         throw new InvalidDataException("Cannot verify path for AAH PID " + process.Id);
                     if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
+                    {
+                        if (handleSaysExited)
+                            Log("WARNING: AAH PID " + process.Id +
+                                " is still in the native process census even though " +
+                                "Process.HasExited is true. Refusing to disregard it.");
                         selected.Add(process);
+                    }
                     else process.Dispose();
                 }
-                catch (InvalidOperationException) when (process.HasExited)
+                catch (InvalidOperationException exception)
                 {
-                    process.Dispose(); // Raced with a normal process exit.
+                    var pid = process.Id;
+                    process.Dispose();
+                    // A process can legitimately disappear between enumeration
+                    // and MainModule. Skip only when a SECOND independent
+                    // enumeration proves it absent; otherwise fail closed.
+                    if (IsPidStillEnumeratedAsAah(pid))
+                        throw new InvalidDataException(
+                            "AAH PID " + pid + " is still enumerated, but its executable " +
+                            "cannot be verified. Refusing an unsafe replacement.", exception);
                 }
                 catch
                 {
@@ -901,6 +920,18 @@ internal static class Program
             foreach (var process in selected) process.Dispose();
             throw;
         }
+    }
+
+    private static bool IsPidStillEnumeratedAsAah(int pid)
+    {
+        foreach (var candidate in Process.GetProcessesByName("AccountingAutomationHub"))
+        {
+            using (candidate)
+            {
+                if (candidate.Id == pid) return true;
+            }
+        }
+        return false;
     }
 
     internal static bool IsUpgradeOrRestartRecovery(Version installedOnDisk,
