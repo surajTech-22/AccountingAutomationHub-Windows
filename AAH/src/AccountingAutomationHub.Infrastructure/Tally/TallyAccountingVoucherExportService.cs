@@ -2337,6 +2337,46 @@ public sealed class TallyAccountingVoucherExportService
             .Select(item => new VoucherLedgerEntry(item.AccountingLedger,
                 Math.Abs(item.AccountingAmount), item.IsDeemedPositive, false)));
 
+    // Consolidated XML is already prepared by each branch and must not be
+    // calculated again. This overload reuses the normal accounting exporter's
+    // established strict date/type/reference and signed-side comparison rules.
+    // Tally owns its Voucher Number after CREATE; source document numbers may
+    // differ without authorizing a second source.
+    internal static bool VoucherStrictlyMatchesConsolidatedPrepared(
+        TallyVoucherIndexRecord existing, DateTime date, string voucherType,
+        string reference, string narration,
+        IReadOnlyList<(string Name, decimal Amount)> branchPostings)
+    {
+        if (existing.VoucherDate?.Date != date.Date ||
+            !NormalizeComparisonText(existing.VoucherType).Equals(
+                NormalizeComparisonText(voucherType), StringComparison.OrdinalIgnoreCase) ||
+            !NormalizeComparisonText(existing.Reference).Equals(
+                NormalizeComparisonText(reference), StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (branchPostings.Count == 0 ||
+            existing.LedgerPostings.Count != branchPostings.Count ||
+            string.IsNullOrWhiteSpace(existing.MasterId))
+            return false;
+        // If Tally returned narration, compare the same text the normal
+        // exporter includes in its exact-version identity.
+        if (!NormalizeComparisonText(existing.Narration).Equals(
+                NormalizeComparisonText(narration), StringComparison.OrdinalIgnoreCase))
+            return false;
+        var expected = branchPostings
+            .Select(posting => (
+                Ledger: NormalizeVersionText(posting.Name),
+                Signed: posting.Amount))
+            .OrderBy(posting => posting.Ledger, StringComparer.Ordinal)
+            .ThenBy(posting => posting.Signed).ToArray();
+        var actual = existing.LedgerPostings
+            .Select(posting => (
+                Ledger: NormalizeVersionText(posting.LedgerName),
+                Signed: posting.SignedAmount))
+            .OrderBy(posting => posting.Ledger, StringComparer.Ordinal)
+            .ThenBy(posting => posting.Signed).ToArray();
+        return expected.SequenceEqual(actual);
+    }
+
     private static bool VoucherStrictlyMatchesPrepared(
         TallyVoucherIndexRecord existing,
         PreparedVoucher incoming,
