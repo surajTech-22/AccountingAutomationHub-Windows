@@ -12,7 +12,27 @@
         <StackPanel Margin="20,20,20,28">
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel>
-                    <TextBlock Text="Client Identity" Style="{StaticResource SectionTitleStyle}"/>
+                    <!-- Restore the original consolidated dashboard structure.
+                         Scope-safe existing commands sit inside its original identity
+                         heading; no extra workspace card or new folder/import method. -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Client Identity" Style="{StaticResource SectionTitleStyle}"
+                                   VerticalAlignment="Center"/>
+                        <WrapPanel Grid.Column="1" HorizontalAlignment="Right">
+                            <Button Content="Open / Link Folder"
+                                    Command="{Binding ExistingDashboardWorkspace.OpenLinkedFolderCommand}"
+                                    Padding="9,5" Margin="0,0,6,0"/>
+                            <Button Content="Open Last Export Diagnostics"
+                                    Command="{Binding ExistingDashboardWorkspace.OpenTallyDiagnosticFolderCommand}"
+                                    Padding="9,5" Margin="0,0,6,0"/>
+                            <Button Content="Refresh"
+                                    Command="{Binding RefreshConsolidatedCommand}" Padding="9,5"/>
+                        </WrapPanel>
+                    </Grid>
                     <Grid Margin="0,13,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110"/>
@@ -34,35 +54,6 @@
                         <TextBlock Grid.Row="1" Grid.Column="3" Margin="0,10,0,0" Text="PAN" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <TextBlock Grid.Row="1" Grid.Column="4" Margin="0,10,0,0" Text="{Binding Pan}"/>
                     </Grid>
-                </StackPanel>
-            </Border>
-
-            <!-- Keep the original parent Client/FY folder and diagnostic commands
-                 available in consolidated mode. Do NOT bind its parent-only
-                 Generate Excel/CSV or Clear All Data actions: those would act
-                 on unallocated parent records, not the two branch books. -->
-            <Border Style="{StaticResource CardBorderStyle}" Margin="0,14,0,0">
-                <StackPanel>
-                    <TextBlock Text="Workspace &amp; Tally Actions" Style="{StaticResource SectionTitleStyle}"/>
-                    <WrapPanel Margin="0,10,0,0">
-                        <Button Content="Open / Link Folder"
-                                Command="{Binding ExistingDashboardWorkspace.OpenLinkedFolderCommand}"
-                                Padding="12,7" Margin="0,0,9,7"/>
-                        <Button Content="Open Last Export Diagnostics"
-                                Command="{Binding ExistingDashboardWorkspace.OpenTallyDiagnosticFolderCommand}"
-                                Padding="12,7" Margin="0,0,9,7"/>
-                        <Button Content="Refresh Consolidated"
-                                Command="{Binding RefreshConsolidatedCommand}"
-                                Padding="12,7" Margin="0,0,9,7"/>
-                        <Button Content="Refresh Tally"
-                                Command="{Binding DataContext.RefreshTallyCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                Padding="12,7" Margin="0,0,9,7"/>
-                    </WrapPanel>
-                    <TextBlock Text="{Binding TallyImportProgressStatus}" TextWrapping="Wrap"
-                               FontWeight="SemiBold" Margin="0,6,0,0"/>
-                    <TextBlock Text="Folder action uses the existing consolidated Client/FY link. Select a branch for branch-specific Auto Import, Excel/CSV and data-management actions. Tally accepted-but-unverified vouchers are held without resend."
-                               Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
-                               FontSize="10" Margin="0,5,0,0"/>
                 </StackPanel>
             </Border>
 
