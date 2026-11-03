@@ -16,7 +16,8 @@ public sealed class TallyConsolidatedVoucherImportService(
     TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null,
     Action? verifiedVoucher = null,
     SqliteTallyRepository? tallyRepository = null,
-    Action? tallyAcknowledgedCreate = null)
+    Action? tallyAcknowledgedCreate = null,
+    Action? tallyAcknowledgedAlter = null)
 {
     private const string SourceEntityType = "Consolidated Voucher";
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
@@ -652,6 +653,14 @@ public sealed class TallyConsolidatedVoucherImportService(
                     ", created=" + alterResponse.Created + ", deleted=" +
                     alterResponse.Deleted + ", errors=" + alterResponse.Errors +
                     ". Exact live readback is required before another mutation.");
+                if (alterResponse.Altered == 1)
+                {
+                    // An ALTERED response is destination acceptance even if
+                    // exact readback is delayed. It is NOT another CREATE and
+                    // must be counted separately in the original report ZIP.
+                    try { tallyAcknowledgedAlter?.Invoke(); }
+                    catch { /* observer cannot affect the accounting POST */ }
+                }
                 if (alterResponse.Altered != 1 || alterResponse.Created != 0 ||
                     alterResponse.Deleted != 0 || alterResponse.Ignored != 0 ||
                     alterResponse.Errors != 0 || alterResponse.Exceptions != 0 ||
