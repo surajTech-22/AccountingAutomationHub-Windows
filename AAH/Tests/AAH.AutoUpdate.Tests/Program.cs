@@ -303,7 +303,7 @@ try
     Require(hashRejected, "AAH launcher let corrupt release bytes reach updater launch");
 }
 finally { try { File.Delete(launcherFixture); } catch { } }
-Pass("desktop release asset SHA256 verified asynchronously; corrupt payload rejected before launch");
+Console.WriteLine("PASS: desktop release asset SHA256 verified asynchronously; corrupt payload rejected before launch");
 
 if (OperatingSystem.IsWindows())
 {
@@ -327,7 +327,7 @@ if (OperatingSystem.IsWindows())
     catch (TimeoutException) { childTimeout = true; }
     Require(childTimeout,
         "Hung desktop PowerShell signature helper was not stopped on deadline");
-    Pass("hung desktop signature-check child times out safely without killing AAH or Tally");
+    Console.WriteLine("PASS: hung desktop signature-check child times out safely without killing AAH or Tally");
 }
 
 
