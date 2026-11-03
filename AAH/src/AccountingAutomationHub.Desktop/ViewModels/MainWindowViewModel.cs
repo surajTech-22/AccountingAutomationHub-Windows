@@ -167,6 +167,10 @@ public sealed class MainWindowViewModel :
     private PageViewModel? _currentPage;
     private ConsolidatedBranchDashboardViewModel? _consolidatedDashboardPage;
     private ConsolidatedTallyImportViewModel? _consolidatedTallyImportPage;
+    // Presentation-only pointer to the last already-prepared consolidated
+    // XML preview for the current Client/FY. Never used for posting/replaying.
+    // Prevents re-reading 349 voucher XML objects every navigation redraw.
+    private string _lastConsolidatedDisplayPreviewToken = string.Empty;
     private string _applicationState =
         "Client Directory ready.";
     private TopClientWorkspaceChoice? _selectedTopClientChoice;
@@ -2558,6 +2562,11 @@ public sealed class MainWindowViewModel :
                 ["Prepared-Masters.xml"] = result.MastersXml,
                 ["Prepared-Vouchers.xml"] = result.VouchersXml
             });
+        // Original branch-prepared XML is authoritative for the numeric
+        // Tally selection projection. The old parent 677-row summary is not.
+        _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
+            parentId, financialYear, result.VouchersXml);
+        _lastConsolidatedDisplayPreviewToken = string.Empty;
         return result with
         {
             Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
@@ -2686,6 +2695,46 @@ public sealed class MainWindowViewModel :
     // accounting rows are source counts and must not be displayed as the number
     // of vouchers successfully imported into the consolidated Tally company.
     // Local read only; never sends a voucher or creates a separate import route.
+    private void RestoreConsolidatedDisplayCountsFromLastPreparedXml(
+        ClientProfile client)
+    {
+        // Reuse the existing original Downloads XML preview ONLY for visible
+        // source counts. It is never submitted to Tally or considered fresh
+        // accounting authority; actual import regenerates and revalidates
+        // the original branch XML and saved source versions independently.
+        if (SelectedBranchWorkspace?.IsConsolidated != true ||
+            _isPrivateBranchActive) return;
+        try
+        {
+            var safeClient = string.Concat(client.ClientCode.Where(c =>
+                !Path.GetInvalidFileNameChars().Contains(c)));
+            var sourcePath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Downloads", "AAH Consolidated Tally",
+                safeClient + "-" + client.FinancialYear,
+                "AAH_CONSOLIDATED_VOUCHERS.xml");
+            var file = new FileInfo(sourcePath);
+            if (!file.Exists || file.Length <= 0 || file.Length > 64L * 1024 * 1024)
+                return;
+            var token = sourcePath + "|" +
+                file.Length.ToString(CultureInfo.InvariantCulture) + "|" +
+                file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
+            if (_lastConsolidatedDisplayPreviewToken.Equals(token, StringComparison.Ordinal))
+                return;
+            var xml = File.ReadAllText(sourcePath, System.Text.Encoding.UTF8);
+            _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
+                client.Id, client.FinancialYear, xml, savedPreview: true);
+            _lastConsolidatedDisplayPreviewToken = token;
+        }
+        catch (Exception ex)
+        {
+            // A corrupt/stale preview is never posting evidence and must
+            // never break client navigation or Tally's original link.
+            ApplicationState = "Last consolidated XML preview cannot be shown: " +
+                ex.Message + ". Generate Consolidated XML to refresh counts.";
+        }
+    }
+
     private string ReadConsolidatedTallyProgressStatus(long parentId, string financialYear)
     {
         var client = _clientContext.CurrentClient;
@@ -2827,6 +2876,7 @@ public sealed class MainWindowViewModel :
                         readFailure.Message;
                 }
             }
+            _dashboardViewModel.RefreshConsolidatedTallyExportPresentation();
             _consolidatedTallyImportPage?.RefreshTallyImportProgress();
             _consolidatedDashboardPage?.RefreshTallyImportProgress();
         }
@@ -2849,6 +2899,10 @@ public sealed class MainWindowViewModel :
         _dashboardViewModel.SetConsolidatedTallyScope(
             HasBranchWorkspaces && !_isPrivateBranchActive &&
             (SelectedBranchWorkspace?.IsConsolidated ?? false));
+        if (_clientContext.CurrentClient is { } scopedSourceClient &&
+            HasBranchWorkspaces && !_isPrivateBranchActive &&
+            (SelectedBranchWorkspace?.IsConsolidated ?? false))
+            RestoreConsolidatedDisplayCountsFromLastPreparedXml(scopedSourceClient);
 
         if (HasBranchWorkspaces && !_isPrivateBranchActive)
         {
