@@ -922,12 +922,17 @@
                                                             Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"/>
                                                     <Button Content="Export Consolidated to Tally" Command="{Binding ImportConsolidatedVouchersCommand}"
                                                             Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,6"/>
+                                                    <Button Content="Verify Accepted Vouchers (Read Only)" Command="{Binding VerifyAcceptedReadOnlyCommand}"
+                                                            Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"
+                                                            ToolTip="Resolve only existing Tally-accepted, unverified source bindings using exact live MASTERID and full signed DR/CR. Never sends a voucher import."/>
                                                 </WrapPanel>
                                                 <TextBlock Text="{Binding MasterImportStatus}" FontSize="10" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>
                                                 <TextBlock Text="{Binding PreparedXmlStatus}" FontSize="10" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
                                                 <TextBlock Text="{Binding VoucherImportStatus}" FontSize="10" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
+                                                <TextBlock Text="{Binding AcceptedVerificationStatus}" FontSize="10" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0"/>
                                             </StackPanel>
                                         </DataTemplate>
