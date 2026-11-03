@@ -212,6 +212,79 @@ internal static class EntryPoint
             "Updater does not recensus verified live processes after a listener-timeout race.");
         Console.WriteLine("PASS: after listener timeout, fresh same-install PID census decides installer gate.");
 
+        // v582 regression from 2026-11-03 installed v579: PIDs 15912 and
+        // 17296 logged safe verified-update completion but remained alive;
+        // a one-time recovery script then found a NEW PID 2432. No fixed PID
+        // list can solve that. Only the signed/verified update host, checking
+        // each exact executable, process start time and complete audit, may
+        // retire a process that has already finished ALL accounting cleanup.
+        var finishedAt = new DateTimeOffset(2026, 11, 03, 07, 03, 09, TimeSpan.Zero);
+        var processStartedAt = finishedAt.AddMinutes(-7);
+        var shutdownMarkers = new[]
+        {
+            "Verified updater requested graceful exit; new automation intake quiesced.",
+            "Verified updater: in-flight accounting/Tally idle for 3 checks; exiting.",
+            "Application shutdown started; stopping Accounting/Tally runtime.",
+            "Tally coordinator disposal completed.",
+            "Workspace cache disposal completed.",
+            "Runtime cleanup finished; instance lock remains owned until OnExit completes.",
+            "Process exit releasing final single-instance ownership."
+        };
+        static string EvidenceLine(DateTimeOffset when, int pid, string message) =>
+            when.ToString("O", System.Globalization.CultureInfo.InvariantCulture) +
+            " PID " + pid + ": " + message;
+        var knownGood = string.Join("\n", shutdownMarkers.Select((message, index) =>
+            EvidenceLine(finishedAt.AddSeconds(index - shutdownMarkers.Length + 1), 17296, message)));
+        Assert(Program.HasCompletedVerifiedExitEvidence(
+                knownGood, 17296, processStartedAt, finishedAt.AddSeconds(15), out var completed) &&
+               completed == finishedAt,
+            "A real complete PID-scoped safe-shutdown history was rejected.");
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                knownGood, 2432, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "A newly launched unknown PID was authorized from an old process log.");
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                knownGood, 17296, finishedAt.AddMinutes(1), finishedAt.AddMinutes(2), out _),
+            "Reused PID accepted shutdown evidence from before its own process start.");
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                knownGood, 17296, processStartedAt, finishedAt.AddSeconds(-15), out _),
+            "Future-dated shutdown evidence authorized a termination.");
+        foreach (var omitted in Enumerable.Range(0, shutdownMarkers.Length))
+        {
+            var incomplete = string.Join("\n", shutdownMarkers
+                .Where((_, index) => index != omitted)
+                .Select((message, index) => EvidenceLine(
+                    finishedAt.AddSeconds(index - shutdownMarkers.Length + 1), 17296, message)));
+            Assert(!Program.HasCompletedVerifiedExitEvidence(
+                    incomplete, 17296, processStartedAt, finishedAt.AddSeconds(15), out _),
+                "Updater accepted partial Tally/runtime/OnExit cleanup evidence: stage " + omitted);
+        }
+        var outOfOrder = shutdownMarkers.ToArray();
+        (outOfOrder[3], outOfOrder[4]) = (outOfOrder[4], outOfOrder[3]);
+        var mixed = string.Join("\n", outOfOrder.Select((message, index) =>
+            EvidenceLine(finishedAt.AddSeconds(index - shutdownMarkers.Length + 1), 17296, message)));
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                mixed, 17296, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "Out-of-order shutdown markers incorrectly authorized process retirement.");
+        var deferred = knownGood.Replace(
+            shutdownMarkers[3],
+            "Verified updater deferred: active accounting/Tally did not finish.\n" + shutdownMarkers[3],
+            StringComparison.Ordinal);
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                deferred, 17296, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "Updater accepted a cancelled/deferred verified shutdown.");
+        Assert(updaterSource.Contains(
+                   "await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe)", StringComparison.Ordinal) &&
+               updaterSource.Contains(
+                   "HasCompletedVerifiedExitEvidence(", StringComparison.Ordinal) &&
+               updaterSource.Contains(
+                   "IsExactInstallationProcess(process.ProcessName, actualPath, verifiedInstalledExe)", StringComparison.Ordinal) &&
+               updaterSource.Contains("SameProcessPath(process, verifiedInstalledExe)", StringComparison.Ordinal) &&
+               updaterSource.Contains("process.Kill(entireProcessTree: false);", StringComparison.Ordinal) &&
+               updaterSource.Contains("GetSameInstallationProcesses(installedExe)", StringComparison.Ordinal),
+            "Updater does not apply strict same-install/evidence-gated ghost retirement in the existing host.");
+        Console.WriteLine(
+            "PASS: host automatically retires only exact-install completed-verified-shutdown ghosts; " +
+            "active Tally, unproven and reused PIDs remain untouched.");
 
         Assert(Program.PublisherIdentityCompatible(null, null),
             "Two unsigned checksummed GitHub releases were rejected.");
