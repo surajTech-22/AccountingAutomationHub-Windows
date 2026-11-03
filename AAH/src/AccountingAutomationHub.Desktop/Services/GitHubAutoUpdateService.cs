@@ -49,6 +49,10 @@ internal static class GitHubAutoUpdateService
     // application instance. Do not run overlapping downloads in the same process.
     private static readonly SemaphoreSlim CheckGate = new(1, 1);
     private static int _duplicateInstallationNotified;
+    // A transient failed host (for example a stalled HTTPS body) gets one
+    // bounded same-session recovery. Never poll GitHub on an interval and never
+    // restart an unsafe/blocked Tally operation.
+    private static int _oneShotFailedHostRetryUsed;
 
     // A verified update host has exclusive ownership of this installation.
     // Avoid a second updater launch when release events replay.
@@ -312,23 +316,54 @@ internal static class GitHubAutoUpdateService
             }
             Directory.CreateDirectory(root);
             var path = Path.Combine(root, UpdateAssetName);
-            // Download to a separate file, so an interrupted download never
-            // replaces the previously verified updater executable.
-            using (var download = await Client.GetAsync(updateUrl!, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
+            // ResponseHeadersRead does not guarantee a response-body timeout.
+            // Bound an inactive connection and the total transfer so a partial
+            // updater never holds our staging lock indefinitely after DNS loss.
+            // Keep the verified previous EXE intact until the new SHA256 passes.
+            using (var downloadDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(12)))
+            using (var downloadIdle = CancellationTokenSource.CreateLinkedTokenSource(downloadDeadline.Token))
             {
-                download.EnsureSuccessStatusCode();
-                if (download.Content.Headers.ContentLength is > 400_000_000)
-                    throw new InvalidDataException("Updater exceeds the 400MB maximum.");
-                await using var source = await download.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                await using var destination = new FileStream(incoming, FileMode.Create, FileAccess.Write, FileShare.None);
-                var buffer = new byte[128 * 1024];
                 long total = 0;
-                int read;
-                while ((read = await source.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+                try
                 {
-                    total += read;
-                    if (total > 400_000_000) throw new InvalidDataException("Updater exceeds 400MB maximum.");
-                    await destination.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
+                    Log("release " + tag + " starting bounded updater download (12-minute absolute, 90-second idle)");
+                    using var download = await Client.GetAsync(updateUrl!,
+                        HttpCompletionOption.ResponseHeadersRead, downloadDeadline.Token).ConfigureAwait(false);
+                    download.EnsureSuccessStatusCode();
+                    var expectedLength = download.Content.Headers.ContentLength;
+                    if (expectedLength is > 400_000_000)
+                        throw new InvalidDataException("Updater exceeds the 400MB maximum.");
+                    await using var source = await download.Content.ReadAsStreamAsync(downloadDeadline.Token).ConfigureAwait(false);
+                    await using var destination = new FileStream(incoming, FileMode.Create, FileAccess.Write, FileShare.None);
+                    var buffer = new byte[128 * 1024];
+                    long lastLogged = 0;
+                    while (true)
+                    {
+                        downloadIdle.CancelAfter(TimeSpan.FromSeconds(90));
+                        var read = await source.ReadAsync(buffer.AsMemory(), downloadIdle.Token).ConfigureAwait(false);
+                        if (read == 0) break;
+                        total += read;
+                        if (total > 400_000_000) throw new InvalidDataException("Updater exceeds the 400MB maximum.");
+                        await destination.WriteAsync(buffer.AsMemory(0, read), downloadDeadline.Token).ConfigureAwait(false);
+                        if (total - lastLogged >= 8L * 1024 * 1024)
+                        {
+                            Log("release " + tag + " updater download progress " + total + "/" +
+                                (expectedLength?.ToString(CultureInfo.InvariantCulture) ?? "?") + " bytes");
+                            lastLogged = total;
+                        }
+                    }
+                    if (expectedLength is long exact && total != exact)
+                        throw new InvalidDataException("Incomplete updater download: " + total + " of " + exact);
+                }
+                catch (OperationCanceledException ex) when (downloadDeadline.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Updater host download exceeded 12 minutes at " + total +
+                        " bytes; existing application and updater left unchanged.", ex);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    throw new TimeoutException("Updater host download stalled for 90 seconds at " + total +
+                        " bytes; existing application and updater left unchanged.", ex);
                 }
             }
             await using (var stream = File.OpenRead(incoming))
@@ -371,14 +406,23 @@ internal static class GitHubAutoUpdateService
             // release signal or reconnection can attempt a verified update.
             _ = Task.Run(async () =>
             {
+                var shouldRetry = false;
                 using (updater)
                 {
                     try
                     {
                         await updater.WaitForExitAsync().ConfigureAwait(false);
                         if (updater.ExitCode != 0)
+                        {
                             Log("updater exited unsuccessfully (code " + updater.ExitCode +
-                                "); next release event may retry");
+                                "); no installation success claimed.");
+                            // Exit 1 is a preflight, transport or verified host
+                            // error. One retry may recover transient DNS or a
+                            // stalled download; exit 2 means Tally/AAH remains
+                            // busy and must never be turned into a blind retry.
+                            shouldRetry = updater.ExitCode == 1 &&
+                                Interlocked.CompareExchange(ref _oneShotFailedHostRetryUsed, 1, 0) == 0;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -390,6 +434,16 @@ internal static class GitHubAutoUpdateService
                         try { Directory.Delete(root, recursive: true); }
                         catch (IOException) { /* A transient OS lock can defer cache cleanup. */ }
                         catch (UnauthorizedAccessException) { /* Never force-delete in-use files. */ }
+                    }
+                }
+                if (shouldRetry)
+                {
+                    Log("one bounded verified retry scheduled after updater exit 1; no force-close or repeated polling.");
+                    await Task.Delay(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+                    try { await CheckOnceAsync().ConfigureAwait(false); }
+                    catch (Exception ex)
+                    {
+                        Log("one-shot retry failed: " + ex.GetType().Name + ": " + ex.Message);
                     }
                 }
             });

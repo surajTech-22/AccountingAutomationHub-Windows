@@ -50,6 +50,11 @@ internal static class Program
 
             using var oneUpdate = new Mutex(true, @"Local\AccountingAutomationHub.GitHubUpdate.v1", out var created);
             if (!created) throw new InvalidOperationException("Another AAH GitHub updater is running.");
+            // Always log the FIRST preflight stage. Previously no host message
+            // appeared until after the entire application archive had arrived,
+            // making a stalled download indistinguishable from a shutdown hang.
+            Log("UpdateHost acquired exclusive mutex for " + tag +
+                ". Starting verified release preflight; installed files unchanged.");
             var self = Environment.ProcessPath ?? throw new InvalidOperationException("Updater process path missing.");
             var publisher = await VerifiedPublisherAsync(self);
             var installedPublisher = await VerifiedPublisherAsync(target);
@@ -68,6 +73,8 @@ internal static class Program
                 throw new InvalidDataException(
                     "Updater launcher PID is active but no longer belongs to this AAH installation.");
 
+            Log("UpdateHost querying latest stable GitHub release for " + tag +
+                "; installed files unchanged.");
             using var response = await Http.GetAsync(ReleaseApi);
             response.EnsureSuccessStatusCode();
             using var releaseDoc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -89,6 +96,8 @@ internal static class Program
             var expectedHash = manifest.GetProperty("app_sha256").GetString();
             if (expectedHash is null || !Regex.IsMatch(expectedHash, @"\A[0-9a-fA-F]{64}\z"))
                 throw new InvalidDataException("Missing verified application archive SHA256.");
+            Log("UpdateHost verified " + tag + " release manifest. Downloading " +
+                AssetName + " with absolute and idle timeouts; application still running.");
 
             var scratch = Path.Combine(Path.GetTempPath(), "AAH-GitHub-Release-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(scratch);
@@ -250,24 +259,74 @@ internal static class Program
         throw new FileNotFoundException("Required release asset missing: " + filename);
     }
 
+    // ResponseHeadersRead bypasses HttpClient's normal response-body timeout.
+    // Every socket read must be bounded: never hold the updater mutex forever
+    // when a router/DNS/content-host connection stalls after the HTTP headers.
+    // A failed download is only a staging failure; no installed files are touched.
+    internal static readonly TimeSpan AppArchiveDownloadDeadline = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan AppArchiveIdleTimeout = TimeSpan.FromSeconds(90);
+
     private static async Task DownloadVerifiedAsync(Uri uri, string destination, string sha)
     {
-        using var response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength is > 650_000_000)
-            throw new InvalidDataException("Excessive application update size.");
-        await using (var src = await response.Content.ReadAsStreamAsync())
-        await using (var dest = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using var deadline = new CancellationTokenSource(AppArchiveDownloadDeadline);
+        using var stalled = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        stalled.CancelAfter(AppArchiveIdleTimeout);
+        var received = 0L;
+        var lastLogged = 0L;
+        try
         {
-            var buffer = new byte[128 * 1024]; long count = 0; int n;
-            while ((n = await src.ReadAsync(buffer)) > 0)
+            using var response = await Http.GetAsync(
+                uri, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength is > 650_000_000)
+                throw new InvalidDataException("Excessive application update size.");
+            var expectedSize = response.Content.Headers.ContentLength;
+            Log("Updater archive response accepted. Expected bytes: " +
+                (expectedSize?.ToString(CultureInfo.InvariantCulture) ?? "unknown") +
+                "; downloaded bytes initially zero.");
+            await using (var src = await response.Content.ReadAsStreamAsync(deadline.Token))
+            await using (var dest = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                if ((count += n) > 650_000_000) throw new InvalidDataException("Excessive application update size.");
-                await dest.WriteAsync(buffer.AsMemory(0, n));
+                var buffer = new byte[128 * 1024];
+                int n;
+                while (true)
+                {
+                    stalled.CancelAfter(AppArchiveIdleTimeout);
+                    n = await src.ReadAsync(buffer.AsMemory(), stalled.Token);
+                    if (n == 0) break;
+                    received += n;
+                    if (received > 650_000_000)
+                        throw new InvalidDataException("Excessive application update size.");
+                    await dest.WriteAsync(buffer.AsMemory(0, n), deadline.Token);
+                    if (received - lastLogged >= 16L * 1024 * 1024)
+                    {
+                        Log("Updater application archive progress " +
+                            received.ToString(CultureInfo.InvariantCulture) + "/" +
+                            (expectedSize?.ToString(CultureInfo.InvariantCulture) ?? "?") + " bytes.");
+                        lastLogged = received;
+                    }
+                }
             }
+            if (expectedSize is long exact && received != exact)
+                throw new InvalidDataException(
+                    "Incomplete application download: " + received + " of " + exact + " bytes.");
+            Log("Updater application archive received " + received +
+                " bytes. Verifying SHA256 before any application shutdown.");
+            if (!Hash(destination).Equals(sha, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Downloaded application archive SHA256 mismatch.");
         }
-        if (!Hash(destination).Equals(sha, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Downloaded application archive SHA256 mismatch.");
+        catch (OperationCanceledException ex) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "AAH release archive download exceeded the 15-minute absolute limit at " +
+                received + " bytes. No installed files changed; updater lock will release.", ex);
+        }
+        catch (OperationCanceledException ex)
+        {
+            throw new TimeoutException(
+                "AAH release archive download made no progress for 90 seconds at " +
+                received + " bytes. No installed files changed; updater lock will release.", ex);
+        }
     }
 
     internal static void ExtractStrict(string zipPath, string dest)

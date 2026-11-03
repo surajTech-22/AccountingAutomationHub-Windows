@@ -47,6 +47,25 @@ internal static class EntryPoint
             sourceRoot = sourceRoot.Parent;
         if (sourceRoot is null)
             throw new InvalidOperationException("AAH solution root missing for updater-only shutdown regression.");
+        // November 3 v578 stalled updater: the AAH_Update.exe mutex stayed busy
+        // for 13+ minutes without ONE v578 host log entry after DNS recovery.
+        // HttpClient ResponseHeadersRead does not bound streaming body reads.
+        // Require both total/idle timeouts and a preflight log before download.
+        Assert(Program.AppArchiveDownloadDeadline <= TimeSpan.FromMinutes(20) &&
+               Program.AppArchiveDownloadDeadline > Program.AppArchiveIdleTimeout &&
+               Program.AppArchiveIdleTimeout <= TimeSpan.FromMinutes(2),
+            "Application download can hold updater mutex too long after network failure.");
+        var hostSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
+            "AAH.UpdateHost", "Program.cs"));
+        Assert(hostSource.Contains("src.ReadAsync(buffer.AsMemory(), stalled.Token)", StringComparison.Ordinal) &&
+               hostSource.Contains("deadline.Token", StringComparison.Ordinal) &&
+               hostSource.Contains("UpdateHost acquired exclusive mutex", StringComparison.Ordinal) &&
+               hostSource.Contains("No installed files changed; updater lock will release.", StringComparison.Ordinal) &&
+               hostSource.IndexOf("Downloading \" +", StringComparison.Ordinal) <
+               hostSource.IndexOf("await DownloadVerifiedAsync(archiveUrl", StringComparison.Ordinal),
+            "UpdateHost release preflight lacks bounded streaming reads or early progress logs.");
+        Console.WriteLine("PASS: update host preflight and archive body cannot hold installation lock indefinitely.");
+
         var desktopSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
             "AccountingAutomationHub.Desktop", "App.xaml.cs"));
         var automationSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
