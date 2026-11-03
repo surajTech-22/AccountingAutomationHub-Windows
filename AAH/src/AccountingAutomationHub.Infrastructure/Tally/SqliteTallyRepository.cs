@@ -2503,6 +2503,40 @@ public sealed class SqliteTallyRepository
         return (verified, awaiting, held);
     }
 
+    /// <summary>
+    /// Read-only destination MASTERID ownership guard. A recovered first-unbound
+    /// consolidated source must not claim a Tally voucher already owned by
+    /// another AAH source, Client/FY or module, including pending/deleted states.
+    /// This query does NOT create or change a source binding.
+    /// </summary>
+    public bool IsTallyMasterIdClaimedByAnotherSource(
+        long clientId, string financialYear, string companyKey,
+        string entityType, string sourceAnchor, string masterId)
+    {
+        if (string.IsNullOrWhiteSpace(masterId) ||
+            string.IsNullOrWhiteSpace(companyKey) ||
+            string.IsNullOrWhiteSpace(sourceAnchor))
+            return true; // Missing identity is never proof of an unbound target.
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT 1 FROM TallySourceBindings
+            WHERE CompanyKey=$CompanyKey AND FinancialYear=$FinancialYear
+              AND TallyMasterId=$MasterId COLLATE NOCASE
+              AND NOT (ClientId=$ClientId AND EntityType=$EntityType
+                       AND SourceAnchor=$SourceAnchor COLLATE NOCASE)
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$CompanyKey", companyKey.Trim());
+        command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$MasterId", masterId.Trim());
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        command.Parameters.AddWithValue("$EntityType", entityType.Trim());
+        command.Parameters.AddWithValue("$SourceAnchor", sourceAnchor.Trim());
+        return command.ExecuteScalar() is not null;
+    }
+
     public TallySourceBindingVersionState? GetSourceBindingVersionState(
         long clientId, string financialYear, string companyKey, string entityType, string sourceAnchor)
     {
