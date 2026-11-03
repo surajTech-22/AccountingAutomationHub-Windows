@@ -219,22 +219,21 @@ public sealed class TallyConsolidatedVoucherImportService(
                  (state?.MasterId.Length > 0 &&
                   IgnoreCase.Equals(live.MasterId, state.MasterId)))).ToArray();
 
-            if (candidates.Length > 1)
+            // CL019: B2C vouchers in two DIFFERENT branches may share the
+            // same source REFERENCE/date/type. Reference alone is not a
+            // destination identity and must never bind the wrong MASTERID.
+            // Filter by the normal accounting strict classifier AND complete
+            // live signed ledger XML before assessing the number of matches.
+            var exactMatches = candidates.Where(candidate =>
+                FullVoucherMatches(planned, candidate, before.FullVouchers)).ToArray();
+            if (exactMatches.Length > 1)
                 throw new InvalidOperationException(
                     "Consolidated source " + planned.SourceAnchor +
-                    " matches multiple existing destination MASTERIDs. " +
-                    "Neither CREATE nor ALTER nor DELETE is allowed without reconciliation.");
-            if (candidates.Length == 1)
+                    " matches more than one full DR/CR-identical destination " +
+                    "MASTERID. No CREATE, ALTER or DELETE is permitted.");
+            if (exactMatches.Length == 1)
             {
-                var candidate = candidates[0];
-                if (!TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
-                    candidate, planned.Date, planned.Type, planned.Reference,
-                    Value(planned.Xml, "NARRATION"), planned.Postings))
-                    throw new InvalidOperationException(
-                        "Consolidated source " + planned.SourceAnchor +
-                        " already exists in Tally with conflicting date, reference, " +
-                        "narration or exact ledger DR/CR. Preserving the existing " +
-                        "MASTERID; no unsafe CREATE, ALTER or DELETE.");
+                var candidate = exactMatches[0];
                 if (state?.MasterId.Length > 0 &&
                     !IgnoreCase.Equals(state.MasterId, candidate.MasterId))
                     throw new InvalidOperationException(
@@ -275,6 +274,17 @@ public sealed class TallyConsolidatedVoucherImportService(
                 skipped.Add(planned.SourceAnchor);
                 continue;
             }
+            // A foreign branch with the same B2C document reference is
+            // not the same source. However a same-branch or unscoped live
+            // reference that differs in DR/CR is a conflict: fail closed,
+            // never CREATE a second version of that invoice.
+            if (candidates.Any(candidate =>
+                !HasDifferentPreparedBranchScopes(candidate.VoucherNumber, planned.Number)))
+                throw new InvalidOperationException(
+                    "Consolidated source " + planned.SourceAnchor +
+                    " has a conflicting same-branch or unscoped Tally voucher " +
+                    "with the same source reference or destination number. " +
+                    "Review its exact DR/CR; no duplicate CREATE is permitted.");
             if (state is not null ||
                 tallyRepository.HasImportedSourceFingerprint(
                     link.ClientId, financialYear, link.CompanyKey,
@@ -349,7 +359,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             var concurrent = recheck.Index.FirstOrDefault(live =>
                 IgnoreCase.Equals(live.VoucherType, planned.Type) &&
                 planned.Reference.Length > 0 &&
-                IgnoreCase.Equals(live.Reference, planned.Reference));
+                IgnoreCase.Equals(live.Reference, planned.Reference) &&
+                !HasDifferentPreparedBranchScopes(live.VoucherNumber, planned.Number));
             if (concurrent is not null)
                 throw new InvalidOperationException(
                     "Destination Tally gained a voucher for original source " +
@@ -447,37 +458,33 @@ public sealed class TallyConsolidatedVoucherImportService(
                  IgnoreCase.Equals(x.VoucherNumber, expected.Number) ||
                  (response.LastVoucherId.Length > 0 &&
                   IgnoreCase.Equals(x.MasterId, response.LastVoucherId)))).ToArray();
-            if (matches.Length != 1 || string.IsNullOrWhiteSpace(matches[0].MasterId))
+            // LASTVCHID identifies the voucher Tally just CREATED. It must
+            // win over any other branch's matching B2C REFERENCE, but only
+            // AFTER full signed ledger DR/CR and all other fields match.
+            // Never adopt the wrong earlier branch merely by document number.
+            var verified = matches.Where(candidate =>
+                (response.LastVoucherId.Length == 0 ||
+                 IgnoreCase.Equals(candidate.MasterId, response.LastVoucherId)) &&
+                FullVoucherMatches(expected, candidate, after.Full)).ToArray();
+            if (verified.Length != 1)
                 throw new InvalidOperationException(
                     "Tally CREATED consolidated source " + expected.SourceAnchor +
                     " (LASTVCHID=" + response.LastVoucherId +
-                    ") but one durable exact live MASTERID was not found. " +
-                    "The existing AcceptedAwaitingVerification state prevents resend.");
-            var full = after.Full.Where(x =>
-                IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
-            if (full.Length != 1 ||
-                !TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
-                    matches[0], expected.Date, expected.Type, expected.Reference,
-                    Value(expected.Xml, "NARRATION"), expected.Postings) ||
-                !SamePostings(expected.Postings,
-                    ReadPostings(TallyConsolidatedXmlTextSafety.ParseDocument(
-                        full[0].OriginalXml, "live voucher posting readback").Root!
-                        .DescendantsAndSelf().First(x => Is(x, "VOUCHER")))))
-                throw new InvalidOperationException(
-                    "Tally accepted the CREATE but exact live Voucher MASTERID/DR/CR " +
-                    "verification failed for " + expected.SourceAnchor +
-                    ". The accepted state is retained; NO retry or ALTER is authorized.");
+                    ") but one exact matching destination MASTERID and full signed " +
+                    "DR/CR could not be proven. The existing " +
+                    "AcceptedAwaitingVerification state prevents resend.");
+            var confirmed = verified[0];
 
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 expected.SourceAnchor, expected.SourceAnchor,
-                matches[0].MasterId, matches[0].Guid,
+                confirmed.MasterId, confirmed.Guid,
                 expected.ContentHash, expected.DesiredVersion,
-                long.TryParse(matches[0].AlterId, NumberStyles.Integer,
+                long.TryParse(confirmed.AlterId, NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var verifiedAlterId)
                     ? verifiedAlterId : 0L,
                 "Tally CREATE and full signed DR/CR were verified at destination " +
-                "MASTERID " + matches[0].MasterId + "; auto-number preserved.");
+                "MASTERID " + confirmed.MasterId + "; auto-number preserved.");
             tallyRepository.RecordImportFingerprints(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 new[] { (expected.SourceAnchor, expected.ContentHash) },
@@ -535,6 +542,48 @@ public sealed class TallyConsolidatedVoucherImportService(
         }
         return result;
     }
+    // Exact voucher matching reuses the established ordinary Tally
+    // classifier, then independently confirms the full Tally XML posting
+    // lines. Branch amounts/taxes are NEVER recalculated here.
+    private static bool FullVoucherMatches(ExpectedVoucher expected,
+        TallyVoucherIndexRecord live, IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
+    {
+        if (!TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                live, expected.Date, expected.Type, expected.Reference,
+                Value(expected.Xml, "NARRATION"), expected.Postings))
+            return false;
+        var full = fullAuthority.Where(x =>
+            IgnoreCase.Equals(x.MasterId, live.MasterId)).ToArray();
+        if (full.Length != 1) return false;
+        var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
+            full[0].OriginalXml, "consolidated exact live posting readback")
+            .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+        return voucher is not null &&
+            SamePostings(expected.Postings, ReadPostings(voucher));
+    }
+
+    // Branch-scope identity is the hash already embedded by the original
+    // consolidated prepared XML builder. A shared original B2C reference
+    // cannot imply that different branch books are duplicate vouchers.
+    // A normal Tally auto-number (without this scoped prefix) is NOT enough
+    // to establish two different branches; fail closed in that case.
+    internal static bool HasDifferentPreparedBranchScopes(string liveNumber, string plannedNumber)
+    {
+        static string Scope(string number)
+        {
+            number = (number ?? string.Empty).Trim();
+            if (!number.StartsWith("B-", StringComparison.OrdinalIgnoreCase)) return "";
+            var end = number.IndexOf('-', 2);
+            if (end != 26) return "";
+            var hash = number.Substring(2, 24);
+            return hash.All(Uri.IsHexDigit) ? hash : "";
+        }
+        var live = Scope(liveNumber);
+        var planned = Scope(plannedNumber);
+        return live.Length > 0 && planned.Length > 0 &&
+            !IgnoreCase.Equals(live, planned);
+    }
+
     private static bool SamePostings(IReadOnlyList<(string Name, decimal Amount)> a,
         IReadOnlyList<(string Name, decimal Amount)> b)
     {
