@@ -334,6 +334,31 @@ public sealed class TallyConsolidatedVoucherImportService(
         // in an original branch ledger must go through Previous->Desired ALTER.
         var alterTargets = new Dictionary<string, TallyVoucherIndexRecord>(IgnoreCase);
         var claimedAlterMasterIds = new HashSet<string>(IgnoreCase);
+        // A normal Tally company can auto-number the voucher and drop the
+        // branch-scoped B-{hash} number. An unchanged shared B2C REFERENCE
+        // therefore needs existing original source-to-MASTERID authority,
+        // never a guess from the Tally-owned number or ledger-name suffix.
+        bool IsAlreadyOwnedByOtherVerifiedBranch(
+            TallyVoucherIndexRecord live, ExpectedVoucher current)
+        {
+            if (live.MasterId.Length == 0) return false;
+            return source.Any(other =>
+            {
+                if (IgnoreCase.Equals(other.SourceAnchor, current.SourceAnchor) ||
+                    !HasDifferentPreparedBranchScopes(other.Number, current.Number) ||
+                    !IgnoreCase.Equals(other.Type, live.VoucherType) ||
+                    !IgnoreCase.Equals(other.Reference, live.Reference) ||
+                    other.Date != live.VoucherDate?.Date)
+                    return false;
+                var otherBinding = tallyRepository.GetSourceBindingVersionState(
+                    link.ClientId, financialYear, link.CompanyKey,
+                    SourceEntityType, other.SourceAnchor);
+                return otherBinding is not null &&
+                    (otherBinding.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+                     otherBinding.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase)) &&
+                    IgnoreCase.Equals(otherBinding.MasterId, live.MasterId);
+            });
+        }
         foreach (var planned in source)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -394,6 +419,12 @@ public sealed class TallyConsolidatedVoucherImportService(
             // live signed ledger XML before assessing the number of matches.
             var exactMatches = candidates.Where(candidate =>
                 FullVoucherMatches(planned, candidate, before.FullVouchers)).ToArray();
+            if (exactMatches.Any(candidate =>
+                    IsAlreadyOwnedByOtherVerifiedBranch(candidate, planned)))
+                throw new InvalidOperationException(
+                    "An identical destination voucher is already verified as a DIFFERENT " +
+                    "branch's source. One Tally MASTERID cannot be rebound to a " +
+                    "second branch merely because its date/reference/DRCR coincide.");
             if (exactMatches.Length > 1)
                 throw new InvalidOperationException(
                     "Consolidated source " + planned.SourceAnchor +
@@ -447,7 +478,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             // reference that differs in DR/CR is a conflict: fail closed,
             // never CREATE a second version of that invoice.
             if (candidates.Any(candidate =>
-                !HasDifferentPreparedBranchScopes(candidate.VoucherNumber, planned.Number)))
+                !HasDifferentPreparedBranchScopes(candidate.VoucherNumber, planned.Number) &&
+                !IsAlreadyOwnedByOtherVerifiedBranch(candidate, planned)))
                 throw new InvalidOperationException(
                     "Consolidated source " + planned.SourceAnchor +
                     " has a conflicting same-branch or unscoped Tally voucher " +
@@ -531,7 +563,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                 IgnoreCase.Equals(live.VoucherType, planned.Type) &&
                 planned.Reference.Length > 0 &&
                 IgnoreCase.Equals(live.Reference, planned.Reference) &&
-                !HasDifferentPreparedBranchScopes(live.VoucherNumber, planned.Number));
+                !HasDifferentPreparedBranchScopes(live.VoucherNumber, planned.Number) &&
+                !IsAlreadyOwnedByOtherVerifiedBranch(live, planned));
             if (concurrent is not null)
                 throw new InvalidOperationException(
                     "Destination Tally gained a voucher for original source " +
