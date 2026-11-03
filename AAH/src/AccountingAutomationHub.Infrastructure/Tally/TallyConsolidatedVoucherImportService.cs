@@ -400,6 +400,61 @@ public sealed class TallyConsolidatedVoucherImportService(
         return left.Zip(right).All(x => IgnoreCase.Equals(x.First.Name, x.Second.Name) &&
                                         x.First.Amount == x.Second.Amount);
     }
+    // The original normal Tally accounting classifier owns duplicate
+    // equivalence. This wrapper only supplies its original parsed XML fields
+    // and never copies branch Tally MASTERID/ALTERID/GUID to the destination.
+    private static bool MatchesNormalAccountingVoucher(
+        TallyVoucherIndexRecord live, ExpectedVoucher source) =>
+        TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedSource(
+            live, source.Date, source.Type, Value(source.Xml, "REFERENCE"),
+            Value(source.Xml, "PARTYLEDGERNAME"), Value(source.Xml, "NARRATION"),
+            source.Postings);
+
+    // Same original Tally source reference is an identity candidate even
+    // when Tally has assigned a different Voucher Number or changed its date.
+    // The existing normal accounting comparator distinguishes exact duplicates
+    // from protected changed-content conflicts.
+    private static bool MatchesSourceIdentity(
+        TallyVoucherIndexRecord live, ExpectedVoucher source)
+    {
+        if (!IgnoreCase.Equals(live.VoucherType, source.Type)) return false;
+        var reference = Value(source.Xml, "REFERENCE");
+        return (reference.Length > 0 && IgnoreCase.Equals(live.Reference, reference)) ||
+               IgnoreCase.Equals(live.VoucherNumber, source.Number);
+    }
+
+    // Uses the existing AAH fingerprint + source binding table. The original
+    // signed postings become content evidence; this never drives recalculation.
+    private static string SourceHash(ExpectedVoucher source)
+    {
+        var postings = string.Join("|", source.Postings.Select(posting =>
+            posting.Name + ":" + posting.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+        var amount = source.Postings.Where(p => p.Amount < 0m).Sum(p => Math.Abs(p.Amount));
+        return TallyVoucherFingerprint.BuildContentHash(
+            source.Date, source.Type, Value(source.Xml, "REFERENCE"),
+            Value(source.Xml, "PARTYLEDGERNAME"), amount,
+            Value(source.Xml, "NARRATION") + "|" + postings);
+    }
+
+    private static void ConfirmVerifiedSource(
+        SqliteTallyRepository repository, TallyClientLink link,
+        string financialYear, ExpectedVoucher source,
+        TallyVoucherIndexRecord live, string note)
+    {
+        if (string.IsNullOrWhiteSpace(live.MasterId))
+            throw new InvalidOperationException(
+                "Original Tally duplicate check returned an unbound live voucher; " +
+                "no consolidated import is allowed.");
+        repository.ConfirmSourceBindingVersion(
+            link.ClientId, financialYear, link.CompanyKey,
+            ConsolidatedSourceType, source.Number, source.Number,
+            live.MasterId, live.Guid, SourceHash(source),
+            source.Xml.ToString(SaveOptions.DisableFormatting),
+            long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var alterId) ? alterId : 0L,
+            note);
+    }
+
     private static void RequireNoCollision(
         IReadOnlyList<TallyVoucherIndexRecord> actual, IReadOnlyList<ExpectedVoucher> expected)
     {
