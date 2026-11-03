@@ -221,6 +221,19 @@ public sealed class TallyConsolidatedVoucherImportService(
                     throw new InvalidOperationException(
                         "Previously bound consolidated source " + planned.SourceAnchor +
                         " changed destination MASTERID. Exact rebind must be reviewed.");
+                // An already-verified source cannot be silently reclassified
+                // after its AAH accounting content changes. The normal
+                // previous->desired ALTER protocol is mandatory; this
+                // consolidated CREATE-only wrapper never invents a shortcut.
+                if (state is not null &&
+                    state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                    state.VerifiedContentHash.Length > 0 &&
+                    !IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash))
+                    throw new InvalidOperationException(
+                        "Previously verified consolidated source " +
+                        planned.SourceAnchor +
+                        " changed AAH content. The existing Previous->Desired " +
+                        "version/ALTER gate must review it; never adopt or CREATE.");
                 // Reuse the normal exporter’s verified source-version commit.
                 // An original first-time import that Tally already holds is
                 // adopted by exact live authority without another Tally POST.
