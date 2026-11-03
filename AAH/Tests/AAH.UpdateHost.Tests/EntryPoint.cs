@@ -83,7 +83,11 @@ internal static class EntryPoint
             "await ExtractStrictAsync(archivePath, staged, extractDeadline.Token);", StringComparison.Ordinal);
         var liveShutdown = hostSource.IndexOf(
             "if (!await ShutdownAllVerifiedInstallProcessesAsync(target))", StringComparison.Ordinal);
-        Assert(shaStage > 0 && extractStage > shaStage &&
+        var downloadStage = hostSource.IndexOf(
+            "await DownloadVerifiedAsync(archiveUrl, archivePath, expectedHash);",
+            StringComparison.Ordinal);
+        Assert(shaStage > 0 && downloadStage > 0 &&
+               extractStage > downloadStage &&
                liveShutdown > extractStage &&
                hostSource.Contains("deadline.Token", StringComparison.Ordinal) &&
                hostSource.Contains("RunVerifierChildAsync(info, PublisherVerificationDeadline)", StringComparison.Ordinal) &&
