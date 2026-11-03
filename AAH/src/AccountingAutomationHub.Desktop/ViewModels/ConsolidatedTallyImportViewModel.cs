@@ -15,6 +15,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
     private readonly Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> _prepareXml;
     private readonly Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> _importVouchers;
+    private readonly Func<string> _tallyProgressReader;
+    private string _tallyImportProgressStatus = "Checking the original Tally source-binding progress...";
     private bool _separateVoucherTypes;
     private bool _separateCashLedgers;
     private string _masterImportStatus =
@@ -25,7 +27,8 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         DashboardViewModel existingDashboardWorkspace,
         Func<bool, bool, Task<TallyBranchMasterImportResult>> importMasters,
         Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml,
-        Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> importVouchers)
+        Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> importVouchers,
+        Func<string> tallyProgressReader)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
         if (parentClientId <= 0 || string.IsNullOrWhiteSpace(financialYear))
@@ -37,6 +40,9 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
         _prepareXml = prepareXml ?? throw new ArgumentNullException(nameof(prepareXml));
         _importVouchers = importVouchers ?? throw new ArgumentNullException(nameof(importVouchers));
+        _tallyProgressReader = tallyProgressReader
+            ?? throw new ArgumentNullException(nameof(tallyProgressReader));
+        RefreshTallyImportProgress();
         ImportConsolidatedVouchersCommand = new AsyncRelayCommand(ImportVouchersAsync);
         PrepareConsolidatedXmlCommand = new AsyncRelayCommand(PrepareXmlAsync);
         ImportBranchMastersCommand = new AsyncRelayCommand(ImportMastersAsync);
@@ -45,6 +51,17 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public long ParentClientId { get; }
     public string FinancialYear { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
+    public string TallyImportProgressStatus
+    {
+        get => _tallyImportProgressStatus;
+        private set => SetProperty(ref _tallyImportProgressStatus, value);
+    }
+
+    public void RefreshTallyImportProgress()
+    {
+        try { TallyImportProgressStatus = _tallyProgressReader(); }
+        catch (Exception ex) { TallyImportProgressStatus = "Tally progress unavailable: " + ex.Message; }
+    }
     public AsyncRelayCommand ImportBranchMastersCommand { get; }
     public AsyncRelayCommand PrepareConsolidatedXmlCommand { get; }
     public AsyncRelayCommand ImportConsolidatedVouchersCommand { get; }
@@ -96,6 +113,12 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         {
             VoucherImportStatus =
                 "Import stopped. DO NOT retry blindly: verify live Tally after any partial acceptance. " + ex.Message;
+        }
+        finally
+        {
+            // The import can POST hundreds of vouchers before a single readback
+            // fails; always reload the authoritative bound source statuses.
+            RefreshTallyImportProgress();
         }
     }
 
