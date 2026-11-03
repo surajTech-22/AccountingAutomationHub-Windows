@@ -2676,7 +2676,16 @@ public sealed class MainWindowViewModel :
                 "Tally company: " + sourceCompany.Name + Environment.NewLine +
                 "Generated: " + preparedAt.ToString("yyyy-MM-dd HH:mm:ss",
                     System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
-                "Ready in XML: " + snapshot.Ready + Environment.NewLine;
+                "Ready in XML: " + snapshot.Ready + Environment.NewLine +
+                "Original Bank Statement source rows: " +
+                    snapshot.BankStatementSelected + Environment.NewLine +
+                "Original Bank vouchers eligible and prepared: " +
+                    snapshot.BankStatementPrepared + Environment.NewLine +
+                "Original Bank rows not separately prepared: " +
+                    (snapshot.BankStatementSelected - snapshot.BankStatementPrepared) +
+                    " (unmapped, unsupported, rejected/reversed or one shared Contra" +
+                    " for a confirmed transfer). Unprepared rows were not sent" +
+                    " to Tally or modified." + Environment.NewLine;
             statusText = TallyConsolidatedBranchXmlSnapshotCache.StampStatus(
                 statusText, fingerprint, snapshot.Xml);
             File.WriteAllText(tempXml, snapshot.Xml, System.Text.Encoding.UTF8);
