@@ -3239,6 +3239,13 @@ public sealed class DashboardViewModel :
         }
         finally
         {
+            // A user-requested Tally refresh must reload the original
+            // consolidated Client/FY/CompanyKey binding counts too. Do this
+            // ONLY on explicit refresh/post-import, never on every passive
+            // Tally heartbeat/Changed event (which previously made panels
+            // repaint continuously).
+            if (_isConsolidatedTallyScope)
+                RefreshConsolidatedTallyExportPresentation();
             RefreshTallySection();
         }
     }
