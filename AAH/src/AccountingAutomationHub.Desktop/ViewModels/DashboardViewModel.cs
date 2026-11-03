@@ -4453,7 +4453,7 @@ public sealed class DashboardViewModel :
                     DateTimeStyles.None, out var date))
                 throw new InvalidDataException(
                     "Consolidated preview has an invalid original voucher type, number or date.");
-            var anchor = "CONSOLIDATED|" + type + "|" + number;
+            var anchor = TallyConsolidatedVoucherImportService.BuildConsolidatedSourceAnchor(type, number);
             if (!seen.Add(anchor))
                 throw new InvalidDataException(
                     "Consolidated preview repeats original source identity " + anchor);
