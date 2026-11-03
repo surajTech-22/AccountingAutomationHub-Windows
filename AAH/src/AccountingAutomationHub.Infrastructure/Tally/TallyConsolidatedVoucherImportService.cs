@@ -13,7 +13,7 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 public sealed class TallyConsolidatedVoucherImportService(
     TallyHttpService tally, Action<string, string, string>? diagnosticExchange = null,
-    Action? verifiedVoucher = null)
+    Action? verifiedVoucher = null, Action? acknowledgedVoucherCreate = null)
 {
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
     private static readonly string[] PriorMasters =
@@ -42,6 +42,86 @@ public sealed class TallyConsolidatedVoucherImportService(
         try { diagnosticExchange?.Invoke(stage, xml, response); }
         catch { /* never affect live Tally write semantics */ }
         return TallyHttpService.ParseImportResponse(response);
+    }
+
+    // Use the original Tally reader and capture the ACTUAL HTTP read-only
+    // exchange in the existing detailed diagnostic ZIP. No replacement reader,
+    // cached snapshot or blind duplicate bypass is permitted.
+    private Action<string, string>? Trace(string stage) =>
+        diagnosticExchange is null ? null :
+        (request, response) =>
+        {
+            try { diagnosticExchange(stage, request, response); }
+            catch { /* diagnostic observer only */ }
+        };
+
+    private async Task<(IReadOnlyList<TallyVoucherIndexRecord> Index,
+        IReadOnlyList<TallyVoucherXmlSnapshot> Full)> ReadFreshConsolidatedAuthorityAsync(
+        TallyCompanyInfo destination, DateTime from, DateTime to,
+        string stage, CancellationToken cancellationToken,
+        bool requireVisibleVoucherAfterCreate = false)
+    {
+        var primary = await tally.ExportVoucherAuthorityFreshAsync(
+            destination, from, to, cancellationToken, Trace(stage + "-FullAuthority"))
+            .ConfigureAwait(false);
+        if (primary.Index.Count > 0)
+            return primary;
+
+        // A zero-row response is not proof of a duplicate-free Tally company.
+        // An independent, lighter Voucher collection is needed when there
+        // is a known live voucher or Tally has acknowledged one new CREATE.
+        if (!requireVisibleVoucherAfterCreate && destination.VoucherCount <= 0)
+            return primary;
+        var alternate = await tally.ExportVoucherIndexFreshAsync(
+            destination, from, to, cancellationToken, Trace(stage + "-IndependentIndex"))
+            .ConfigureAwait(false);
+        if (alternate.Count > 0)
+            throw new InvalidOperationException(
+                "Consolidated Tally duplicate authority is inconsistent: the full Voucher reader " +
+                "returned zero but an independent live Voucher index returned " +
+                alternate.Count + " row(s). The source XML was NOT posted again. " +
+                "Inspect both original HTTP readbacks inside the detailed diagnostic ZIP.");
+        if (!requireVisibleVoucherAfterCreate && destination.VoucherCount > 0)
+            throw new InvalidOperationException(
+                "Consolidated duplicate check cannot establish an empty financial-year Voucher " +
+                "collection: live Tally reports " + destination.VoucherCount +
+                " existing voucher(s), but both fresh export readers returned zero. " +
+                "Import stopped BEFORE any voucher POST; do not assume duplicates are absent.");
+        return primary;
+    }
+
+    private static void RequireExactPostedVoucher(
+        TallyVoucherXmlSnapshot actual, string nativeMasterId, ExpectedVoucher expected)
+    {
+        if (!IgnoreCase.Equals(actual.MasterId, nativeMasterId) ||
+            actual.VoucherDate?.Date != expected.Date.Date ||
+            !IgnoreCase.Equals(actual.VoucherType, expected.Type))
+            throw new InvalidOperationException(
+                "Tally LASTVCHID " + nativeMasterId +
+                " identified a different type/date/master than the acknowledged CREATE. " +
+                "Do not retry without checking the target company.");
+
+        var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
+            actual.OriginalXml, "exact LASTVCHID post-import readback")
+            .DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+        if (voucher is null)
+            throw new InvalidOperationException("Exact Tally LASTVCHID did not return voucher XML.");
+        var actualNumber = Value(voucher, "VOUCHERNUMBER");
+        if (!IgnoreCase.Equals(actualNumber, expected.Number))
+            throw new InvalidOperationException(
+                "Tally CREATED the source but stored Voucher Number '" + actualNumber +
+                "' instead of '" + expected.Number + "' for target MASTERID " + nativeMasterId +
+                ". Auto-numbering/identity requires explicit reconciliation; no automatic resend.");
+        var sourceReference = Value(expected.Xml, "REFERENCE");
+        if (sourceReference.Length > 0 &&
+            !IgnoreCase.Equals(Value(voucher, "REFERENCE"), sourceReference))
+            throw new InvalidOperationException(
+                "Tally stored a different Reference for native LASTVCHID " + nativeMasterId +
+                "; import stopped to protect duplicate ownership.");
+        if (!SamePostings(expected.Postings, ReadPostings(voucher)))
+            throw new InvalidOperationException(
+                "Tally target MASTERID " + nativeMasterId +
+                " does not match the original branch DR/CR; import stopped without retry.");
     }
 
     public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(
@@ -132,7 +212,15 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(firstYear + 1, 3, 31);
         if (source.Any(x => x.Date < from || x.Date > to))
             throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
-        var before = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
+        // The linked destination can be empty, but a success-shaped empty
+        // XML collection is not reliable proof when Tally reports other vouchers.
+        // Reuse the existing read-only export, and fail closed on contradictory
+        // collection results rather than inventing a missing duplicate count.
+        var liveDestination = open.FirstOrDefault(company =>
+            IgnoreCase.Equals(company.Name, destination.Name) &&
+            IgnoreCase.Equals(company.CompanyKey, destination.CompanyKey)) ?? destination;
+        var before = await ReadFreshConsolidatedAuthorityAsync(
+            liveDestination, from, to, "Consolidated-FY-Before", cancellationToken)
             .ConfigureAwait(false);
         RequireNoCollision(before.Index, source);
 
@@ -176,7 +264,8 @@ public sealed class TallyConsolidatedVoucherImportService(
 
         // All masters must be live and parent-verified before the first voucher.
         foreach (var master in masters) RequireMaster(available, master);
-        var recheck = await tally.ExportVoucherAuthorityFreshAsync(destination, from, to, cancellationToken)
+        var recheck = await ReadFreshConsolidatedAuthorityAsync(
+            liveDestination, from, to, "Consolidated-FY-PrePOST", cancellationToken)
             .ConfigureAwait(false);
         RequireNoCollision(recheck.Index, source);
 
@@ -193,6 +282,11 @@ public sealed class TallyConsolidatedVoucherImportService(
             TallyExcelParityXmlWriter.EndErp9DataImport(sb);
             var response = await ImportWithEvidenceAsync(
                 "Voucher-" + expected.Number, sb.ToString(), cancellationToken).ConfigureAwait(false);
+            if (response.Created == 1)
+            {
+                try { acknowledgedVoucherCreate?.Invoke(); }
+                catch { /* diagnostic only */ }
+            }
             if (response.Created != 1 || response.Altered != 0 || response.Deleted != 0 ||
                 response.Ignored != 0 || response.Errors != 0 || response.Exceptions != 0 ||
                 !string.IsNullOrWhiteSpace(response.LineError))
@@ -200,21 +294,66 @@ public sealed class TallyConsolidatedVoucherImportService(
                     expected.Number + ". Some preceding vouchers may already have been imported. " +
                     "Do not retry until the live Tally vouchers are reconciled. " + response.LineError);
 
-            var after = await tally.ExportVoucherAuthorityFreshAsync(
-                destination, expected.Date, expected.Date, cancellationToken).ConfigureAwait(false);
+            // Tally's documented LASTVCHID is the destination-created native
+            // Voucher MASTERID. Treat it as a CANDIDATE to read, never as proof
+            // by itself. The voucher's date/type/number/reference/full DR/CR
+            // must be compared with the original branch source.
+            var nativeMasterId = response.LastVoucherId.Trim();
+            var after = await ReadFreshConsolidatedAuthorityAsync(
+                liveDestination, expected.Date, expected.Date,
+                "Consolidated-After-" + expected.Number, cancellationToken,
+                requireVisibleVoucherAfterCreate: true).ConfigureAwait(false);
             var matches = after.Index.Where(x => x.VoucherDate?.Date == expected.Date &&
                 IgnoreCase.Equals(x.VoucherType, expected.Type) &&
                 IgnoreCase.Equals(x.VoucherNumber, expected.Number)).ToArray();
-            if (matches.Length != 1 || string.IsNullOrWhiteSpace(matches[0].MasterId))
-                throw new InvalidOperationException("Tally did not read back one durable MASTERID for " +
-                    expected.Number + ". No automatic retry is safe.");
-            var full = after.Full.Where(x => IgnoreCase.Equals(x.MasterId, matches[0].MasterId)).ToArray();
-            if (full.Length != 1 || !SamePostings(expected.Postings,
-                    ReadPostings(TallyConsolidatedXmlTextSafety.ParseDocument(
-                        full[0].OriginalXml, "live voucher posting readback").Root!
-                        .DescendantsAndSelf().First(x => Is(x, "VOUCHER")))))
-                throw new InvalidOperationException("Live Tally DR/CR postings differ from branch XML for " +
-                    expected.Number + ". Import stopped; inspect posted voucher before continuing.");
+            if (matches.Length > 1)
+                throw new InvalidOperationException(
+                    "Live Tally has multiple vouchers with the same created consolidated identity " +
+                    expected.Type + "/" + expected.Number + "; no automatic retry.");
+            if (matches.Length == 1 && string.IsNullOrWhiteSpace(matches[0].MasterId))
+                throw new InvalidOperationException(
+                    "Fresh Tally Voucher index found the created number but no durable MASTERID. " +
+                    "No automatic resend is safe.");
+
+            if (matches.Length == 1)
+            {
+                var matchedMasterId = matches[0].MasterId.Trim();
+                if (nativeMasterId.Length > 0 && !IgnoreCase.Equals(nativeMasterId, matchedMasterId))
+                    throw new InvalidOperationException(
+                        "Tally CREATE LASTVCHID " + nativeMasterId +
+                        " disagrees with the fresh Voucher-index MASTERID " + matchedMasterId +
+                        " for " + expected.Number + ". Do not retry.");
+                var full = after.Full.Where(x => IgnoreCase.Equals(x.MasterId, matchedMasterId)).ToArray();
+                if (full.Length != 1)
+                    throw new InvalidOperationException(
+                        "Tally created " + expected.Number +
+                        " but the full signed ledger XML did not match one Voucher MASTERID. No automatic resend.");
+                RequireExactPostedVoucher(full[0], matchedMasterId, expected);
+            }
+            else
+            {
+                // Crucial recovery for TallyPrime auto-numbering/collection
+                // discrepancies: independently read the exact newly-created
+                // destination MASTERID, without any second import POST.
+                // The original v578 error hid Tally CREATED=1/LASTVCHID=2
+                // and incorrectly reported zero created in the summary.
+                var exact = await tally.ExportVoucherByKnownMasterIdForConsolidatedReadbackAsync(
+                    liveDestination, nativeMasterId, expected.Date, cancellationToken,
+                    Trace("Consolidated-Exact-LASTVCHID-" + nativeMasterId))
+                    .ConfigureAwait(false);
+                RequireExactPostedVoucher(exact, nativeMasterId, expected);
+                // Even a proven exact voucher cannot authorize the next CREATE
+                // if the normal financial-year reader cannot see it. This is
+                // an index consistency defect, NOT a duplicate-free target.
+                try { verifiedVoucher?.Invoke(); }
+                catch { /* diagnostic only */ }
+                throw new InvalidOperationException(
+                    "Tally CREATED and exact LASTVCHID=" + nativeMasterId +
+                    " readback VERIFIED voucher " + expected.Number +
+                    ", but the normal fresh financial-year Voucher collection did not return " +
+                    "that saved voucher. Further consolidated CREATEs are blocked until the " +
+                    "live duplicate authority is repaired. No automatic resend.");
+            }
             imported++;
             // The caller needs an accurate partial-success count if a later
             // voucher fails. This fires only AFTER exact live MASTERID/DR/CR
@@ -287,6 +426,30 @@ public sealed class TallyConsolidatedVoucherImportService(
                 collision.VoucherType + "/" + collision.VoucherNumber + " (" +
                 collision.VoucherDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) +
                 "). No blind CREATE or ALTER: reconcile the original and destination first.");
+
+        // Tally voucher types may auto-assign a DIFFERENT voucher number even
+        // when the branch source supplied one. A rerun must also reject a
+        // strongly matching live original-reference + entire signed DR/CR
+        // identity. Never skip/alter the row merely on a weak reference match.
+        foreach (var planned in expected)
+        {
+            var reference = Value(planned.Xml, "REFERENCE");
+            if (reference.Length == 0) continue;
+            var matching = actual.FirstOrDefault(live =>
+                live.VoucherDate?.Date == planned.Date.Date &&
+                IgnoreCase.Equals(live.VoucherType, planned.Type) &&
+                IgnoreCase.Equals(live.Reference, reference) &&
+                live.LedgerPostings.Count == planned.Postings.Count &&
+                SamePostings(planned.Postings, live.LedgerPostings
+                    .Select(x => (x.LedgerName, x.SignedAmount)).ToArray()));
+            if (matching is not null)
+                throw new InvalidOperationException(
+                    "Destination Tally already contains a matching source Reference " +
+                    reference + " / type " + planned.Type + " / complete DR/CR " +
+                    "under Voucher Number '" + matching.VoucherNumber +
+                    "' and native MASTERID " + matching.MasterId +
+                    ". Possible Tally auto-numbering; reconcile, never blindly CREATE or ALTER.");
+        }
     }
 
     private async Task<Dictionary<string, XElement>> ReadMasterAuthorityAsync(
