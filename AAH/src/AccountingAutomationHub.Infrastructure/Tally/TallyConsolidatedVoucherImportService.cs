@@ -111,14 +111,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 throw new InvalidOperationException(
                     "Accepted voucher has no original DR/CR posting authority: " + anchor);
             var reference = Value(voucher, "REFERENCE");
-            var exactPostings = string.Join("|", entries
-                .OrderBy(e => e.Name, IgnoreCase).ThenBy(e => e.Amount)
-                .Select(e => e.Name + ":" +
-                    e.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
-            var contentHash = TallyVoucherFingerprint.BuildContentHash(
-                date, type, reference, Value(voucher, "PARTYLEDGERNAME"),
-                entries.Where(e => e.Amount < 0).Sum(e => Math.Abs(e.Amount)),
-                Value(voucher, "NARRATION") + "|" + exactPostings);
+            var (contentHash, exactPostings) = ComputePreparedContentIdentity(voucher);
             var version = "CONSOLIDATED|" + date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
                 "|" + type + "|" + reference + "|" + exactPostings + "|" + contentHash;
             if (!IgnoreCase.Equals(state.PendingContentHash, contentHash) ||
@@ -252,14 +245,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             // this stable SOURCE anchor is kept only in AAH's existing
             // Client/FY/CompanyKey source-binding table.
             var sourceAnchor = "CONSOLIDATED|" + type + "|" + number;
-            var exactPostings = string.Join("|", entries
-                .OrderBy(e => e.Name, IgnoreCase).ThenBy(e => e.Amount)
-                .Select(e => e.Name + ":" +
-                    e.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
-            var contentHash = TallyVoucherFingerprint.BuildContentHash(
-                date, type, reference, Value(voucher, "PARTYLEDGERNAME"),
-                entries.Where(e => e.Amount < 0).Sum(e => Math.Abs(e.Amount)),
-                Value(voucher, "NARRATION") + "|" + exactPostings);
+            var (contentHash, exactPostings) = ComputePreparedContentIdentity(voucher);
             // The existing repository retains this immutable desired version
             // for accepted-unverified and previous->desired audit tracking.
             var version = "CONSOLIDATED|" + date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
@@ -856,6 +842,38 @@ public sealed class TallyConsolidatedVoucherImportService(
         type.ToUpperInvariant() + "|" + name.Trim().ToUpperInvariant();
     private static string Key(DateTime date, string type, string number) =>
         type.Trim() + "|" + number.Trim(); // Voucher numbering is FY-scoped, not day-scoped.
+
+    /// <summary>
+    /// One ORIGINAL consolidated identity fingerprint shared by the import
+    /// writer and the read-only Tally panel. The UI can detect when a previously
+    /// verified voucher now has a changed Ledger/DRCR and requires previous->
+    /// desired ALTER, instead of showing the older destination as up-to-date.
+    /// No Tally mutation, tax calculation or new accounting model.
+    /// </summary>
+    public static (string ContentHash, string SerializedPostings)
+        ComputePreparedContentIdentity(XElement voucher)
+    {
+        ArgumentNullException.ThrowIfNull(voucher);
+        if (!DateTime.TryParseExact(Value(voucher, "DATE"), "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            throw new InvalidOperationException("Prepared consolidated source date is invalid.");
+        var type = Value(voucher, "VOUCHERTYPENAME");
+        if (type.Length == 0)
+            throw new InvalidOperationException("Prepared consolidated source type is missing.");
+        var entries = ReadPostings(voucher);
+        if (entries.Count == 0)
+            throw new InvalidOperationException("Prepared consolidated source has no signed DR/CR.");
+        var exactPostings = string.Join("|", entries
+            .OrderBy(e => e.Name, IgnoreCase).ThenBy(e => e.Amount)
+            .Select(e => e.Name + ":" +
+                e.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+        var reference = Value(voucher, "REFERENCE");
+        var hash = TallyVoucherFingerprint.BuildContentHash(
+            date, type, reference, Value(voucher, "PARTYLEDGERNAME"),
+            entries.Where(e => e.Amount < 0).Sum(e => Math.Abs(e.Amount)),
+            Value(voucher, "NARRATION") + "|" + exactPostings);
+        return (hash, exactPostings);
+    }
 
     private static IReadOnlyList<(string Name, decimal Amount)> ReadPostings(XElement voucher)
     {
