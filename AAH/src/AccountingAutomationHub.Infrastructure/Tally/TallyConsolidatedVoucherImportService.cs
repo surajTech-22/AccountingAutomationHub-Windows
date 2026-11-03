@@ -48,6 +48,131 @@ public sealed class TallyConsolidatedVoucherImportService(
         return TallyHttpService.ParseImportResponse(response);
     }
 
+    /// <summary>
+    /// Only reconciles old AcceptedAwaitingVerification CREATE acknowledgements.
+    /// This route NEVER sends an Import/CREATE/ALTER/DELETE request. CL019 had
+    /// an accepted sales voucher at destination MASTERID=337, but a same-date,
+    /// same-reference voucher from another branch confused the earlier search.
+    /// Binding is confirmed only if that exact destination MASTERID and BOTH
+    /// signed ledger sides match the original prepared branch XML.
+    /// </summary>
+    public async Task<int> ReconcileAcceptedReadOnlyAsync(
+        TallyClientLink link, TallyCompanyInfo destination,
+        TallyConsolidatedPreparedXmlResult prepared,
+        CancellationToken cancellationToken = default,
+        string? accountingFinancialYear = null)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (tallyRepository is null)
+            throw new InvalidOperationException(
+                "Original Tally source-binding repository is required for read-only reconciliation.");
+        var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            link, destination, accountingFinancialYear);
+        TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+            prepared.VouchersXml, "read-only consolidated accepted-voucher reconciliation");
+        var voucherDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            prepared.VouchersXml, "read-only consolidated accepted-voucher reconciliation");
+        RequireDestination(voucherDoc, destination.Name);
+
+        var pending = new List<(ExpectedVoucher Voucher, string AcknowledgedMasterId)>();
+        var seen = new HashSet<string>(IgnoreCase);
+        foreach (var voucher in Messages(voucherDoc).Select(x => x.Elements().Single()))
+        {
+            if (!Is(voucher, "VOUCHER") ||
+                !Field(voucher, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Read-only reconciliation requires the original branch-prepared CREATE voucher.");
+            var type = Value(voucher, "VOUCHERTYPENAME");
+            var number = Value(voucher, "VOUCHERNUMBER");
+            if (type.Length == 0 || number.Length == 0)
+                throw new InvalidOperationException("Source voucher identity is missing.");
+            var anchor = "CONSOLIDATED|" + type + "|" + number;
+            if (!seen.Add(anchor))
+                throw new InvalidOperationException("Repeated original source anchor in prepared XML.");
+            var state = tallyRepository.GetSourceBindingVersionState(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType, anchor);
+            if (state is null ||
+                !state.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase))
+                continue; // Never touch verified, pending-create or deleted states.
+            if (!DateTime.TryParseExact(Value(voucher, "DATE"), "yyyyMMdd",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                throw new InvalidOperationException("Accepted voucher has an invalid original date.");
+            if (!long.TryParse(state.MasterId, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var approvedMasterId) ||
+                approvedMasterId <= 0)
+                throw new InvalidOperationException(
+                    "Accepted consolidated source " + anchor +
+                    " has no authoritative LASTVCHID. Read-only reconciliation is blocked.");
+            var entries = ReadPostings(voucher);
+            if (entries.Count == 0)
+                throw new InvalidOperationException(
+                    "Accepted voucher has no original DR/CR posting authority: " + anchor);
+            var reference = Value(voucher, "REFERENCE");
+            var exactPostings = string.Join("|", entries
+                .OrderBy(e => e.Name, IgnoreCase).ThenBy(e => e.Amount)
+                .Select(e => e.Name + ":" +
+                    e.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+            var contentHash = TallyVoucherFingerprint.BuildContentHash(
+                date, type, reference, Value(voucher, "PARTYLEDGERNAME"),
+                entries.Where(e => e.Amount < 0).Sum(e => Math.Abs(e.Amount)),
+                Value(voucher, "NARRATION") + "|" + exactPostings);
+            var version = "CONSOLIDATED|" + date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                "|" + type + "|" + reference + "|" + exactPostings + "|" + contentHash;
+            if (!IgnoreCase.Equals(state.PendingContentHash, contentHash) ||
+                (state.PendingVersion.Length > 0 &&
+                 !string.Equals(state.PendingVersion, version, StringComparison.Ordinal)))
+                throw new InvalidOperationException(
+                    "Accepted source " + anchor +
+                    " changed its original accounting version; no silent rebind or Tally mutation.");
+            pending.Add((new ExpectedVoucher(date, type, number, entries, voucher,
+                reference, anchor, contentHash, version), state.MasterId));
+        }
+
+        if (pending.Count == 0) return 0;
+        // The identical original link/destination guard used by normal imports
+        // protects against accidentally reading another connected Tally company.
+        var open = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
+        var liveDestination = TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            link, destination, open, financialYear);
+        var verified = 0;
+        foreach (var item in pending)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var expected = item.Voucher;
+            var after = await tally.ExportVoucherAuthorityFreshAsync(
+                liveDestination, expected.Date, expected.Date, cancellationToken)
+                .ConfigureAwait(false); // Read-only Export, NEVER Import.
+            var matches = after.Index.Where(candidate =>
+                IgnoreCase.Equals(candidate.MasterId, item.AcknowledgedMasterId) &&
+                FullVoucherMatches(expected, candidate, after.Full)).ToArray();
+            if (matches.Length != 1)
+                throw new InvalidOperationException(
+                    "Tally acceptance remains unverified for " + expected.SourceAnchor +
+                    " at LASTVCHID=" + item.AcknowledgedMasterId +
+                    ". Exact destination MASTERID and DR/CR readback still differ. " +
+                    "No voucher was resent, changed or deleted.");
+            var confirmed = matches[0];
+            tallyRepository.ConfirmSourceBindingVersion(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                expected.SourceAnchor, expected.SourceAnchor,
+                confirmed.MasterId, confirmed.Guid,
+                expected.ContentHash, expected.DesiredVersion,
+                long.TryParse(confirmed.AlterId, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var liveAlterId) ? liveAlterId : 0,
+                "Read-only recovery of Tally-accepted CREATE; full destination " +
+                "MASTERID/DRCR verified without any new voucher POST.");
+            tallyRepository.RecordImportFingerprints(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                new[] { (expected.SourceAnchor, expected.ContentHash) },
+                "Imported", "Read-only exact Tally acceptance verified; no resend.");
+            verified++;
+            try { verifiedVoucher?.Invoke(); } catch { }
+        }
+        return verified;
+    }
+
     public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(
         TallyClientLink link, TallyCompanyInfo destination,
         TallyConsolidatedPreparedXmlResult prepared,
