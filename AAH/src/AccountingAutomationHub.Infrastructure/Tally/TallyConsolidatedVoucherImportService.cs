@@ -61,43 +61,81 @@ public sealed class TallyConsolidatedVoucherImportService(
         string stage, CancellationToken cancellationToken,
         bool requireVisibleVoucherAfterCreate = false)
     {
+        // Always use the original authoritative full-object reader first.
         var primary = await tally.ExportVoucherAuthorityFreshAsync(
             destination, from, to, cancellationToken, Trace(stage + "-FullAuthority"))
             .ConfigureAwait(false);
-        if (primary.Index.Count > 0)
+
+        if (requireVisibleVoucherAfterCreate)
+        {
+            // A new CREATE must be observable. If not, check one independent
+            // index and later the native LASTVCHID; do NOT send CREATE again.
+            if (primary.Index.Count > 0) return primary;
+            var alternateAfter = await tally.ExportVoucherIndexFreshAsync(
+                destination, from, to, cancellationToken, Trace(stage + "-IndependentIndex"))
+                .ConfigureAwait(false);
+            if (alternateAfter.Count > 0)
+                throw new InvalidOperationException(
+                    "The destination full Voucher reader returned zero after Tally CREATE, " +
+                    "but the independent live index returned " + alternateAfter.Count +
+                    " Voucher(s). Readback is inconsistent; stop before any next CREATE.");
+            return primary;
+        }
+
+        // CL019 v578 incident: live post-import response said CREATED=1,
+        // LASTVCHID=2, yet AAH's FY cache and duplicate index were zero. The
+        // UI's best-effort count can silently return 0 on a failed function
+        // and is NEVER permitted to authorize CREATE. The strict native
+        // Tally count is independent of the date-filtered XML collection.
+        var liveCount = await tally.ReadAuthoritativeVoucherCountForConsolidatedAsync(
+            destination, cancellationToken, Trace(stage + "-NativeVoucherCount"))
+            .ConfigureAwait(false);
+        if (liveCount == 0)
+        {
+            if (primary.Index.Count != 0)
+                throw new InvalidOperationException(
+                    "Consolidated duplicate preflight failed: native Tally count=0 " +
+                    "but the full Voucher collection returned " + primary.Index.Count +
+                    " record(s). No CREATE authorized.");
+            var independentEmpty = await tally.ExportVoucherIndexFreshAsync(
+                destination, from, to, cancellationToken,
+                Trace(stage + "-IndependentEmptyIndex")).ConfigureAwait(false);
+            if (independentEmpty.Count > 0)
+                throw new InvalidOperationException(
+                    "Consolidated duplicate preflight failed: native Tally count=0 " +
+                    "but independent Voucher collection returned " + independentEmpty.Count +
+                    ". No CREATE authorized.");
+            return primary;
+        }
+
+        if (primary.Index.Count == liveCount)
             return primary;
 
-        // An empty response is NEVER evidence that a Tally company is empty.
-        // Always ask an independent existing Voucher collection for the same FY.
-        // Do not trust destination.VoucherCount: UI discovery may silently fall
-        // back to zero when Tally times out or returns an unsupported function.
-        var alternate = await tally.ExportVoucherIndexFreshAsync(
-            destination, from, to, cancellationToken, Trace(stage + "-IndependentIndex"))
-            .ConfigureAwait(false);
-        if (alternate.Count > 0)
+        // An incomplete date-filtered index cannot prove absence of old
+        // invoices (especially after a previous partial import). Recover
+        // directly from the existing *unfiltered* Tally Voucher collection,
+        // validating EVERY native MASTERID against the independent company
+        // count. If incomplete or unsupported, stop before the first CREATE.
+        var unfiltered = await tally.ExportCompleteCompanyVoucherIndexForConsolidationAsync(
+            destination, liveCount, cancellationToken,
+            Trace(stage + "-CompleteCompanyIndex")).ConfigureAwait(false);
+        var fy = unfiltered.Where(x => x.VoucherDate is DateTime date &&
+                                      date.Date >= from.Date && date.Date <= to.Date).ToArray();
+        var fyIds = fy.Select(x => x.MasterId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = primary.Index
+            .Where(x => !fyIds.Contains(x.MasterId)).Take(5).ToArray();
+        if (missing.Length > 0)
             throw new InvalidOperationException(
-                "Consolidated Tally duplicate authority is inconsistent: full Voucher " +
-                "authority returned zero, but the independent live index returned " +
-                alternate.Count + " record(s). No new voucher was authorized. " +
-                "Inspect both read-only HTTP responses in the original diagnostic ZIP.");
+                "Consolidated Tally full Voucher reader and complete company index disagree " +
+                "about native MASTERID(s): " +
+                string.Join(", ", missing.Select(x => x.MasterId)) +
+                ". No consolidated CREATE authorized.");
 
-        if (!requireVisibleVoucherAfterCreate)
-        {
-            // The 03-Nov CL019 issue had LASTVCHID=2 but an empty diagnostic
-            // voucher-index CSV. A successful-shaped empty XML read must NOT
-            // override Tally's actual count of saved Voucher objects.
-            var liveCount = await tally.ReadAuthoritativeVoucherCountForConsolidatedAsync(
-                destination, cancellationToken, Trace(stage + "-TallyNumVouchers"))
-                .ConfigureAwait(false);
-            if (liveCount != 0)
-                throw new InvalidOperationException(
-                    "DUPLICATE SAFETY STOP: Tally reports " + liveCount +
-                    " existing Voucher(s), yet both independent fresh Voucher " +
-                    "collections returned zero for the requested FY. The target " +
-                    "company is NOT certified empty. No CREATE was sent; do not " +
-                    "blindly retry. Inspect original diagnostic HTTP evidence.");
-        }
-        return primary;
+        // Cross-check signatures before collision detection. If Tally omits
+        // signed lines for an otherwise relevant existing object, fail closed.
+        // This result is the actual original live Tally data, not a cache.
+        return (fy, primary.Full);
     }
 
     private static void RequireExactPostedVoucher(
