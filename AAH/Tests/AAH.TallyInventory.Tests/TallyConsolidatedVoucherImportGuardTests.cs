@@ -114,6 +114,14 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         MustReject(Prepared(Voucher(postings: "")), "missing verified DR/CR");
         MustReject(Prepared(Voucher() + Voucher("KA-1", "20250506"), 2),
             "same FY voucher type and number on different dates");
+        // Local selection guard shared with normal accounting: a different
+        // branch prefix cannot cause a second CREATE of one original invoice.
+        var invoiceA = Voucher("KA-1")
+            .Replace("</VOUCHERNUMBER>", "</VOUCHERNUMBER><REFERENCE>SAME-INVOICE</REFERENCE>");
+        var invoiceB = Voucher("GJ-2")
+            .Replace("</VOUCHERNUMBER>", "</VOUCHERNUMBER><REFERENCE>SAME-INVOICE</REFERENCE>");
+        MustReject(Prepared(invoiceA + invoiceB, 2),
+            "same original invoice/DR-CR under two different branch voucher numbers");
         MustReject(Prepared(Voucher(), company: "Wrong Company"),
             "XML destination does not equal the confirmed link");
         MustReject(Prepared(Voucher(number: ""), 1), "voucher without stable number");
