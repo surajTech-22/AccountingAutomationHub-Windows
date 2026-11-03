@@ -312,6 +312,13 @@ internal static class EntryPoint
                    manualDeferred, 8896, processStartedAt, finishedAt.AddSeconds(15), out _),
             "Manual Exit deferred for active Tally must not authorize process retirement.");
 
+        // A forged/recycled PID history with later log lines but earlier
+        // timestamps cannot authorize retirement of a different process.
+        var reversedClock = string.Join("\n", shutdownMarkers.Select((message, index) =>
+            EvidenceLine(finishedAt.AddSeconds(-index), 17296, message)));
+        Assert(!Program.HasCompletedVerifiedExitEvidence(
+                reversedClock, 17296, processStartedAt, finishedAt.AddSeconds(15), out _),
+            "Out-of-order timestamp audit authorized retirement of a live PID.");
         var outOfOrder = shutdownMarkers.ToArray();
         (outOfOrder[3], outOfOrder[4]) = (outOfOrder[4], outOfOrder[3]);
         var mixed = string.Join("\n", outOfOrder.Select((message, index) =>
