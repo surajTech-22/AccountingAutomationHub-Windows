@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Globalization;
 using System.Windows;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Models;
