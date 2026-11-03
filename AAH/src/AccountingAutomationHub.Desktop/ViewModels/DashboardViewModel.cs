@@ -248,7 +248,7 @@ public sealed class DashboardViewModel :
         if (_isConsolidatedTallyScope == active) return;
         _isConsolidatedTallyScope = active;
         OnPropertyChanged(nameof(IsConsolidatedTallyScope));
-        OnPropertyChanged(nameof(HasAnyTallyExportData));
+        NotifyTallyExportAvailability();
         if (active)
         {
             // The parent was left with its own 677 Bank/Purchase/Sales rows;
@@ -723,11 +723,11 @@ public sealed class DashboardViewModel :
     public bool HasRecentImports => RecentImports.Count > 0;
     public bool HasValidGstin => TallyCompanyInfo.NormalizeGstin(
         _clientContext.CurrentClient?.Gstin ?? string.Empty).Length == 15;
-    public bool HasBankExportData => BankTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasPurchaseExportData => PurchaseTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasSalesExportData => SalesTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasCashExportData => CashTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasJournalExportData => JournalTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasBankExportData => _isConsolidatedTallyScope || BankTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasPurchaseExportData => _isConsolidatedTallyScope || PurchaseTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasSalesExportData => _isConsolidatedTallyScope || SalesTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasCashExportData => _isConsolidatedTallyScope || CashTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasJournalExportData => _isConsolidatedTallyScope || JournalTallyExportMonths.Any(option => option.SourceCount > 0);
     public bool HasAnyTallyExportData => IsConsolidatedTallyScope ||
                                          HasBankExportData || HasPurchaseExportData || HasSalesExportData ||
                                          HasCashExportData || HasJournalExportData;
@@ -2741,9 +2741,9 @@ public sealed class DashboardViewModel :
         // not proof of destination acceptance. The scoped consolidated
         // verification panel reads the actual TallySourceBindings instead.
         TallyLiveXmlStatus = _isConsolidatedTallyScope
-            ? "Prepared source XML is separate from destination import status. " +
-              "See Consolidated Tally Import Verification for exact live-verified " +
-              "and Tally-accepted-awaiting-readback voucher counts."
+            ? (_consolidatedPresentationStatus.Length > 0
+                ? _consolidatedPresentationStatus
+                : "Consolidated prepared source counts require the original branch XML.")
             : _tallyCoordinator.LiveXmlStatus;
         OnPropertyChanged(nameof(TallyReadyVoucherCount));
         OnPropertyChanged(nameof(TallyNewMasterCreateCount));
@@ -4603,6 +4603,7 @@ public sealed class DashboardViewModel :
         // Avoid setting TallyExportStatus inside this getter-like method:
         // its setter calls RefreshTallyExportSummaryState recursively.
         _consolidatedPresentationStatus = note;
+        TallyLiveXmlStatus = note; // Reuse original existing Tally line; no added panel.
         OnPropertyChanged(nameof(ConsolidatedPresentationStatus));
     }
 
