@@ -103,7 +103,7 @@ public sealed class TallyConsolidatedVoucherImportService(
 
         var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
             actual.OriginalXml, "exact LASTVCHID post-import readback")
-            .DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+            .Descendants().FirstOrDefault(x => Is(x, "VOUCHER"));
         if (voucher is null)
             throw new InvalidOperationException("Exact Tally LASTVCHID did not return voucher XML.");
         var actualNumber = Value(voucher, "VOUCHERNUMBER");
