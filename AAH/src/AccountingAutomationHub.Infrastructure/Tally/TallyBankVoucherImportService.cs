@@ -238,6 +238,70 @@ public sealed class TallyBankVoucherImportService
         return result;
     }
 
+    /// <summary>
+    /// Link the existing individual Bank MASTER-FIRST ledger authority to
+    /// the offline branch XML preview. This calls BuildRequiredLedgerSpecs,
+    /// the SAME original Bank rule used before normal Tally voucher import.
+    /// Only NAME/PARENT and existing eligible-create authority are returned;
+    /// no Master or transaction is saved, no live Tally ID is copied.
+    /// </summary>
+    internal static IReadOnlyList<(string Name, string Parent, bool CanCreate, bool IsBank)>
+        ReadOriginalOfflineBankLedgerAuthorities(
+            IBankingRepository bankingRepository, IMasterRepository masterRepository,
+            ClientProfile client,
+            IReadOnlyList<OfflineConsolidatedBankVoucher> vouchers)
+    {
+        if (vouchers.Count == 0) return [];
+        var transactions = bankingRepository
+            .GetTransactions(client.Id, client.FinancialYear, includeArchived: true)
+            .GroupBy(x => x.Id).ToDictionary(x => x.Key, x => x.First());
+        var accountIndex = bankingRepository.GetAccounts(client.Id, client.FinancialYear)
+            .Where(x => x.AuthorityName.Trim().Length > 0)
+            .GroupBy(x => BuildTallyMasterNameKey(x.AuthorityName),
+                StringComparer.OrdinalIgnoreCase)
+            .Where(x => x.Count() == 1)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
+        var masterIndex = masterRepository
+            .Get(client.Id, client.FinancialYear, includeArchived: false)
+            .Where(x => x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                        x.Name.Trim().Length > 0)
+            .GroupBy(x => BuildTallyMasterNameKey(x.Name), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key,
+                x => x.OrderByDescending(master =>
+                        MasterAuthority.IsTallySource(master.Source))
+                    .ThenBy(master => master.PersistentId).First(),
+                StringComparer.OrdinalIgnoreCase);
+        var savedGroups = bankingRepository.GetLedgerMappings(
+                client.Id, client.FinancialYear)
+            .Where(x => !string.IsNullOrWhiteSpace(x.LedgerName) &&
+                        !string.IsNullOrWhiteSpace(x.MasterGroup))
+            .GroupBy(x => BuildTallyMasterNameKey(x.LedgerName),
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key,
+                x => x.OrderByDescending(mapping => mapping.UpdatedUtc)
+                    .Select(mapping => mapping.MasterGroup.Trim())
+                    .First(parent => parent.Length > 0),
+                StringComparer.OrdinalIgnoreCase);
+        var originalIntents = vouchers.Select(v =>
+        {
+            if (!transactions.TryGetValue(v.TransactionRowId, out var source))
+                throw new InvalidOperationException(
+                    "Original bank source row was removed while preparing its ledger authorities.");
+            return new PreparedBankVoucher(
+                source, v.Expectation.VoucherType, v.BankLedger, v.CounterpartLedger,
+                TallyVoucherFingerprint.BuildSourceKey(
+                    client.Id, client.FinancialYear,
+                    source.TransactionId, source.Id),
+                string.Empty, v.Expectation.Reference,
+                string.Empty, string.Empty);
+        }).ToArray();
+        return BuildRequiredLedgerSpecs(
+            originalIntents, accountIndex, masterIndex, savedGroups)
+            .Select(spec => (spec.Name, spec.Parent,
+                spec.CanCreateFromLocalMaster, spec.IsBank))
+            .ToArray();
+    }
+
     public async Task<TallyBankImportResult> ImportAsync(
         ClientProfile client,
         TallyCompanyInfo company,
