@@ -2309,12 +2309,15 @@ public sealed class MainWindowViewModel :
     private async Task<string> SaveConsolidatedExistingDiagnosticsAsync(
         ClientProfile parent, TallyCompanyInfo company, string outcome,
         int preparedVouchers, int verifiedImported,
-        IReadOnlyDictionary<string, string>? artifacts = null)
+        IReadOnlyDictionary<string, string>? artifacts = null,
+        int? tallyAcknowledgedCreates = null, string? readbackError = null)
     {
         try
         {
             var path = await _tallyCoordinator.SaveConsolidatedDiagnosticPackAsync(
-                parent, company, outcome, preparedVouchers, verifiedImported, artifacts);
+                parent, company, outcome, preparedVouchers, verifiedImported, artifacts,
+                acknowledgedVoucherCreates: tallyAcknowledgedCreates,
+                consolidatedReadbackError: readbackError);
             return "Detailed Tally diagnostics saved: " + path;
         }
         catch (Exception exception)
@@ -2702,6 +2705,7 @@ public sealed class MainWindowViewModel :
         };
         var exchangeNumber = 0;
         var verifiedVoucherCount = 0;
+        var tallyAcknowledgedCreateCount = 0;
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
             (stage, requestXml, responseXml) =>
             {
@@ -2713,14 +2717,16 @@ public sealed class MainWindowViewModel :
                 evidence[prefix + (responseXml.StartsWith("Transport exception:", StringComparison.Ordinal)
                     ? "-Error.txt" : "-Response.xml")] = responseXml;
             },
-            () => verifiedVoucherCount++);
+            () => verifiedVoucherCount++,
+            () => tallyAcknowledgedCreateCount++);
         try
         {
             var result = await importer.ImportAsync(link, company, prepared,
                 accountingFinancialYear: financialYear);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import: " + result.Status,
-                prepared.FinalVouchers, result.ImportedVouchers, evidence);
+                prepared.FinalVouchers, result.ImportedVouchers, evidence,
+                tallyAcknowledgedCreateCount);
             return result with { Status = result.Status + " " + diagnostic };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -2729,7 +2735,8 @@ public sealed class MainWindowViewModel :
             // its exact in-flight request/response is preserved for inspection.
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import STOPPED: " + exception,
-                prepared.FinalVouchers, verifiedVoucherCount, evidence);
+                prepared.FinalVouchers, verifiedVoucherCount, evidence,
+                tallyAcknowledgedCreateCount, exception.Message);
             throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
         }
     }
