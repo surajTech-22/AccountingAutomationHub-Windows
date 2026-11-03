@@ -221,13 +221,12 @@ public sealed class TallyBankVoucherImportService
             result.Add(new OfflineConsolidatedBankVoucher(
                 transaction.Id, expectation, bankLedger, counterpart));
         }
-        // The ORIGINAL manual Bank importer skips individual unmapped,
-        // unsupported or treatment-required rows and prepares the rest.
-        // Do not turn those existing per-row skips into a new all-or-nothing
-        // consolidated exception. This routine is read-only: it cannot mark
-        // a skipped row as imported, substitute a ledger or enter Suspense.
-        // Automatic Bank Sync's explicit allowUnmappedSuspense opt-in remains
-        // owned exclusively by the ORIGINAL Bank import path.
+        // The actual original manual Bank command opts into Suspense for
+        // unmapped Final Ledger, and skips only unsupported/treatment-required
+        // rows. Do not turn those normal per-row review exceptions into an
+        // all-or-nothing consolidated failure. This routine is read-only:
+        // it never saves a Bank transaction or its Final Ledger. The
+        // automatic sync Suspense preference remains separately controlled.
         // Invalid duplicate source identities, however, are not safe to
         // choose silently: fail closed before any bank XML is assembled.
         if (issues.Any(x => x.StartsWith("Duplicate/invalid Bank source",
