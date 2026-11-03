@@ -198,10 +198,18 @@ public sealed class TallyConsolidatedVoucherImportService(
                         Value(expected.Xml, "REFERENCE") +
                         ". Neither CREATE nor ALTER is permitted.");
                 duplicateCount++;
-                // The existing source binding is the single durable owner of
-                // previous/version/MASTERID state; no branch Tally ID is copied.
+                // Use Tally's ORIGINAL full Voucher XML as the previous
+                // verified version, never the branch's CREATE XML.
+                var liveXml = liveBefore.FullVouchers.SingleOrDefault(x =>
+                    IgnoreCase.Equals(x.MasterId, matching[0].MasterId));
+                if (liveXml is null)
+                    throw new InvalidOperationException(
+                        "Original consolidated full Tally authority lost the exact live " +
+                        "Voucher XML for MASTERID " + matching[0].MasterId +
+                        ". No CREATE is safe.");
                 ConfirmVerifiedSource(repository, link, financialYear, expected,
-                    matching[0], "Exact duplicate adopted from verified original Tally authority.");
+                    matching[0], liveXml.OriginalXml,
+                    "Exact duplicate adopted from verified original Tally authority.");
                 continue;
             }
             var state = repository.GetSourceBindingVersionState(link.ClientId,
@@ -453,7 +461,7 @@ public sealed class TallyConsolidatedVoucherImportService(
     private static void ConfirmVerifiedSource(
         SqliteTallyRepository repository, TallyClientLink link,
         string financialYear, ExpectedVoucher source,
-        TallyVoucherIndexRecord live, string note)
+        TallyVoucherIndexRecord live, string originalLiveXml, string note)
     {
         if (string.IsNullOrWhiteSpace(live.MasterId))
             throw new InvalidOperationException(
@@ -463,7 +471,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             link.ClientId, financialYear, link.CompanyKey,
             ConsolidatedSourceType, source.Number, source.Number,
             live.MasterId, live.Guid, SourceHash(source),
-            source.Xml.ToString(SaveOptions.DisableFormatting),
+            originalLiveXml,
             long.TryParse(live.AlterId, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var alterId) ? alterId : 0L,
             note);
