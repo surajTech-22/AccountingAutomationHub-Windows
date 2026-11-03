@@ -466,6 +466,81 @@ public sealed class TallyConsolidatedVoucherImportService(
                 skipped.Add(planned.SourceAnchor);
                 continue;
             }
+            // CL019 Nov 3: an early accepted Karnataka B2C Sales voucher has
+            // live MASTERID=337/ALTERID=339, but no durable binding for its
+            // CURRENT branch-scoped source anchor. Its old debtor Ledger was
+            // "B2C Sales - 24 - Karnataka"; original branch XML now specifies
+            // "B2C Sales - Karnataka". Both tax lines/amounts are identical.
+            // A first-unbound ledger-only edit is an ALTER, not a second CREATE.
+            // Recover the old version ONLY from full fresh Tally readback,
+            // and only when no other AAH source has claimed this MASTERID.
+            // Then the existing Previous->Desired / same-MASTERID ALTER path
+            // below performs a SECOND fresh version+ALTERID check before POST.
+            if (state is null &&
+                !tallyRepository.HasImportedSourceFingerprint(
+                    link.ClientId, financialYear, link.CompanyKey,
+                    SourceEntityType, planned.SourceAnchor))
+            {
+                var recoverable = candidates.Where(candidate =>
+                    TryReadFirstUnboundB2cLedgerRename(
+                        planned.Xml, candidate, before.FullVouchers,
+                        out _, out _)).ToArray();
+                if (recoverable.Length > 1)
+                    throw new InvalidOperationException(
+                        "Multiple live Tally MASTERIDs fit the unbound B2C ledger rename for " +
+                        planned.SourceAnchor + ". Manual ownership review is required.");
+                if (recoverable.Length == 1)
+                {
+                    var priorLive = recoverable[0];
+                    if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
+                            link.ClientId, financialYear, link.CompanyKey,
+                            SourceEntityType, planned.SourceAnchor, priorLive.MasterId) ||
+                        source.Any(other =>
+                            !IgnoreCase.Equals(other.SourceAnchor, planned.SourceAnchor) &&
+                            TryReadFirstUnboundB2cLedgerRename(
+                                other.Xml, priorLive, before.FullVouchers, out _, out _)) ||
+                        !claimedAlterMasterIds.Add(priorLive.MasterId))
+                        throw new InvalidOperationException(
+                            "Existing Tally MASTERID " + priorLive.MasterId +
+                            " is not uniquely owned by this unbound B2C branch source. " +
+                            "No CREATE or ALTER is permitted.");
+                    if (!TryReadFirstUnboundB2cLedgerRename(
+                            planned.Xml, priorLive, before.FullVouchers,
+                            out var oldHash, out var oldVersion) ||
+                        !long.TryParse(priorLive.AlterId, NumberStyles.Integer,
+                            CultureInfo.InvariantCulture, out var oldAlterId) ||
+                        oldAlterId <= 0)
+                        throw new InvalidOperationException(
+                            "Could not verify previous full B2C voucher version for " +
+                            planned.SourceAnchor + "; no CREATE or ALTER is permitted.");
+                    var previousProof = new TallySourceBindingVersionState
+                    {
+                        State = "Verified", MasterId = priorLive.MasterId,
+                        VerifiedContentHash = oldHash, VerifiedVersion = oldVersion,
+                        LastVerifiedAlterId = oldAlterId
+                    };
+                    if (!PreviousConsolidatedVersionMatches(
+                            priorLive, before.FullVouchers, previousProof))
+                        throw new InvalidOperationException(
+                            "Original Tally MASTERID/ALTERID and old full DR/CR failed " +
+                            "the existing previous-version ALTER gate.");
+                    // Baseline only: no Tally mutation. Preserve the ORIGINAL
+                    // verified old live version; do not record desired DR/CR
+                    // as verified until the ordinary ALTER is read back.
+                    tallyRepository.ConfirmSourceBindingVersion(
+                        link.ClientId, financialYear, link.CompanyKey,
+                        SourceEntityType, planned.SourceAnchor, planned.SourceAnchor,
+                        priorLive.MasterId, priorLive.Guid, oldHash, oldVersion,
+                        oldAlterId,
+                        "Exact unbound B2C ledger-rename recovery: unique live " +
+                        "MASTERID, same original date/ref/narration/tax amounts, " +
+                        "one B2C party ledger rename; old full XML/ALTERID verified. " +
+                        "No CREATE or ALTER sent during baseline recovery.");
+                    alterTargets.Add(planned.SourceAnchor, priorLive);
+                    continue;
+                }
+            }
+
             // A foreign branch with the same B2C document reference is
             // not the same source. However a same-branch or unscoped live
             // reference that differs in DR/CR is a conflict: fail closed,
@@ -989,6 +1064,115 @@ public sealed class TallyConsolidatedVoucherImportService(
     // voucher and create a duplicate. This is a conservative read-only
     // collision candidate, NOT an authority to ALTER or DELETE. Exact full
     // XML signed DR/CR is still required to adopt an unbound voucher.
+    /// <summary>
+    /// A narrowly-scoped FIRST-UNBOUND B2C name correction, NOT a generic
+    /// reference/amount duplicate matcher. An old Tally name of
+    /// "B2C Sales - 24 - Karnataka" can be replaced by the prepared source
+    /// "B2C Sales - Karnataka" only after every other posting and the unique
+    /// full live Tally object agree. Unrelated voucher numbers and cross-branch
+    /// shared B2C references are never evidence of ownership.
+    /// </summary>
+    internal static bool TryReadFirstUnboundB2cLedgerRename(
+        XElement desired, TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        out string previousHash, out string previousVersion)
+    {
+        previousHash = "";
+        previousVersion = "";
+        if (desired is null || live is null || fullAuthority is null ||
+            !IgnoreCase.Equals(Value(desired, "VOUCHERTYPENAME"), "Sales") ||
+            !IgnoreCase.Equals(live.VoucherType, "Sales") ||
+            !IgnoreCase.Equals(Field(desired, "ACTION"), "Create"))
+            return false;
+        var preparedNumber = Value(desired, "VOUCHERNUMBER");
+        if (!preparedNumber.StartsWith("B-", StringComparison.OrdinalIgnoreCase) ||
+            preparedNumber.IndexOf('-', 2) != 26 ||
+            !preparedNumber.Substring(2, 24).All(Uri.IsHexDigit))
+            return false;
+        var reference = Value(desired, "REFERENCE");
+        var narration = Value(desired, "NARRATION");
+        if (!reference.StartsWith("B2CS-", StringComparison.OrdinalIgnoreCase) ||
+            narration.Length == 0 || live.Reference.Length == 0 ||
+            !IgnoreCase.Equals(reference, live.Reference) ||
+            !IgnoreCase.Equals(narration, live.Narration) ||
+            !DateTime.TryParseExact(Value(desired, "DATE"), "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ||
+            live.VoucherDate?.Date != date.Date ||
+            !long.TryParse(live.MasterId, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var masterId) || masterId <= 0 ||
+            !long.TryParse(live.AlterId, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var alterId) || alterId <= 0 ||
+            live.Guid.Length == 0)
+            return false;
+        var full = fullAuthority.Where(x =>
+            IgnoreCase.Equals(x.MasterId, live.MasterId)).ToArray();
+        if (full.Length != 1 || !IgnoreCase.Equals(full[0].Guid, live.Guid))
+            return false;
+        var oldVoucher = TallyConsolidatedXmlTextSafety.ParseDocument(
+            full[0].OriginalXml, "unbound B2C previous live Tally XML")
+            .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+        if (oldVoucher is null ||
+            !IgnoreCase.Equals(Value(oldVoucher, "VOUCHERTYPENAME"), live.VoucherType) ||
+            !IgnoreCase.Equals(Value(oldVoucher, "REFERENCE"), reference) ||
+            !IgnoreCase.Equals(Value(oldVoucher, "NARRATION"), narration) ||
+            !DateTime.TryParseExact(Value(oldVoucher, "DATE"), "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var oldDate) ||
+            oldDate.Date != date.Date ||
+            !IgnoreCase.Equals(Value(oldVoucher, "PARTYLEDGERNAME"), live.PartyLedger))
+            return false;
+        var oldPostings = ReadPostings(oldVoucher);
+        var desiredPostings = ReadPostings(desired);
+        if (oldPostings.Count < 3 || desiredPostings.Count != oldPostings.Count ||
+            !SamePostings(oldPostings, live.LedgerPostings
+                .Select(p => (p.LedgerName, p.SignedAmount)).ToArray()))
+            return false;
+        var remaining = desiredPostings.ToList();
+        var unmatchedOld = new List<(string Name, decimal Amount)>();
+        foreach (var posting in oldPostings)
+        {
+            var index = remaining.FindIndex(x =>
+                IgnoreCase.Equals(x.Name, posting.Name) && x.Amount == posting.Amount);
+            if (index >= 0) remaining.RemoveAt(index);
+            else unmatchedOld.Add(posting);
+        }
+        if (remaining.Count != 1 || unmatchedOld.Count != 1 ||
+            remaining[0].Amount >= 0 ||
+            unmatchedOld[0].Amount != remaining[0].Amount ||
+            !IgnoreCase.Equals(Value(oldVoucher, "PARTYLEDGERNAME"), unmatchedOld[0].Name) ||
+            !IgnoreCase.Equals(Value(desired, "PARTYLEDGERNAME"), remaining[0].Name))
+            return false;
+        const string b2c = "B2C Sales - ";
+        var oldName = unmatchedOld[0].Name;
+        var newName = remaining[0].Name;
+        if (!oldName.StartsWith(b2c, StringComparison.OrdinalIgnoreCase) ||
+            !newName.StartsWith(b2c, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var oldSuffix = oldName[b2c.Length..];
+        var newSuffix = newName[b2c.Length..];
+        // Only remove the legacy two-digit B2C place code, not arbitrary
+        // ledger changes. Preserve the exact branch/state suffix.
+        if (oldSuffix.Length <= 6 ||
+            !char.IsDigit(oldSuffix[0]) || !char.IsDigit(oldSuffix[1]) ||
+            !oldSuffix.AsSpan(2).StartsWith(" - ", StringComparison.Ordinal) ||
+            newSuffix.Length == 0 ||
+            !IgnoreCase.Equals(oldSuffix[5..], newSuffix))
+            return false;
+        var signed = string.Join("|", oldPostings
+            .OrderBy(x => x.Name, IgnoreCase).ThenBy(x => x.Amount)
+            .Select(x => x.Name + ":" +
+                x.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+        previousHash = TallyVoucherFingerprint.BuildContentHash(
+            oldDate, live.VoucherType, reference,
+            Value(oldVoucher, "PARTYLEDGERNAME"),
+            oldPostings.Where(x => x.Amount < 0).Sum(x => Math.Abs(x.Amount)),
+            narration + "|" + signed);
+        previousVersion = "CONSOLIDATED|" +
+            oldDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+            "|" + live.VoucherType + "|" + reference +
+            "|" + signed + "|" + previousHash;
+        return true;
+    }
+
     private static bool PotentialExistingUnboundBankVoucher(
         TallyVoucherIndexRecord live, ExpectedVoucher planned)
     {
