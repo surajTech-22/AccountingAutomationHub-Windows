@@ -2310,14 +2310,16 @@ public sealed class MainWindowViewModel :
         ClientProfile parent, TallyCompanyInfo company, string outcome,
         int preparedVouchers, int verifiedImported,
         IReadOnlyDictionary<string, string>? artifacts = null,
-        int? tallyAcknowledgedCreates = null, string? readbackError = null)
+        int? tallyAcknowledgedCreates = null, string? readbackError = null,
+        int? tallyAcknowledgedAlters = null)
     {
         try
         {
             var path = await _tallyCoordinator.SaveConsolidatedDiagnosticPackAsync(
                 parent, company, outcome, preparedVouchers, verifiedImported,
                 artifacts, acknowledgedVoucherCreates: tallyAcknowledgedCreates,
-                readbackError: readbackError);
+                readbackError: readbackError,
+                acknowledgedVoucherAlters: tallyAcknowledgedAlters);
             return "Detailed Tally diagnostics saved: " + path;
         }
         catch (Exception exception)
@@ -2765,6 +2767,7 @@ public sealed class MainWindowViewModel :
         var exchangeNumber = 0;
         var verifiedVoucherCount = 0;
         var tallyAcknowledgedCreateCount = 0;
+        var tallyAcknowledgedAlterCount = 0;
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
             (stage, requestXml, responseXml) =>
             {
@@ -2777,7 +2780,8 @@ public sealed class MainWindowViewModel :
                     ? "-Error.txt" : "-Response.xml")] = responseXml;
             },
             () => verifiedVoucherCount++,
-            _tallyRepository, () => tallyAcknowledgedCreateCount++);
+            _tallyRepository, () => tallyAcknowledgedCreateCount++,
+            () => tallyAcknowledgedAlterCount++);
         try
         {
             var result = await importer.ImportAsync(link, company, prepared,
@@ -2785,7 +2789,7 @@ public sealed class MainWindowViewModel :
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import: " + result.Status,
                 prepared.FinalVouchers, result.ImportedVouchers, evidence,
-                tallyAcknowledgedCreateCount);
+                tallyAcknowledgedCreateCount, tallyAcknowledgedAlters: tallyAcknowledgedAlterCount);
             return result with { Status = result.Status + " " + diagnostic };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -2795,7 +2799,7 @@ public sealed class MainWindowViewModel :
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import STOPPED: " + exception,
                 prepared.FinalVouchers, verifiedVoucherCount, evidence,
-                tallyAcknowledgedCreateCount, exception.Message);
+                tallyAcknowledgedCreateCount, exception.Message, tallyAcknowledgedAlterCount);
             throw new InvalidOperationException(exception.Message + " " + diagnostic, exception);
         }
         finally
@@ -2805,7 +2809,7 @@ public sealed class MainWindowViewModel :
             // coordinator's synchronized read cache. Request ONE existing
             // read-only linked synchronization AFTER the write loop (including
             // partial acceptance), never another voucher POST or retry.
-            if (tallyAcknowledgedCreateCount > 0 &&
+            if ((tallyAcknowledgedCreateCount > 0 || tallyAcknowledgedAlterCount > 0) &&
                 _clientContext.CurrentClient is { } visible &&
                 visible.Id == parentId &&
                 visible.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
@@ -2819,7 +2823,7 @@ public sealed class MainWindowViewModel :
                     // An unsuccessful read MUST NOT undo the real accepted
                     // statuses or allow a second CREATE. The persisted
                     // AcceptedAwaitingVerification state is the authority.
-                    ApplicationState = "Tally created vouchers but live synchronization is pending: " +
+                    ApplicationState = "Tally accepted voucher CREATE/ALTER but live synchronization is pending: " +
                         readFailure.Message;
                 }
             }
