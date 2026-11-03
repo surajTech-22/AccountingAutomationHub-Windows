@@ -3081,6 +3081,32 @@ public sealed class TallyHttpService : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// This is deliberately NOT the UI's best-effort voucher count (which
+    /// converts a failed response to zero). A consolidated CREATE must not
+    /// use a missing/unreadable tally function as evidence of an empty company.
+    /// The count is an independent read-only cross-check, not a substitute
+    /// for the complete live Voucher index and signed DR/CR authority.
+    /// </summary>
+    public async Task<int> ReadAuthoritativeVoucherCountForConsolidatedAsync(
+        TallyCompanyInfo company, CancellationToken cancellationToken = default,
+        Action<string, string>? diagnosticExchange = null)
+    {
+        ArgumentNullException.ThrowIfNull(company);
+        var request = BuildFunctionRequest(company.Name, "$NumVouchers");
+        var response = await PostAsync(request, cancellationToken).ConfigureAwait(false);
+        try { diagnosticExchange?.Invoke(request, response); }
+        catch { /* diagnostic observers do not change read results */ }
+        var result = ReadTag(CleanXml(response), "RESULT").Trim();
+        if (!int.TryParse(result, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var count) || count < 0)
+            throw new InvalidOperationException(
+                "The destination's live $NumVouchers function returned no unambiguous " +
+                "nonnegative count. Tally duplicate authority cannot be verified, " +
+                "so consolidated CREATE was blocked.");
+        return count;
+    }
+
     private async Task<int> ReadFunctionIntSafeAsync(
         string companyName,
         string functionName,
