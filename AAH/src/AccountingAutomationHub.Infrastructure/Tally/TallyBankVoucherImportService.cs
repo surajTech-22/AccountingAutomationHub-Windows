@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Application.Banking;
+using AccountingAutomationHub.Application.Masters;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Domain.Common;
