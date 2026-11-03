@@ -925,7 +925,7 @@ public sealed class TallyAccountingVoucherExportService
 
         var contents = System.Text.Json.JsonSerializer.Serialize(new
         {
-            Schema = "AAH-BRANCH-XML-SOURCE-V2",
+            Schema = "AAH-BRANCH-XML-SOURCE-V3-BANK",
             client.Id,
             client.ClientCode,
             client.FinancialYear,
@@ -937,6 +937,14 @@ public sealed class TallyAccountingVoucherExportService
             Sales = Stable(_salesRepository.GetRecords(client.Id, client.FinancialYear)),
             CashEntries = Stable(_bankingRepository.GetCashEntries(client.Id, client.FinancialYear)),
             BankAccounts = Stable(_bankingRepository.GetAccounts(client.Id, client.FinancialYear)),
+            // Previously absent: a new/edit/deleted Bank transaction or mapping
+            // did NOT invalidate the cached consolidated branch XML.
+            BankTransactions = Stable(_bankingRepository.GetTransactions(
+                client.Id, client.FinancialYear, includeArchived: true)),
+            BankLedgerMappings = Stable(_bankingRepository.GetLedgerMappings(
+                client.Id, client.FinancialYear)),
+            BankTransferMatches = Stable(_bankingRepository.GetTransferMatches(
+                client.Id, client.FinancialYear)),
             Journals = Stable(_journalRepository.GetVouchers(client.Id, client.FinancialYear)),
             JournalSettings = _journalRepository.GetSettings(client.Id, client.FinancialYear),
             Masters = Stable(_masterRepository.Get(client.Id, client.FinancialYear, false)),
