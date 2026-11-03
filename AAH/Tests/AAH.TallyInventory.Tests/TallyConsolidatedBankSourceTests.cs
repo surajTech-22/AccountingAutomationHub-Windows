@@ -116,19 +116,29 @@ internal static class TallyConsolidatedBankSourceTests
         bank.Matches.Clear();
         bank.Rows.RemoveAt(1);
 
+        // The individual manual Bank importer SKIPS unmapped/unsupported
+        // rows and keeps eligible ones. The old consolidated wrapper instead
+        // threw on ANY unmapped row, so 208/296 missing Final Ledger entries
+        // blocked all Purchase/Sales/Journal vouchers too.
         bank.Rows[0].LedgerName = "";
-        try
-        {
-            Prepare(repo, client, from, to);
-            throw new InvalidOperationException("unmapped bank source was silently consolidated");
-        }
-        catch (TargetInvocationException ex) when (
-            ex.InnerException is InvalidOperationException actual &&
-            actual.Message.Contains("Final Ledger", StringComparison.Ordinal))
-        {
-            // Correct: no implicit Suspense posting for manual consolidated import.
-        }
-        Check(bank.Writes == 0, "invalid bank source preparation mutated accounting records");
+        Check(Prepare(repo, client, from, to).Count == 0,
+            "Manual Bank unmapped source was converted to a voucher or Suspense.");
+        bank.Rows.Add(new BankTransactionRecord {
+            Id = 218, ClientId = 19, FinancialYear = client.FinancialYear,
+            BankAccountId = 28, Mode = "Receipt",
+            LedgerName = "Customer Ledger",
+            TransactionDate = new DateTime(2025, 10, 16),
+            Narration = "Correctly mapped independent source",
+            ReferenceNumber = "BANK-REF-218",
+            TransactionId = "BANK-SOURCE-218", Credit = 79.50m,
+            RecordStatus = "Active"
+        });
+        var mixed = Prepare(repo, client, from, to);
+        Check(mixed.Count == 1 &&
+              mixed[0].GetType().GetProperty("SourceNumber")?.GetValue(mixed[0])?.ToString() == "BANK-218",
+            "Unmapped manual Bank row blocked the correctly mapped row.");
+        Check(bank.Writes == 0, "offline Bank eligibility mutated original records");
+        bank.Rows.RemoveAt(1);
         bank.Rows[0].LedgerName = "Office Expenses";
         bank.Rows[0].RecordStatus = "Archived";
         Check(Prepare(repo, client, from, to).Count == 0,
@@ -205,7 +215,9 @@ internal static class TallyConsolidatedBankSourceTests
                   StringComparison.Ordinal) &&
               exporter.Contains("TallyBankCreateAlterXmlBuilder.Build(", StringComparison.Ordinal) &&
               exporter.Contains("TallyBankCreateAlterXmlValidator.Validate(", StringComparison.Ordinal) &&
-              exporter.Contains("originalBankExpectations.Length > 0", StringComparison.Ordinal),
+              exporter.Contains("originalBankExpectations.Length > 0", StringComparison.Ordinal) &&
+              exporter.Contains("ReadOriginalOfflineBankLedgerAuthorities(", StringComparison.Ordinal) &&
+              exporter.Contains("AAH-BRANCH-XML-SOURCE-V4-BANK-ORIGINAL-ELIGIBILITY", StringComparison.Ordinal),
             "Bank statement transactions/mappings were omitted from cache or original XML preparation");
         Check(importer.Contains("PotentialExistingUnboundBankVoucher(", StringComparison.Ordinal) &&
               importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
