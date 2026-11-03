@@ -244,6 +244,20 @@ public sealed class TallyConsolidatedVoucherImportService(
             var entries = ReadPostings(voucher);
             if (entries.Count == 0)
                 throw new InvalidOperationException("Prepared voucher has no ledger posting authority: " + number);
+            // Voucher Numbers alone cannot detect repeated original invoices:
+            // two branches can produce different prefixed Voucher Numbers for
+            // the same DATE/TYPE/REFERENCE and exact signed ledger postings.
+            // Reject these repeat candidates before reading or writing Tally.
+            var reference = Value(voucher, "REFERENCE");
+            if (reference.Length > 0 && source.Any(previous =>
+                previous.Date.Date == date.Date &&
+                IgnoreCase.Equals(previous.Type, type) &&
+                IgnoreCase.Equals(Value(previous.Xml, "REFERENCE"), reference) &&
+                SamePostings(previous.Postings, entries)))
+                throw new InvalidOperationException(
+                    "Prepared consolidated XML contains repeated original voucher Reference '" +
+                    reference + "' with identical date, type and complete ledger DR/CR " +
+                    "under different numbers. Refusing duplicate CREATE before Tally POST.");
             source.Add(new ExpectedVoucher(date, type, number, entries, voucher));
         }
 
