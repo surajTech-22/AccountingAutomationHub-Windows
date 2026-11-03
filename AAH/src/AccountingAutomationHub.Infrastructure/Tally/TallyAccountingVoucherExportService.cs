@@ -1007,10 +1007,11 @@ public sealed class TallyAccountingVoucherExportService
         // exporter's existing DR/CR treatment as source XML. Normal individual
         // Bank export remains in its original dedicated service. No Tally
         // import or source transaction mutation happens during preview.
-        var offlineBank = offlineConsolidatedBranchSource
-            ? TallyBankVoucherImportService.PrepareOfflineConsolidatedBankVouchers(
-                _bankingRepository, client, fromDate, toDate)
-            : [];
+        IReadOnlyList<TallyBankVoucherImportService.OfflineConsolidatedBankVoucher> offlineBank =
+            offlineConsolidatedBranchSource
+                ? TallyBankVoucherImportService.PrepareOfflineConsolidatedBankVouchers(
+                    _bankingRepository, client, fromDate, toDate)
+                : Array.Empty<TallyBankVoucherImportService.OfflineConsolidatedBankVoucher>();
         var originalBankExpectations = offlineBank.Select(row => row.Expectation).ToArray();
         string originalBankXml = string.Empty;
         if (originalBankExpectations.Length > 0)
