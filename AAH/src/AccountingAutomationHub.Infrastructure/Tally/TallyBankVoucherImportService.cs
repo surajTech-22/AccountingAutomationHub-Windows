@@ -105,6 +105,36 @@ public sealed class TallyBankVoucherImportService
             }
             if (rejectedPairs.Contains(transaction.Id))
                 continue;
+            // One common Contra for a PROVEN pair of two intra-branch bank
+            // movements. Without this selection, processing each bank row
+            // would create the same opposite Bank DR/CR twice in consolidated
+            // books. Never pair by amount or narration alone.
+            var otherBankId = matchedTransfers.TryGetValue(transaction.Id, out var match)
+                ? (match.SourceTransactionId == transaction.Id
+                    ? match.TargetTransactionId : match.SourceTransactionId)
+                : transaction.MatchedTransactionId.GetValueOrDefault();
+            if (otherBankId > 0 && all.TryGetValue(otherBankId, out var otherBank) &&
+                otherBank.BankAccountId != transaction.BankAccountId &&
+                accounts.ContainsKey(otherBank.BankAccountId) &&
+                !otherBank.RecordStatus.StartsWith("Archived",
+                    StringComparison.OrdinalIgnoreCase) &&
+                otherBank.TransactionDate.Date >= fromDate.Date &&
+                otherBank.TransactionDate.Date <= toDate.Date)
+            {
+                if (transaction.TransactionDate.Date != otherBank.TransactionDate.Date ||
+                    transaction.Amount != otherBank.Amount ||
+                    transaction.Amount <= 0 ||
+                    transaction.Credit > 0 == (otherBank.Credit > 0) ||
+                    (match is not null && match.ChargeAmount != 0))
+                {
+                    issues.Add("Bank transfer " + transaction.Id + "/" + otherBank.Id +
+                        ": saved matched interbank sides or charges differ. " +
+                        "Explicit Bank reconciliation is needed; no duplicate Contra created.");
+                    continue;
+                }
+                if (transaction.Id > otherBank.Id)
+                    continue; // Deterministic one common Contra from the lower row ID.
+            }
             if (!TryNormalizeMode(transaction.Mode, out var mode))
             {
                 issues.Add("Bank row " + transaction.Id + ": voucher mode not finalized");
