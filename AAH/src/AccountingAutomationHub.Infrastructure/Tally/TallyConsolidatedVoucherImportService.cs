@@ -161,8 +161,12 @@ public sealed class TallyConsolidatedVoucherImportService(
             destination, from, to, cancellationToken).ConfigureAwait(false);
         var marker = await tally.GetVoucherChangeMarkerAsync(
             destination, cancellationToken).ConfigureAwait(false);
-        if (marker.CompanyName.Length > 0 &&
-            !IgnoreCase.Equals(marker.CompanyName, destination.Name))
+        if (marker.CompanyName.Length == 0 || !marker.HasReliableAlterId)
+            throw new InvalidOperationException(
+                "Original Tally authority pulse did not prove the linked company " +
+                "and ALTERID. The destination voucher count cannot be treated as " +
+                "zero or complete. No consolidated CREATE was authorized.");
+        if (!IgnoreCase.Equals(marker.CompanyName, destination.Name))
             throw new InvalidOperationException(
                 "Tally changed its active company during consolidated duplicate preflight.");
         // Native count is company-wide while the full XML is FY-bounded.
