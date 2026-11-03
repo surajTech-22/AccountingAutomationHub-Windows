@@ -80,6 +80,62 @@ internal static class TallyConsolidatedPreparedXmlTests
                   (string?)x.Element("PARENT") == "Karnataka Debtors"),
               "Existing ledger grouping was not carried into master XML.");
 
+        // CL019 2026-11-03 20:30: Bank source has 21 cash Contra
+        // postings, but the Cash Entry MODULE has zero vouchers. The
+        // NORMAL individual Bank exporter uses the real Tally Cash Ledger
+        // (parent Cash-in-Hand). When the optional separate-cash toggle is
+        // off, the consolidated wrapper must not reparent Cash under
+        // Karnataka Cash or send another Cash CREATE. Bank voucher DR/CR
+        // and dates still need to be carried verbatim.
+        var kaCashContra = Prepared(Karnataka,
+            Xml("Contra", "BANK-56033", "BANK-CASH-56033",
+                "KA Bank", "Cash", "-500000.00", "500000.00",
+                "Bank Accounts", "Cash-in-Hand"),
+            Ledger("KA Bank", "Bank Accounts"), Ledger("Cash", "Cash-in-Hand"));
+        var tnCashContra = Prepared(TamilNadu,
+            Xml("Contra", "BANK-99001", "BANK-CASH-99001",
+                "TN Bank", "Cash", "-1000.00", "1000.00",
+                "Bank Accounts", "Cash-in-Hand"),
+            Ledger("TN Bank", "Bank Accounts"), Ledger("Cash", "Cash-in-Hand"));
+        var normalCash = TallyConsolidatedPreparedXmlBuilder.Build(Plan(),
+            [kaCashContra, tnCashContra]);
+        var normalCashMasters = XDocument.Parse(normalCash.MastersXml);
+        var normalCashVouchers = XDocument.Parse(normalCash.VouchersXml);
+        Check(normalCash.FinalVouchers == 2 &&
+              !normalCashMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Cash") &&
+              normalCashVouchers.Descendants("VOUCHER").Count() == 2 &&
+              normalCashVouchers.Descendants("LEDGERNAME")
+                  .Count(x => x.Value == "Cash") == 2 &&
+              normalCashVouchers.Descendants("AMOUNT")
+                  .Select(x => x.Value).Order()
+                  .SequenceEqual(new[] {
+                      "-500000.00", "500000.00", "-1000.00", "1000.00"
+                  }.Order()),
+            "Zero Cash Entry module: original Bank Contra Cash master was " +
+            "incorrectly created/reparented/suffixed, or amount DR/CR changed.");
+        var separateCashPlan = TallyBranchConsolidationMasterPlanner.Build(
+            "Consolidated Books", "test-company", "2025-26",
+            [Karnataka, TamilNadu], [], true, separateCashLedgers: true);
+        var separateCash = TallyConsolidatedPreparedXmlBuilder.Build(
+            separateCashPlan, [kaCashContra, tnCashContra]);
+        var separateCashMasters = XDocument.Parse(separateCash.MastersXml);
+        var separateCashVouchers = XDocument.Parse(separateCash.VouchersXml);
+        Check(separateCashMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Cash (KA)" &&
+                  (string?)x.Element("PARENT") == "Cash-in-Hand") &&
+              separateCashMasters.Descendants("LEDGER").Any(x =>
+                  (string?)x.Element("NAME") == "Cash (TN)" &&
+                  (string?)x.Element("PARENT") == "Cash-in-Hand") &&
+              separateCashVouchers.Descendants("LEDGERNAME")
+                  .Count(x => x.Value == "Cash (KA)") == 1 &&
+              separateCashVouchers.Descendants("LEDGERNAME")
+                  .Count(x => x.Value == "Cash (TN)") == 1 &&
+              !separateCashVouchers.Descendants("LEDGERNAME")
+                  .Any(x => x.Value == "Cash"),
+            "Explicit optional separate-cash flow did not reuse the original " +
+            "verified branch Cash master plan.");
+
         // Live Mitansh consolidated failure: all 67 actual source
         // ledgers carried placeholder <TAXCLASSIFICATIONNAME> Not Applicable.
         // Tally rejects the first (Amazon): Created=0, Exceptions=1,

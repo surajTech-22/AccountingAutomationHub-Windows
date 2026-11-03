@@ -274,6 +274,14 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 if (cash is not null &&
                     masters[0].Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase))
                     return cash.Name;
+                // The NORMAL individual Tally exporter uses its existing
+                // Cash/Cash-in-Hand ledger for Bank Payment/Receipt/Contra.
+                // Cash Entry module count can be zero while Bank vouchers
+                // still use Cash. With optional branch cash DISABLED, reuse
+                // that exact Tally ledger and never suffix/reparent it.
+                if (sourceName.Trim().Equals("Cash", StringComparison.OrdinalIgnoreCase) &&
+                    masters[0].Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase))
+                    return "Cash";
                 // Unique: unchanged. Shared name in 2+ different branches:
                 // append that branch's display name ONLY to these duplicates.
                 // The mandatory branch grouping and original master metadata
@@ -383,6 +391,19 @@ public static class TallyConsolidatedPreparedXmlBuilder
                 // The optional cash ledger was already included in the verified
                 // master-first plan. Do not duplicate or recreate it in source XML.
                 if (cashPlanned) continue;
+                // The destination's standard Cash ledger is already owned by
+                // Tally under Cash-in-Hand. The original individual Bank XML
+                // uses it for physical cash Contra even when there are zero
+                // Cash Entry module vouchers. Never stage a CREATE for Cash
+                // under Karnataka Cash, nor silently ALTER its parent.
+                // The existing importer will freshly read MASTERID + parent
+                // of this Tally-owned Cash before any voucher is posted.
+                if (original.Equals("Cash", StringComparison.OrdinalIgnoreCase) &&
+                    ledgerAuthority.TryGetValue(original, out var cashSources) &&
+                    cashSources.Length == 1 &&
+                    cashSources[0].Parent.Trim().Equals("Cash-in-Hand",
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
                 var parent = AccountingParent(original);
                 if (mappedLedgerMasters.TryGetValue(destinationLedger, out var mapped))
                 {

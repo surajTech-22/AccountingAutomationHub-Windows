@@ -586,6 +586,13 @@ public sealed class TallyConsolidatedVoucherImportService(
         }
 
         var available = await ReadMasterAuthorityAsync(destination, cancellationToken).ConfigureAwait(false);
+        // Same rule as the ORIGINAL normal Bank/Contra exporter: the built-in
+        // Cash ledger remains under Cash-in-Hand when optional branch cash
+        // ledgers are not selected. Cash Entry module may be empty while 21+
+        // BANK Contra vouchers still reference that Cash. Read the ACTUAL
+        // destination Cash MASTERID and parent; never CREATE/reparent a Tally
+        // built-in merely because a cash withdrawal uses that ledger.
+        RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
         // The compulsory branch groups and optional voucher types must have
         // passed the existing separate master-first UI. Never recreate them here.
         foreach (var element in masters.Where(x => PriorMasters.Contains(x.Name.LocalName)))
@@ -1301,6 +1308,37 @@ public sealed class TallyConsolidatedVoucherImportService(
             throw new InvalidOperationException("Live Tally Master authority is empty.");
         return result;
     }
+    // Reuse existing live Tally master readback, not a second Bank/Cash
+    // importer. This is an additional pre-post safety check, not permission to
+    // alter/create a Cash Ledger under any different parent.
+    internal static void RequireExistingDefaultCashForBankVouchers(
+        IReadOnlyCollection<XElement> vouchers,
+        IReadOnlyCollection<XElement> stagedMasters,
+        IReadOnlyDictionary<string, XElement> liveMasters)
+    {
+        var needsDefaultCash = vouchers.Any(v => v.Descendants().Any(x =>
+            Is(x, "LEDGERNAME") && x.Value.Trim().Equals(
+                "Cash", StringComparison.OrdinalIgnoreCase)));
+        if (!needsDefaultCash) return;
+        if (stagedMasters.Any(x => Is(x, "LEDGER") &&
+            MasterName(x).Equals("Cash", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Consolidated XML wrongly attempts to CREATE/reparent Tally's " +
+                "existing Cash ledger. Regenerate the preview using the " +
+                "original default Cash/Cash-in-Hand flow before export.");
+        if (!liveMasters.TryGetValue(MasterKey("LEDGER", "Cash"), out var cash) ||
+            !Value(cash, "PARENT").Equals("Cash-in-Hand",
+                StringComparison.OrdinalIgnoreCase) ||
+            !long.TryParse(Value(cash, "MASTERID"),
+                NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out var masterId) || masterId <= 0)
+            throw new InvalidOperationException(
+                "Bank Contra requires the original linked Tally Cash ledger " +
+                "under Cash-in-Hand with a verified destination MASTERID. " +
+                "It is not a Cash Entry module voucher; no Cash ledger " +
+                "CREATE/ALTER or voucher POST is permitted.");
+    }
+
     private static void RequireCompatible(XElement live, XElement prepared)
     {
         var plannedParent = Value(prepared, "PARENT");

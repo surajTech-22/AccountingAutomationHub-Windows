@@ -514,6 +514,79 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "same-MASTERID ALTER, with full GST/DRCR and prior-accepted " +
             "version guards; cross-branch/amount/date/GUID changes rejected.");
 
+        // CL019 v589 20:30 real Tally: Cash Entry module=0 but Bank
+        // Contra vouchers refer to the standard destination Cash Ledger,
+        // live MASTERID 31 and original parent Cash-in-Hand. The preview
+        // previously staged a conflicting Cash/Create under Karnataka Cash.
+        // Verify the ORIGINAL read-only Tally MASTERID/parent, never silently
+        // reparent, CREATE, or bypass live master-first before voucher POST.
+        var cashGuard = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "RequireExistingDefaultCashForBankVouchers",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "Default Cash master-first live readback guard missing.");
+        var bankContra = System.Xml.Linq.XElement.Parse(Voucher(
+            number: "B-BFF10AAEA9D095199C45F469-BANK-56033",
+            postings: """
+                <ALLLEDGERENTRIES.LIST><LEDGERNAME>KA Bank</LEDGERNAME><AMOUNT>-500000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+                <ALLLEDGERENTRIES.LIST><LEDGERNAME>Cash</LEDGERNAME><AMOUNT>500000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+                """).Replace("<TALLYMESSAGE>", "").Replace("</TALLYMESSAGE>", ""));
+        var liveCash = new System.Xml.Linq.XElement("LEDGER",
+            new System.Xml.Linq.XAttribute("NAME", "Cash"),
+            new System.Xml.Linq.XElement("NAME", "Cash"),
+            new System.Xml.Linq.XElement("PARENT", "Cash-in-Hand"),
+            new System.Xml.Linq.XElement("MASTERID", "31"));
+        void RequireCash(
+            System.Xml.Linq.XElement[] voucherItems,
+            System.Xml.Linq.XElement[] stagedItems,
+            System.Xml.Linq.XElement? live)
+        {
+            var available = new Dictionary<string, System.Xml.Linq.XElement>(
+                StringComparer.OrdinalIgnoreCase);
+            if (live is not null) available.Add("LEDGER|CASH", live);
+            try
+            {
+                cashGuard.Invoke(null, new object[] {
+                    voucherItems, stagedItems, available
+                });
+            }
+            catch (System.Reflection.TargetInvocationException error)
+                when (error.InnerException is InvalidOperationException failure)
+            {
+                throw failure;
+            }
+        }
+        RequireCash([bankContra], [], liveCash);
+        RequireCash([], [], null); // Nothing from Cash/BANK needs a live Cash check.
+        void MustRejectCash(
+            System.Xml.Linq.XElement[] voucherItems,
+            System.Xml.Linq.XElement[] stagedItems,
+            System.Xml.Linq.XElement? live, string reason)
+        {
+            try { RequireCash(voucherItems, stagedItems, live); }
+            catch (InvalidOperationException) { return; }
+            throw new InvalidOperationException(
+                "Unsafe zero-Cash-Entry consolidated bank master gate accepted " + reason);
+        }
+        MustRejectCash([bankContra],
+            [new System.Xml.Linq.XElement("LEDGER",
+                new System.Xml.Linq.XAttribute("NAME", "Cash"),
+                new System.Xml.Linq.XElement("NAME", "Cash"),
+                new System.Xml.Linq.XElement("PARENT", "Karnataka Cash"))],
+            liveCash, "the old conflicting Cash CREATE");
+        MustRejectCash([bankContra], [], null, "missing live Cash");
+        var movedCash = new System.Xml.Linq.XElement(liveCash);
+        movedCash.Element("PARENT")!.Value = "Karnataka Cash";
+        MustRejectCash([bankContra], [], movedCash, "reparented live Cash");
+        var anonymousCash = new System.Xml.Linq.XElement(liveCash);
+        anonymousCash.Element("MASTERID")!.Remove();
+        MustRejectCash([bankContra], [], anonymousCash,
+            "destination Cash without exact MASTERID");
+        Console.WriteLine(
+            "PASS: zero Cash Entry module still keeps original Bank Contra " +
+            "Cash-in-Hand/MASTERID, no duplicate Cash CREATE or unsafe reparent.");
+
         MustReject(Prepared(Voucher(action: "Alter")), "foreign ALTER");
         MustReject(Prepared(Voucher(extra: "TAGNAME=\"MASTER ID\" TAGVALUE=\"3\"")),
             "foreign source MASTERID");
