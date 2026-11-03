@@ -8,6 +8,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using AccountingAutomationHub.Application.Banking;
 using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Application.Gst;
@@ -221,6 +222,18 @@ public sealed class DashboardViewModel :
     private bool _canConfirmTallyLink;
     private bool _isPrivateBranchDashboard;
     private bool _isConsolidatedTallyScope;
+    // Presentation-only projection of the SAME already-prepared branch XML.
+    // Never used to authorize Tally writes or to replace the source binding
+    // version/MASTERID gate. The ordinary Client/FY export matrix is separate.
+    private sealed record ConsolidatedDisplayVoucher(
+        DateTime Date, string Type, string Module, string SourceAnchor);
+    private IReadOnlyList<ConsolidatedDisplayVoucher> _consolidatedDisplayVouchers = [];
+    private IReadOnlyDictionary<string, string> _consolidatedDisplayBindingStates =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private long _consolidatedDisplayClientId = -1;
+    private string _consolidatedDisplayFinancialYear = string.Empty;
+    private string _consolidatedDisplayCompanyKey = string.Empty;
+    private bool _consolidatedDisplayFromSavedPreview;
 
     // Original dashboard Tally link/export applies to the current Client/FY,
     // including separate private branch accounts. No parent-link inheritance.
@@ -238,6 +251,12 @@ public sealed class DashboardViewModel :
         OnPropertyChanged(nameof(HasAnyTallyExportData));
         if (active)
         {
+            // The parent was left with its own 677 Bank/Purchase/Sales rows;
+            // they are NOT the consolidated 349 prepared Voucher objects.
+            // Immediately replace that presentation with the original
+            // consolidated wrapper projection, or 0 until a scoped preview
+            // is available; never display parent totals in consolidated.
+            RefreshConsolidatedTallyExportPresentation();
             Interlocked.Exchange(ref _autoTallySyncPendingMask, 0);
             Interlocked.Exchange(ref _autoTallySyncChangedMask, 0);
             Interlocked.Exchange(ref _autoTallySyncExplicitSelectionMask, 0);
@@ -270,9 +289,15 @@ public sealed class DashboardViewModel :
                     TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
             }
         }
-        else if (TallyExportStatus.StartsWith("Use Generate Consolidated XML", StringComparison.Ordinal))
+        else
         {
-            TallyExportStatus = "Select the branch's source periods and use the normal Tally export.";
+            // Switching BACK to normal Client/FY restores its original
+            // monthly export selector. Consolidated preview counts must not
+            // bleed into single-GSTIN or private-branch export.
+            if (_clientContext.CurrentClient is { } normalClient)
+                InitializeTallyExportPeriods(normalClient, force: true);
+            if (TallyExportStatus.StartsWith("Use Generate Consolidated XML", StringComparison.Ordinal))
+                TallyExportStatus = "Select the branch's source periods and use the normal Tally export.";
         }
         RefreshTallySection();
     }
@@ -2078,6 +2103,9 @@ public sealed class DashboardViewModel :
 
     private void InitializeTallyExportPeriods(ClientProfile client, bool force = false)
     {
+        // The original month matrix reads the PARENT bank/purchase/sales
+        // cache. Consolidated has different, branch-prepared XML authority.
+        if (_isConsolidatedTallyScope) return;
         if (!force && IsTallyExportInteractionActive && IsTallyExportPeriodMatrixInitialized(client))
             return;
 
@@ -4389,6 +4417,198 @@ public sealed class DashboardViewModel :
         return _tallyCoordinator.IsErp9CompatibilityMode || openLinkedCompany is not null;
     }
 
+    // Display-only adapter around the existing consolidated prepared XML.
+    // The original Tally panel, month tiles and status strips are REUSED.
+    // No new voucher generator, separate importer, or DR/CR recomputation.
+    public void ApplyConsolidatedPreparedVoucherDisplay(
+        long clientId, string financialYear, string vouchersXml, bool savedPreview = false)
+    {
+        var client = _clientContext.CurrentClient;
+        if (client is null || client.Id != clientId ||
+            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+            !_isConsolidatedTallyScope) return;
+
+        var document = TallyConsolidatedXmlTextSafety.ParseDocument(
+            vouchersXml, "consolidated read-only Tally panel totals");
+        var rows = new List<ConsolidatedDisplayVoucher>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var voucher in document.Descendants().Where(x =>
+                     x.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase)))
+        {
+            var type = voucher.Elements().FirstOrDefault(x =>
+                x.Name.LocalName.Equals("VOUCHERTYPENAME", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            var number = voucher.Elements().FirstOrDefault(x =>
+                x.Name.LocalName.Equals("VOUCHERNUMBER", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            var dateText = voucher.Elements().FirstOrDefault(x =>
+                x.Name.LocalName.Equals("DATE", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            if (type.Length == 0 || number.Length == 0 ||
+                !DateTime.TryParseExact(dateText, "yyyyMMdd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var date))
+                throw new InvalidDataException(
+                    "Consolidated preview has an invalid original voucher type, number or date.");
+            var anchor = "CONSOLIDATED|" + type + "|" + number;
+            if (!seen.Add(anchor))
+                throw new InvalidDataException(
+                    "Consolidated preview repeats original source identity " + anchor);
+            var module = type.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase" :
+                type.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales" :
+                type.Equals("Journal", StringComparison.OrdinalIgnoreCase) ? "Journal" :
+                type.Equals("Debit Note", StringComparison.OrdinalIgnoreCase) ? "Debit Note" :
+                type.Equals("Contra", StringComparison.OrdinalIgnoreCase) ? "Bank" :
+                type.Equals("Receipt", StringComparison.OrdinalIgnoreCase) ||
+                type.Equals("Payment", StringComparison.OrdinalIgnoreCase) ? "Cash" : type;
+            rows.Add(new ConsolidatedDisplayVoucher(date, type, module, anchor));
+        }
+        _consolidatedDisplayVouchers = rows;
+        _consolidatedDisplayClientId = clientId;
+        _consolidatedDisplayFinancialYear = financialYear.Trim();
+        _consolidatedDisplayFromSavedPreview = savedPreview;
+        RefreshConsolidatedTallyExportPresentation();
+    }
+
+    public void RefreshConsolidatedTallyExportPresentation()
+    {
+        if (!_isConsolidatedTallyScope) return;
+        var client = _clientContext.CurrentClient;
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        if (client is null || client.Id != _consolidatedDisplayClientId ||
+            !client.FinancialYear.Equals(_consolidatedDisplayFinancialYear,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _consolidatedDisplayVouchers = [];
+            _consolidatedDisplayBindingStates =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+        var key = link is not null && client is not null && link.ClientId == client.Id
+            ? link.CompanyKey : string.Empty;
+        _consolidatedDisplayCompanyKey = key;
+        try
+        {
+            _consolidatedDisplayBindingStates = client is not null && key.Length > 0
+                ? _tallyRepository.ReadConsolidatedVoucherStates(
+                    client.Id, client.FinancialYear, key)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // Do not present existing records as unimported/ready if the
+            // source-binding database is unreadable. Keep an unknown state.
+            _consolidatedDisplayBindingStates = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase) { ["__AUTHORITY_UNAVAILABLE"] = "ReadError" };
+        }
+
+        // The existing original month tiles are regenerated from prepared
+        // destination vouchers, not the unrelated parent accounting cache.
+        // Their numbers are indicative; only a fresh Tally snapshot can
+        // authorize CREATE/ALTER/readback.
+        var (fyFrom, _) = client is null
+            ? (new DateTime(2000, 4, 1), new DateTime(2001, 3, 31))
+            : TallyLiveConnectionCoordinator.FinancialYearDates(client.FinancialYear);
+        var verified = _consolidatedDisplayBindingStates
+            .Where(x => x.Value.Equals("Verified", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        void Fill(ObservableCollection<TallyExportMonthOption> target, string module)
+        {
+            target.Clear();
+            for (var i = 0; i < 12; i++)
+            {
+                var first = fyFrom.AddMonths(i);
+                var last = first.AddMonths(1).AddDays(-1);
+                var keys = _consolidatedDisplayVouchers.Where(v =>
+                    v.Module.Equals(module, StringComparison.OrdinalIgnoreCase) &&
+                    v.Date >= first && v.Date <= last)
+                    .Select(v => v.SourceAnchor).ToArray();
+                var option = BuildTallyExportMonthOption(i, first, last, keys, verified);
+                option.IsSelected = keys.Length > 0;
+                target.Add(option);
+            }
+        }
+        Fill(BankTallyExportMonths, "Bank");
+        Fill(PurchaseTallyExportMonths, "Purchase");
+        Fill(SalesTallyExportMonths, "Sales");
+        Fill(CashTallyExportMonths, "Cash");
+        Fill(JournalTallyExportMonths, "Journal");
+        RefreshTallyExportSummaryState();
+    }
+
+    private void RefreshConsolidatedTallySummaryFromPreparedSources()
+    {
+        // A Tally-linked Client/FY is required to classify any accepted/
+        // verified source; never count normal parent's Fingerprints here.
+        if (_consolidatedDisplayBindingStates.ContainsKey("__AUTHORITY_UNAVAILABLE"))
+        {
+            TallyExportTotalTransactions = 0;
+            TallyExportSelectedTransactions = 0;
+            TallyExportHealthState = "Red";
+            return;
+        }
+        var total = 0;
+        var verified = 0;
+        var accepted = 0;
+        var held = 0;
+        var pending = 0;
+        foreach (var module in new[] { "Bank", "Purchase", "Sales", "Cash", "Journal", "Debit Note" }
+                     .Concat(_consolidatedDisplayVouchers.Select(v => v.Module)
+                         .Except(new[] { "Bank", "Purchase", "Sales", "Cash", "Journal", "Debit Note" },
+                             StringComparer.OrdinalIgnoreCase)
+                         .Distinct(StringComparer.OrdinalIgnoreCase)))
+        {
+            var entries = _consolidatedDisplayVouchers.Where(v =>
+                v.Module.Equals(module, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var moduleVerified = entries.Count(row =>
+                _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
+                state.Equals("Verified", StringComparison.OrdinalIgnoreCase));
+            var moduleAccepted = entries.Count(row =>
+                _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
+                state.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
+            var moduleHeld = entries.Count(row =>
+                _consolidatedDisplayBindingStates.TryGetValue(row.SourceAnchor, out var state) &&
+                !state.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                !state.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase));
+            var modulePending = entries.Length - moduleVerified - moduleAccepted - moduleHeld;
+            total += entries.Length;
+            verified += moduleVerified;
+            accepted += moduleAccepted;
+            held += moduleHeld;
+            pending += modulePending;
+            TallyExportModuleStatuses.Add(new TallyExportModuleStatus
+            {
+                Module = module,
+                TotalCount = entries.Length,
+                SelectedCount = entries.Length,
+                ImportedCount = moduleVerified,
+                ReadyCount = modulePending,
+                State = entries.Length == 0 ? "Neutral" :
+                    modulePending == 0 && moduleAccepted == 0 && moduleHeld == 0 ? "Green" : "Red",
+                Detail = $"Prepared {entries.Length:N0} · live verified {moduleVerified:N0} · " +
+                         $"Tally accepted awaiting readback {moduleAccepted:N0} · " +
+                         $"unverified new source {modulePending:N0} · held {moduleHeld:N0}. " +
+                         "Ready tile means source awaiting the original fresh Tally duplicate/preflight gate."
+            });
+        }
+        TallyExportTotalTransactions = total;
+        TallyExportSelectedTransactions = total;
+        TallyExportHealthState = total == 0 ? "Neutral" :
+            accepted == 0 && pending == 0 && held == 0 ? "Green" : "Red";
+        // Existing status strip only: no extra panel, no new buttons.
+        // Show the different denominators instead of claiming local source
+        // rows are already present in destination Tally.
+        var note = total == 0
+            ? "Consolidated source preview is not loaded. Generate Consolidated XML to load the original branch-prepared counts."
+            : $"Consolidated prepared {total:N0} · AAH verified {verified:N0} · " +
+              $"Tally accepted awaiting exact readback {accepted:N0} · " +
+              $"not yet verified in destination {pending:N0} · held {held:N0}" +
+              (_consolidatedDisplayFromSavedPreview ? " · counts from last saved XML preview" : "") +
+              ". A fresh live Tally check is required before every voucher write.";
+        // Avoid setting TallyExportStatus inside this getter-like method:
+        // its setter calls RefreshTallyExportSummaryState recursively.
+        _consolidatedPresentationStatus = note;
+        OnPropertyChanged(nameof(ConsolidatedPresentationStatus));
+    }
+
+    private string _consolidatedPresentationStatus = string.Empty;
+    public string ConsolidatedPresentationStatus => _consolidatedPresentationStatus;
+
     private void RefreshTallyExportSummaryState()
     {
         var client = _clientContext.CurrentClient;
@@ -4421,6 +4641,12 @@ public sealed class DashboardViewModel :
             : confirmedLinkIsLive
                 ? "Green"
                 : "Neutral";
+
+        if (_isConsolidatedTallyScope)
+        {
+            RefreshConsolidatedTallySummaryFromPreparedSources();
+            return;
+        }
 
         if (!IsTallyExportPeriodMatrixInitialized(client) ||
             !_workspaceStateCache.TryPeekReadOnly(client.Id, client.FinancialYear, out var cached))
