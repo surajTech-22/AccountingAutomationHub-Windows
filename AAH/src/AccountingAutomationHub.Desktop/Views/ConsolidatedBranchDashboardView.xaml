@@ -159,11 +159,9 @@
             </Grid>
             <!-- The EXACT same Dashboard Tally Link / Export / Auto Sync card.
                  Never substitute the Tally Import recovery page in its place. -->
-            <TextBlock Margin="2,12,0,0" FontSize="10"
-                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
-                       Text="Consolidated uses its own existing Client/FY Tally link. Voucher export remains blocked until the separate verified group-import XML route is connected; branch export operates normally."/>
             <views:DashboardView DataContext="{Binding ExistingDashboardWorkspace}"
-                                 TallyOnlyMode="True"/>
+                                 TallyOnlyMode="True"
+                                 ConsolidatedImportWorkspace="{Binding ConsolidatedImportWorkspace}"/>
             <Border Margin="0,14,0,0" Style="{StaticResource CardBorderStyle}">
                 <StackPanel>
                     <TextBlock Text="Historical records reconciliation" FontWeight="SemiBold" FontSize="13"/>
@@ -174,7 +172,7 @@
                 </StackPanel>
             </Border>
             <TextBlock Margin="2,9,0,0" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
-                       Text="Only verified branch-owned saved records count towards consolidated totals. The Tally panel above operates on the existing parent Client/FY authority, not on a merged branch-voucher export."/>
+                       Text="Only verified branch-owned saved records count towards consolidated totals. The original Tally panel uses the consolidated Client/FY link and the same branch-prepared importer as the Tally Import tab; historical parent records are not sent."/>
         </StackPanel>
     </ScrollViewer>
 </UserControl>
