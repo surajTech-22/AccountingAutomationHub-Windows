@@ -351,15 +351,56 @@ internal static class EntryPoint
         Assert(readyGate > 0 && readyGate < successMarker && liveCensus > 0 &&
                hostSource.Contains("RetireVerifiedCleanedGhostAsync(process, installedExe)",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("ReportResidualUpdateHostsWithoutTerminating();",
+               hostSource.Contains("RetireObsoleteUpdateHostsAfterVerifiedRestartAsync(target)",
                    StringComparison.Ordinal) &&
                !hostSource.Contains("Kill(entireProcessTree: true); // old updater",
                    StringComparison.Ordinal),
             "Verified ready was marked SUCCESS before fresh single-instance census or " +
-            "residual old-updater warning; accounting/Tally safety must remain unchanged.");
-        Console.WriteLine("PASS: v593 duplicate AAH regression: post-ready process census " +
-                          "rejects stale/duplicate PIDs, uses completed-cleanup proof only, " +
-                          "and records obsolete updater without killing it.");
+            "verified obsolete updater cleanup; accounting/Tally safety must remain unchanged.");
+        Console.WriteLine("PASS: post-ready process census rejects stale/duplicate PIDs " +
+                          "and verified obsolete updater cleanup runs after genuine AAH restart.");
+
+        // The user's v590 PID 8968 is already HasExited=true: Windows still
+        // enumerates a ghost, but it MUST NOT be killed. Conversely, a genuine
+        // still-running old updater from our cache can be killed only AFTER
+        // the newer AAH has installed and restarted. Other versions/paths,
+        // non-AAH EXEs and same-version update hosts stay untouched.
+        var updateCache = Path.Combine(root, "UpdaterCache");
+        var attempt = "attempt-" + new string('a', 32);
+        string Host(string tag) => Path.Combine(updateCache, tag, attempt, "AAH_Update.exe");
+        var current = new Version(4, 0, 0, 598);
+        Assert(Program.IsObsoleteUpdaterFromCache(Host("v4.0.0.590"), updateCache, current),
+            "Earlier exact-cache v590 updater was not eligible for cleanup after v598 restart.");
+        Assert(!Program.IsObsoleteUpdaterFromCache(Host("v4.0.0.598"), updateCache, current),
+            "Current release updater was incorrectly eligible for killing.");
+        Assert(!Program.IsObsoleteUpdaterFromCache(Host("v4.0.0.599"), updateCache, current),
+            "Newer release updater was incorrectly eligible for killing.");
+        Assert(!Program.IsObsoleteUpdaterFromCache(
+            Path.Combine(updateCache, "v4.0.0.590", attempt, "AccountingAutomationHub.exe"),
+            updateCache, current),
+            "Real AAH executable was incorrectly eligible for updater cleanup.");
+        Assert(!Program.IsObsoleteUpdaterFromCache(
+            Path.Combine(root, "OtherInstallation", "v4.0.0.590", attempt, "AAH_Update.exe"),
+            updateCache, current),
+            "Other installations were eligible for updater cleanup.");
+        Assert(!Program.IsObsoleteUpdaterFromCache(
+            Path.Combine(updateCache, "v4.0.0.590", "attempt-invalid", "AAH_Update.exe"),
+            updateCache, current),
+            "Unverified updater attempt folder was eligible for cleanup.");
+        var cleanupOrder = hostSource.IndexOf(
+            "await RetireObsoleteUpdateHostsAfterVerifiedRestartAsync(target)", StringComparison.Ordinal);
+        var verifiedRestartOrder = hostSource.IndexOf(
+            "if (!await VerifySingleRestartedInstallationAsync(target, restartedPid.Value))",
+            StringComparison.Ordinal);
+        Assert(cleanupOrder > verifiedRestartOrder && cleanupOrder < successMarker &&
+               hostSource.Contains("if (candidate.HasExited)", StringComparison.Ordinal) &&
+               hostSource.Contains("fresh.StartTime.ToUniversalTime() != expectedStart", StringComparison.Ordinal) &&
+               hostSource.Contains("fresh.Kill(entireProcessTree: false);", StringComparison.Ordinal) &&
+               !hostSource.Contains("fresh.Kill(entireProcessTree: true);", StringComparison.Ordinal),
+            "Obsolete updater cleanup must skip already-exited ghosts, verify PID/path/lifetime " +
+            "and never kill the genuine AAH or unrelated child process trees.");
+        Console.WriteLine("PASS: v590 updater cleanup is path/version/PID verified and runs " +
+                          "only after real AAH readiness and single-instance checks.");
         // November 4 v594 CL019: WPF finished all seven verified shutdown
         // stages, and .NET reported HasExited=true for PIDs 15308, 2652 and
         // 2888. The v594 updater kept counting those ALREADY-TERMINATED
