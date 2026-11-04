@@ -262,10 +262,22 @@ public sealed class MasterCentreViewModel : PageViewModel
         if (company.Length == 0) return false;
         if (company.Equals(link.CompanyName.Trim(), StringComparison.OrdinalIgnoreCase))
             return true;
-        // Tally can rename the SAME company while keeping the saved CompanyKey.
-        return _tallyCoordinator.OpenCompanies.Any(live =>
-            live.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
-            company.Equals(live.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+        // The existing parent Tally resolver allows a UNIQUE independently
+        // verified live company-number/GSTIN/BooksFrom match even if Tally
+        // recomputed the display name or CompanyKey. Never pick the last-opened
+        // branch or a same-name unrelated company as the destination.
+        try
+        {
+            if (_tallyCoordinator.OpenCompanies.Count == 0) return false;
+            var linkedDestination = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                link, _tallyCoordinator.SelectedCompany,
+                _tallyCoordinator.OpenCompanies.ToArray(), CurrentFinancialYear);
+            return company.Equals(linkedDestination.Name.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (InvalidOperationException)
+        {
+            return false; // Unsafe/unverified company: no foreign Master selection.
+        }
     }
 
     private long CurrentClientId => _clientContext.CurrentClient?.Id ?? 0;
