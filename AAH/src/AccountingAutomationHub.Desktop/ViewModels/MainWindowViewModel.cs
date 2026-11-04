@@ -2838,6 +2838,14 @@ public sealed class MainWindowViewModel :
     private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
+        // Opting into branch-specific destination voucher types is a
+        // MASTER-FIRST transition. Reuse the existing master importer and
+        // its independent Tally MASTERID/parent readbacks BEFORE preparing
+        // the desired vouchers or issuing any bound ALTER. Already-created
+        // types are idempotently verified, not recreated.
+        if (separateTypes)
+            await ImportConsolidatedMastersAsync(
+                parentId, financialYear, separateTypes, separateCash);
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash);
         var current = _clientContext.CurrentClient;
