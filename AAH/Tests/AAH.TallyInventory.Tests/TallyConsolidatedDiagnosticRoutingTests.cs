@@ -98,6 +98,31 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
             "automatic parent Tally export was not disabled or the original consolidated builder was replaced");
         Console.WriteLine("PASS: consolidated parent never generates/exports normal Live XML; source branch XML and destination import remain original.");
 
+        // Selecting separate voucher types on an already populated
+        // consolidated Tally must run existing voucher-type master CREATE
+        // with fresh destination MASTERID readback BEFORE its normal
+        // previous->desired voucher ALTER loop. Never create a second
+        // import service or another voucher/GST calculation engine.
+        var optionalImportStart = main.IndexOf(
+            "private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(",
+            StringComparison.Ordinal);
+        var masterFirst = main.IndexOf(
+            "if (separateTypes)", optionalImportStart, StringComparison.Ordinal);
+        var createTypes = main.IndexOf(
+            "await ImportConsolidatedMastersAsync(", masterFirst, StringComparison.Ordinal);
+        var prepareTypes = main.IndexOf(
+            "var prepared = await GenerateConsolidatedPreparedXmlAsync(",
+            createTypes, StringComparison.Ordinal);
+        var doImport = main.IndexOf("var result = await importer.ImportAsync(",
+            prepareTypes, StringComparison.Ordinal);
+        Check(optionalImportStart >= 0 &&
+              masterFirst > optionalImportStart &&
+              createTypes > masterFirst &&
+              prepareTypes > createTypes &&
+              doImport > prepareTypes,
+            "Separate voucher types do not create/verify destination masters " +
+            "before entering the existing consolidated voucher ALTER/CREATE importer.");
+
         Check(coordinator.Contains("SaveConsolidatedDiagnosticPackAsync(", StringComparison.Ordinal) &&
               coordinator.Contains("await GenerateDiagnosticPackAsync(", StringComparison.Ordinal) &&
               coordinator.Contains("allowAppLogFallback: false, consolidatedEvidence:", StringComparison.Ordinal),
