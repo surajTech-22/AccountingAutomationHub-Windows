@@ -370,7 +370,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
             .GroupBy(UpsertIncomingIdentityKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(IsTallyMaster).ThenByDescending(item => item.TallyAlterId).First())
             .ToArray();
-        var archiveProtectionById = new Dictionary<long, bool>();
         var unresolvedMergeById = new Dictionary<long, bool>();
         foreach (var source in incomingForUpsert.Where(item =>
                      IsTallyMaster(item) && item.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase)))
@@ -397,8 +396,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
             var id = protectionCandidate.PersistentId;
             if (!unresolvedMergeById.ContainsKey(id))
                 unresolvedMergeById[id] = HasUnresolvedApprovedMerge(id);
-            if (!archiveProtectionById.ContainsKey(id))
-                archiveProtectionById[id] = GetArchiveProtection(id).IsProtected;
         }
 
         using var connection = OpenConnection();
@@ -2220,11 +2217,10 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 TallyCompanyMasterScope.CanMatch(saved, tally))).ToList();
         var mergeAliases = GetMergeAliasMap(clientId, financialYear);
 
-        // Fix82: ReconcileLedgerAuthorityWithTally has its own stale-alias archive path.
-        // Snapshot protection before opening its write transaction so a live MASTERID that
-        // has opening/AAH/Tally usage or an active BankAccount binding cannot be re-archived
-        // by old alias history. Only a real unresolved approved Merge may remain inactive.
-        var protectedAliasMasterIds = new Dictionary<long, bool>();
+        // Only a real unresolved user-approved Merge FROM may remain archived.
+        // Stale alias history is never an independent reason to archive a
+        // freshly verified live Tally Ledger. Capture the merge decision
+        // before the write transaction to preserve Fix81 lock safety.
         var unresolvedAliasMergeIds = new Dictionary<long, bool>();
         foreach (var record in existing.Where(record => record.PersistentId > 0 &&
                      record.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase)))
@@ -2233,7 +2229,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 string.IsNullOrWhiteSpace(canonical) ||
                 TallyMasterIdentity.Equivalent(canonical, record.Name)) continue;
             unresolvedAliasMergeIds[record.PersistentId] = HasUnresolvedApprovedMerge(record.PersistentId);
-            protectedAliasMasterIds[record.PersistentId] = GetArchiveProtection(record.PersistentId).IsProtected;
         }
 
         using var connection = OpenConnection();
