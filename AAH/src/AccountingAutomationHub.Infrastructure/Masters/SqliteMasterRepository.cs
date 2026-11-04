@@ -576,7 +576,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
         record.Parent = string.Equals(record.Parent?.Trim(), "Primary", StringComparison.OrdinalIgnoreCase)
             ? "Primary" : AccountingText.DisplayName(record.Parent);
         record.Company = AccountingText.DisplayName(record.Company);
-        var duplicate = FindNormalizedDuplicate(
+        var duplicate = FindNormalizedDuplicateInCompany(
             record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
             ignoreArchivedTally: IsLocalEditableSource(record.Source),
             tallyCompany: record.Company);
@@ -641,7 +641,17 @@ public sealed class SqliteMasterRepository : IMasterRepository
         return changed;
     }
 
+    // Preserve IMasterRepository's original binary/API contract for all
+    // ordinary single-company callers. Company-aware master edits use the
+    // additional method below instead of altering that shared interface.
     public MasterRecord? FindNormalizedDuplicate(
+        long clientId, string financialYear, string type, string name,
+        long excludePersistentId = 0, bool ignoreArchivedTally = false) =>
+        FindNormalizedDuplicateInCompany(
+            clientId, financialYear, type, name, excludePersistentId,
+            ignoreArchivedTally, tallyCompany: null);
+
+    public MasterRecord? FindNormalizedDuplicateInCompany(
         long clientId, string financialYear, string type, string name,
         long excludePersistentId = 0, bool ignoreArchivedTally = false,
         string? tallyCompany = null)
@@ -766,7 +776,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
         ValidateManualMasterHierarchy(record, originalName);
 
-        var duplicate = FindNormalizedDuplicate(
+        var duplicate = FindNormalizedDuplicateInCompany(
             record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
             tallyCompany: record.Company);
         if (duplicate is not null)
