@@ -43,6 +43,46 @@ public static class TallyBranchConsolidationMasterPlanner
         ("Stock-in-Hand", "Stock")
     ];
 
+    /// <summary>
+    /// Read only the voucher type names that ACTUALLY occur in each original
+    /// branch's already-prepared XML. Do not expand every available Tally type
+    /// into a new branch subtype. This is planning metadata, not accounting
+    /// generation and never carries branch Tally MASTERIDs into the parent.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyCollection<string>> ReadUsedVoucherTypes(
+        IReadOnlyCollection<TallyPreparedBranchXml> branchSources)
+    {
+        ArgumentNullException.ThrowIfNull(branchSources);
+        var result = new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in branchSources)
+        {
+            if (string.IsNullOrWhiteSpace(source.Branch.BranchId) ||
+                string.IsNullOrWhiteSpace(source.Xml) ||
+                result.ContainsKey(source.Branch.BranchId))
+                throw new InvalidOperationException(
+                    "Every branch needs one current, identifiable prepared XML for voucher type planning.");
+            var doc = TallyConsolidatedXmlTextSafety.ParseDocument(
+                source.Xml, "original branch voucher type catalog");
+            var types = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var voucher in doc.Descendants().Where(x =>
+                x.Name.LocalName.Equals("VOUCHER", StringComparison.OrdinalIgnoreCase) &&
+                x.Parent is not null &&
+                x.Parent.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)))
+            {
+                var names = voucher.Elements().Where(x =>
+                    x.Name.LocalName.Equals("VOUCHERTYPENAME", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => x.Value.Trim()).ToArray();
+                if (names.Length != 1 || names[0].Length == 0)
+                    throw new InvalidOperationException(
+                        "Prepared branch voucher has no single original Tally Voucher Type: " +
+                        source.Branch.DisplayName);
+                types.Add(names[0]);
+            }
+            result.Add(source.Branch.BranchId, types.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+        return result;
+    }
+
     public static TallyBranchMasterPlan Build(
         string destinationCompanyName,
         string destinationCompanyKey,
@@ -52,7 +92,8 @@ public static class TallyBranchConsolidationMasterPlanner
         bool freshDestinationMasterAuthorityVerified,
         bool separateVoucherTypes = false,
         bool separateCashLedgers = false,
-        IReadOnlyCollection<string>? eligibleVoucherTypes = null)
+        IReadOnlyCollection<string>? eligibleVoucherTypes = null,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedVoucherTypesByBranch = null)
     {
         if (string.IsNullOrWhiteSpace(destinationCompanyName) ||
             string.IsNullOrWhiteSpace(destinationCompanyKey))
@@ -67,6 +108,26 @@ public static class TallyBranchConsolidationMasterPlanner
             throw new InvalidOperationException("The destination's applicable voucher type catalog is required when branch voucher types are enabled.");
 
         var normalized = branches.OrderBy(x => x.BranchId, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (separateVoucherTypes)
+        {
+            if (usedVoucherTypesByBranch is null ||
+                usedVoucherTypesByBranch.Count != normalized.Length ||
+                normalized.Any(branch =>
+                    !usedVoucherTypesByBranch.TryGetValue(branch.BranchId, out var used) || used is null))
+                throw new InvalidOperationException(
+                    "Current original branch voucher usage is required before creating separate voucher types.");
+            var catalog = eligibleVoucherTypes!.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var (branchId, used) in usedVoucherTypesByBranch)
+            {
+                if (!normalized.Any(b => b.BranchId.Equals(branchId, StringComparison.OrdinalIgnoreCase)) ||
+                    used.Any(name => string.IsNullOrWhiteSpace(name) ||
+                        !catalog.Contains(name.Trim()) ||
+                        normalized.Any(b => name.Trim().EndsWith(" - " + b.DisplayName,
+                            StringComparison.OrdinalIgnoreCase))))
+                    throw new InvalidOperationException(
+                        "Original branch voucher type is not a verified base type in linked Tally: " + branchId);
+            }
+        }
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var commonPan = "";
@@ -150,8 +211,7 @@ public static class TallyBranchConsolidationMasterPlanner
             }
             if (!separateVoucherTypes) continue;
 
-            foreach (var baseType in eligibleVoucherTypes!
-                         .Where(x => !string.IsNullOrWhiteSpace(x))
+            foreach (var baseType in usedVoucherTypesByBranch![branch.BranchId]
                          .Distinct(StringComparer.OrdinalIgnoreCase)
                          .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
