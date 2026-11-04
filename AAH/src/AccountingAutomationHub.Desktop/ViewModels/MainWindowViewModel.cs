@@ -2635,7 +2635,9 @@ public sealed class MainWindowViewModel :
         // Original branch-prepared XML is authoritative for the numeric
         // Tally selection projection. The old parent 677-row summary is not.
         _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
-            parentId, financialYear, result.VouchersXml);
+            parentId, financialYear, result.VouchersXml,
+            voucherTypeParents: result.VoucherTypeBaseByDestination,
+            configuredBranchNames: configured.Select(branch => branch.Name).ToArray());
         _lastConsolidatedDisplayPreviewToken = string.Empty;
         return result with
         {
@@ -2801,8 +2803,14 @@ public sealed class MainWindowViewModel :
             if (_lastConsolidatedDisplayPreviewToken.Equals(token, StringComparison.Ordinal))
                 return;
             var xml = File.ReadAllText(sourcePath, System.Text.Encoding.UTF8);
+            // Recover the same original branch parent categories when
+            // reopening the existing Downloads preview. This only drives
+            // presentation: never treat a saved XML as posting evidence.
+            var branches = ClientBranchCatalog.Resolve(client,
+                _applicationPreferences.Get(ClientBranchCatalog.Key(client.Id)));
             _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
-                client.Id, client.FinancialYear, xml, savedPreview: true);
+                client.Id, client.FinancialYear, xml, savedPreview: true,
+                configuredBranchNames: branches.Select(branch => branch.Name).ToArray());
             _lastConsolidatedDisplayPreviewToken = token;
         }
         catch (Exception ex)
