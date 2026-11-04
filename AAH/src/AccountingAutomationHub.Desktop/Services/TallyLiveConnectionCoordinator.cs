@@ -4021,6 +4021,16 @@ Tally-style report availability
                     fromDate,
                     toDate);
 
+                // If separate branch books were enabled while this background
+                // snapshot was being prepared, discard the legacy parent work
+                // before it can be written back or displayed as current.
+                if (IsConsolidatedParentClient(client))
+                {
+                    DeleteLiveXmlIfPresent(client, requireDeleted: true);
+                    throw new InvalidOperationException(
+                        "Consolidated parent activated during ordinary XML preparation; " +
+                        "no legacy parent XML was published.");
+                }
                 var folder = GetLiveXmlFolder(client);
                 Directory.CreateDirectory(folder);
                 var xmlPath = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT.xml");
@@ -4068,6 +4078,7 @@ Tally-style report availability
         catch (Exception exception)
         {
             LiveXmlStatus = "Live Tally XML needs attention: " + exception.Message;
+            LastLiveXmlPath = string.Empty;
             LastLiveXmlReadyVouchers = 0;
             LastLiveXmlNewMasters = 0;
             Changed?.Invoke(this, EventArgs.Empty);
