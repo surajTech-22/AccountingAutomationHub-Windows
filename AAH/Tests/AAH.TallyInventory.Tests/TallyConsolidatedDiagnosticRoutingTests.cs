@@ -61,7 +61,10 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
                   StringComparison.Ordinal) &&
               coordinator.Contains("AAH_TALLY_LIVE_CURRENT_STATUS.txt", StringComparison.Ordinal) &&
               coordinator.Contains("Cannot remove stale ordinary parent Live XML.",
-                  StringComparison.Ordinal),
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("Consolidated parent activated during ordinary XML preparation;",
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("LastLiveXmlPath = string.Empty;", StringComparison.Ordinal),
             "ordinary background Live XML still generates wrong consolidated parent ALTERs or leaves stale unsafe files");
 
         var exportStart = coordinator.IndexOf(
