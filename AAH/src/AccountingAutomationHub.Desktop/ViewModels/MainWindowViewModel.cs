@@ -2434,9 +2434,15 @@ public sealed class MainWindowViewModel :
                 var fingerprints = new List<(ClientProfile Client, string BranchName, string Fingerprint)>();
                 foreach (var identity in identities)
                 {
-                    var child = _clientRepository.GetById(identity.ClientId)
-                        ?? throw new InvalidOperationException(
-                            "Saved original branch Client/FY missing before type planning.");
+                    // Private branch accounts are separate scopes, not
+                    // necessarily entries in the parent Client Directory.
+                    // Resolve through the ORIGINAL branch account catalog.
+                    var child = _privateBranchAccounts.GetOrCreate(
+                        parent.Id, identity.BranchId, identity.DisplayName, identity.Gstin);
+                    if (child.Id != identity.ClientId ||
+                        !child.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(
+                            "Original private branch Client/FY changed before type planning.");
                     var (xml, _, fingerprint) = await PrepareMissingBranchXmlAsync(
                         child, identity.DisplayName, financialYear);
                     prepared.Add(new TallyPreparedBranchXml(
