@@ -189,6 +189,88 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
         Console.WriteLine("PASS: original detailed Tally ZIP and linked coordinator count/refresh verified ALTER separately from CREATE.");
 
 
+        // CL019 v597 (4 Nov): compare FOUR actual consolidated UI behaviors
+        // against the already implemented SINGLE-client code. Do not create
+        // another Tally router, connection record, or voucher import method.
+        var actualDashboard = Source("AccountingAutomationHub.Desktop/ViewModels",
+            "DashboardViewModel.cs");
+        var actualTallyPage = Source("AccountingAutomationHub.Desktop/ViewModels",
+            "TallyClientViewModel.cs");
+        var workspaceCatalog = Source("AccountingAutomationHub.Desktop/Services",
+            "BranchAccountingWorkspaceCatalog.cs");
+        var shellXaml = Source("AccountingAutomationHub.Desktop", "MainWindow.xaml");
+        var singularTallyXaml = Source("AccountingAutomationHub.Desktop/Views",
+            "TallyClientView.xaml");
+
+        // 1: Top link stages must use the singular module's saved Client/FY
+        // link and explicit pending-selection gate. A branch selection cannot
+        // be inherited when the active client switches to Consolidated.
+        Check(actualTallyPage.Contains("return link is null || !link.CompanyKey.Equals(company.CompanyKey",
+                    StringComparison.Ordinal) &&
+              actualTallyPage.Contains("public string LinkActionText => HasLinkedCompany ? \"Change Link\" : \"Confirm Link\";",
+                    StringComparison.Ordinal) &&
+              main.Contains("public string TallyLinkActionLabel", StringComparison.Ordinal) &&
+              main.Contains("return _tallyCoordinator.IsCurrentSelectionPending() ? \"Change Link\" : \"Linked\";",
+                    StringComparison.Ordinal) &&
+              main.Contains("ConfirmTopTallyLinkAsync, CanConfirmTopTallyLink", StringComparison.Ordinal) &&
+              main.Contains("_tallyCoordinator.RestoreSelectionForActiveClientScope();", StringComparison.Ordinal) &&
+              coordinator.Contains("public void RestoreSelectionForActiveClientScope()", StringComparison.Ordinal) &&
+              coordinator.Contains("_repository.GetLinkForClient(current.Id)", StringComparison.Ordinal) &&
+              shellXaml.Contains("Content=\"{Binding TallyLinkActionLabel}\"", StringComparison.Ordinal),
+            "TOP LINK: normal ClientId/FY Link / Change Link / Linked stages or workspace selection reset missing.");
+
+        // 2: Original single-client panel hides any module whose source
+        // period count is zero. Consolidated reuses those EXACT 12 month
+        // tiles and must do the same for Cash AND all other modules.
+        foreach (var (label, collection) in new[]
+                 {
+                     ("Bank", "BankTallyExportMonths"), ("Purchase", "PurchaseTallyExportMonths"),
+                     ("Sales", "SalesTallyExportMonths"), ("Cash", "CashTallyExportMonths"),
+                     ("Journal", "JournalTallyExportMonths")
+                 })
+            Check(actualDashboard.Contains(
+                      $"public bool Has{label}ExportData => {collection}.Any(option => option.SourceCount > 0);",
+                      StringComparison.Ordinal),
+                $"ZERO MODULE: {label} is forced visible without positive source counts.");
+        Check(normalDashboardXaml.Contains(
+                  "Visibility=\"{Binding HasCashExportData, Converter={StaticResource BooleanToVisibilityConverter}}\"",
+                  StringComparison.Ordinal) &&
+              actualDashboard.Contains("Fill(CashTallyExportMonths, \"Cash\");", StringComparison.Ordinal),
+            "CASH ENTRY: original single-client source-count visibility or consolidated prepared XML count mapping was bypassed.");
+
+        // 3: Original card's own green/red/neutral template is unchanged.
+        // Consolidated must use its same LIVE CompanyKey/connection + error
+        // conditions, never turn green on stored 'Verified' states alone.
+        Check(normalDashboardXaml.Contains(
+                  "DataTrigger Binding=\"{Binding TallyExportHealthState}\" Value=\"Green\"",
+                  StringComparison.Ordinal) &&
+              actualDashboard.Contains("var liveAuthorityReady = IsConfirmedTallyLinkLive(liveLink, liveCompany)",
+                  StringComparison.Ordinal) &&
+              actualDashboard.Contains("!_tallyCoordinator.IsBusy && !HasTallyError;",
+                  StringComparison.Ordinal) &&
+              actualDashboard.Contains("allCurrentVersionsVerified &&", StringComparison.Ordinal) &&
+              actualDashboard.Contains("!_consolidatedDisplayFromSavedPreview ? \"Green\" : \"Red\";",
+                  StringComparison.Ordinal),
+            "PANEL COLOR: saved prepared preview alone incorrectly paints a green live Tally export state.");
+
+        // 4: Add the PRE-EXISTING singular Tally authority / deleted-voucher
+        // recovery page as its OWN consolidated navigation item. The original
+        // Tally Import screen stays untouched and branch-prepared writes stay
+        // in its verified wrapper, never in normal parent's recovery writer.
+        Check(main.Contains("choices.Add(_tallyNavigationItem);", StringComparison.Ordinal) &&
+              main.Contains("choices.Add(new NavigationItem(\"Tally Import\"", StringComparison.Ordinal) &&
+              main.Contains("() => { _tallyClientViewModel.RefreshLocal(); return _tallyClientViewModel; }",
+                  StringComparison.Ordinal) &&
+              workspaceCatalog.Contains("[\"Dashboard\", \"Tally Import\", \"Tally\"]",
+                  StringComparison.Ordinal) &&
+              singularTallyXaml.Contains("Deleted / Missing in Tally", StringComparison.Ordinal) &&
+              actualTallyPage.Contains("_coordinator.IsCurrentClientConsolidatedParent", StringComparison.Ordinal) &&
+              actualTallyPage.Contains("Consolidated parent restore is blocked.", StringComparison.Ordinal) &&
+              coordinator.Contains("public bool IsCurrentClientConsolidatedParent =>",
+                  StringComparison.Ordinal),
+            "SEPARATE TALLY: original recovery module not reused, or unsafe parent legacy source restore allowed.");
+        Console.WriteLine("PASS: all FOUR singular-client Tally parity contracts: top link stages, zero-cash visibility, live-status colors, separate recovery module.");
+
         Console.WriteLine("PASS: consolidated Tally reuses existing full diagnostic ZIP in parent AutoFolder, captures live evidence and preserves previous ZIP.");
     }
 }
