@@ -40,7 +40,7 @@ internal static class Program
     internal static bool IsConfirmedKernelTermination(bool managedHasExited, uint nativeWaitResult) =>
         managedHasExited && nativeWaitResult == WaitObject0;
 
-    private static bool IsConfirmedKernelTermination(Process process)
+    internal static bool IsConfirmedKernelTermination(Process process)
     {
         if (!OperatingSystem.IsWindows() || !process.HasExited) return false;
         // Process.Handle is an OS kernel handle to this exact process object,
