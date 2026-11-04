@@ -338,6 +338,7 @@ internal static class Program
         TallyConsolidatedSourceRefreshTests.Run();
         TallyConsolidatedBankSourceTests.Run();
         TallyConsolidatedVoucherImportGuardTests.Run();
+        TallyConsolidatedManualXmlTests.Run();
         TallyConsolidatedVoucherDisplayClassifierTests.Run();
         TallyConsolidatedBranchSourceTests.Run();
         TallyConsolidatedXmlTextSafetyTests.Run();
