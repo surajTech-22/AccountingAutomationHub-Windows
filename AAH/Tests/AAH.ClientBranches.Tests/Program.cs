@@ -258,7 +258,8 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
-Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
+Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(", StringComparison.Ordinal) &&
+      shellModel.Contains("client, _dashboardViewModel,", StringComparison.Ordinal) &&
       shellModel.Contains("Consolidated · existing Dashboard Tally link and export design", StringComparison.Ordinal) &&
       shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
       automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
