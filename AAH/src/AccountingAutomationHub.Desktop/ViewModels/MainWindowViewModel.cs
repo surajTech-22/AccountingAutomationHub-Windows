@@ -3080,6 +3080,11 @@ public sealed class MainWindowViewModel :
                         (types, cash) => VerifyConsolidatedAcceptedReadOnlyAsync(
                             client.Id, client.FinancialYear, types, cash),
                         () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
+                // Both screens reuse the exact same import commands, safety gates,
+                // option selections and prepared-XML statuses. Dashboard must not
+                // display a disabled export card without its real importer.
+                _consolidatedDashboardPage!.AttachExistingConsolidatedImport(
+                    _consolidatedTallyImportPage!);
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0
