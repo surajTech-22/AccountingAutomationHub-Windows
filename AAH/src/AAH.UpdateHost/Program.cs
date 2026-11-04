@@ -1438,9 +1438,9 @@ internal static class Program
             Path.GetFullPath(cacheRoot), Path.GetFullPath(updaterPath));
         var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (segments.Length != 3 ||
-            !Regex.IsMatch(segments[0], @"\\Av\\d+\\.\\d+\\.\\d+\\.\\d+\\z",
+            !Regex.IsMatch(segments[0], @"\Av\d+\.\d+\.\d+\.\d+\z",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
-            !Regex.IsMatch(segments[1], @"\\Aattempt-[0-9a-f]{32}\\z",
+            !Regex.IsMatch(segments[1], @"\Aattempt-[0-9a-f]{32}\z",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
             !segments[2].Equals("AAH_Update.exe", StringComparison.OrdinalIgnoreCase) ||
             !Version.TryParse(segments[0][1..], out var cachedVersion))
