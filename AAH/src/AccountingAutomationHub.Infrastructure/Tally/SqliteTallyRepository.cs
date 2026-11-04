@@ -2537,6 +2537,48 @@ public sealed class SqliteTallyRepository
         return command.ExecuteScalar() is not null;
     }
 
+    /// <summary>
+    /// Identify the exact other saved AAH ownership claims behind a blocked
+    /// consolidated manual ALTER. Diagnostic/read-only ONLY: never reassign,
+    /// clear or ignore a disputed destination MASTERID.
+    /// </summary>
+    public IReadOnlyList<(long ClientId, string EntityType, string SourceAnchor, string State)>
+        ReadTallyMasterIdCompetingClaims(
+            long clientId, string financialYear, string companyKey,
+            string entityType, string sourceAnchor, string masterId)
+    {
+        if (string.IsNullOrWhiteSpace(masterId) ||
+            string.IsNullOrWhiteSpace(companyKey) ||
+            string.IsNullOrWhiteSpace(sourceAnchor))
+            return [];
+        var claims = new List<(long ClientId, string EntityType, string SourceAnchor, string State)>();
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT ClientId, EntityType, SourceAnchor, State
+            FROM TallySourceBindings
+            WHERE CompanyKey=$CompanyKey AND FinancialYear=$FinancialYear
+              AND TallyMasterId=$MasterId COLLATE NOCASE
+              AND NOT (ClientId=$ClientId AND EntityType=$EntityType
+                       AND SourceAnchor=$SourceAnchor COLLATE NOCASE)
+            ORDER BY ClientId, EntityType, SourceAnchor
+            LIMIT 6;
+            """;
+        command.Parameters.AddWithValue("$CompanyKey", companyKey.Trim());
+        command.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
+        command.Parameters.AddWithValue("$MasterId", masterId.Trim());
+        command.Parameters.AddWithValue("$ClientId", clientId);
+        command.Parameters.AddWithValue("$EntityType", entityType.Trim());
+        command.Parameters.AddWithValue("$SourceAnchor", sourceAnchor.Trim());
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            claims.Add((
+                reader.GetInt64(0), reader.GetString(1).Trim(),
+                reader.GetString(2).Trim(), reader.GetString(3).Trim()));
+        return claims;
+    }
+
     public TallySourceBindingVersionState? GetSourceBindingVersionState(
         long clientId, string financialYear, string companyKey, string entityType, string sourceAnchor)
     {
