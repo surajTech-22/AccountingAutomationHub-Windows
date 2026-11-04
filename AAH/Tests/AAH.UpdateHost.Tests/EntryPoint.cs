@@ -299,22 +299,56 @@ internal static class EntryPoint
         Console.WriteLine("PASS: v593 duplicate AAH regression: post-ready process census " +
                           "rejects stale/duplicate PIDs, uses completed-cleanup proof only, " +
                           "and records obsolete updater without killing it.");
-        // The v2 PC verifier reported .HasExited==true for PID 15308
-        // while Windows CIM and Task Manager still listed that SAME process
-        // creation time and executable. Do not regress into an optimistic
-        // post-restart census that silently hides these old PIDs.
+        // November 4 v594 CL019: WPF finished all seven verified shutdown
+        // stages, and .NET reported HasExited=true for PIDs 15308, 2652 and
+        // 2888. The v594 updater kept counting those ALREADY-TERMINATED
+        // process objects solely because they still appeared in the process-
+        // name enumeration. It blocked every retry before any file replacement.
+        // A second independent Windows kernel object wait must distinguish
+        // truly dead handles from still-running or unknown handles.
+        Assert(Program.IsConfirmedKernelTermination(true, 0),
+            "Kernel-signaled terminated process was counted as live.");
+        Assert(!Program.IsConfirmedKernelTermination(false, 0),
+            "Unconfirmed managed process lifetime was treated as exited.");
+        Assert(!Program.IsConfirmedKernelTermination(true, 0x00000102),
+            "WAIT_TIMEOUT (actual running native process) was ignored.");
+        Assert(!Program.IsConfirmedKernelTermination(true, 0xFFFFFFFF),
+            "WAIT_FAILED/unknown native process state was ignored.");
         Assert(!hostSource.Contains(
                    "if (process.HasExited) { process.Dispose(); continue; }",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("var handleSaysExited = process.HasExited;",
+               hostSource.Contains("IsExactInstallationProcess(process.ProcessName, fullPath, installedExe)",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))",
-                   StringComparison.Ordinal) &&
-               hostSource.Contains("Process.HasExited is true. Refusing to disregard it.",
+               hostSource.Contains("if (IsConfirmedKernelTermination(process))", StringComparison.Ordinal) &&
+               hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))", StringComparison.Ordinal) &&
+               hostSource.Contains("Excluding only this ", StringComparison.Ordinal) &&
+               hostSource.Contains("kernel-confirmed dead process from live-install census.",
                    StringComparison.Ordinal),
-            "Managed HasExited alone incorrectly hides an OS-enumerated old AAH PID.");
-        Console.WriteLine("PASS: .NET HasExited and native process-enumeration disagreement " +
-                          "is fail-closed, not ignored as a clean update.");
+            "AAH census must verify exact executable path, OS termination and never skip an unknown live PID.");
+
+        if (OperatingSystem.IsWindows())
+        {
+            using var actualRunning = System.Diagnostics.Process.GetCurrentProcess();
+            Assert(!Program.IsConfirmedKernelTermination(actualRunning),
+                "A real running Windows process was incorrectly considered terminated.");
+            var exitInfo = new System.Diagnostics.ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            exitInfo.ArgumentList.Add("/d");
+            exitInfo.ArgumentList.Add("/c");
+            exitInfo.ArgumentList.Add("exit 0");
+            using var actualExited = System.Diagnostics.Process.Start(exitInfo)
+                ?? throw new InvalidOperationException("Unable to start isolated Windows process for exit verification.");
+            Assert(actualExited.WaitForExit(15000),
+                "Isolated Windows process did not exit.");
+            Assert(Program.IsConfirmedKernelTermination(actualExited),
+                "Real signaled Windows process kernel handle was not recognized as terminated.");
+        }
+        Console.WriteLine("PASS: v594 lingering PID regression: only BOTH managed exit and " +
+                          "signaled original Windows kernel handle exclude dead census entries; " +
+                          "live/unknown processes remain protected.");
 
         Assert(Program.LauncherExitedOrBelongsToInstallation(int.MaxValue, originalExe),
             "Updater blocked a verified release when the launcher already exited before preflight.");
