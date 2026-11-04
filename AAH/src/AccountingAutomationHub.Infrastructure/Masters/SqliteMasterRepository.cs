@@ -564,7 +564,8 @@ public sealed class SqliteMasterRepository : IMasterRepository
         record.Company = AccountingText.DisplayName(record.Company);
         var duplicate = FindNormalizedDuplicate(
             record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
-            ignoreArchivedTally: IsLocalEditableSource(record.Source));
+            ignoreArchivedTally: IsLocalEditableSource(record.Source),
+            tallyCompany: record.Company);
         if (duplicate is not null)
             throw new InvalidOperationException($"Duplicate {record.Type} '{record.Name}' already exists as '{duplicate.Name}'.");
         if (record.PersistentId <= 0)
@@ -628,13 +629,16 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
     public MasterRecord? FindNormalizedDuplicate(
         long clientId, string financialYear, string type, string name,
-        long excludePersistentId = 0, bool ignoreArchivedTally = false)
+        long excludePersistentId = 0, bool ignoreArchivedTally = false,
+        string? tallyCompany = null)
     {
         var requestedKey = MasterIdentityKey(type, name);
         return Get(clientId, financialYear, includeArchived: true)
             .FirstOrDefault(record =>
                 record.PersistentId != excludePersistentId &&
                 !(ignoreArchivedTally && record.IsArchived && IsTallyMaster(record)) &&
+                (tallyCompany is null ||
+                 record.Company.Trim().Equals(tallyCompany.Trim(), StringComparison.OrdinalIgnoreCase)) &&
                 MasterIdentityKey(record).Equals(requestedKey, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -749,7 +753,8 @@ public sealed class SqliteMasterRepository : IMasterRepository
         ValidateManualMasterHierarchy(record, originalName);
 
         var duplicate = FindNormalizedDuplicate(
-            record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId);
+            record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
+            tallyCompany: record.Company);
         if (duplicate is not null)
             throw new InvalidOperationException(
                 $"Duplicate {record.Type} '{record.Name}' already exists as '{duplicate.Name}' from {duplicate.Source}.");
