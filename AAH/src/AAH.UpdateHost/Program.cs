@@ -367,7 +367,11 @@ internal static class Program
                     throw new InvalidOperationException(
                         "AAH updated, but multiple/stale AAH processes or missing restarted PID were detected.");
                 }
-                ReportResidualUpdateHostsWithoutTerminating();
+                // With the new release verified and the real AAH restarted, retire
+                // obsolete *live* updater hosts from this exact GitHub cache.
+                // Terminated Windows/CIM ghosts are already dead and cannot be killed.
+                if (!await RetireObsoleteUpdateHostsAfterVerifiedRestartAsync(target))
+                    Log("WARNING: at least one obsolete updater host was not safely retired; installed AAH is healthy.");
                 Log(restartOnly
                     ? "SUCCESS: AAH " + tag + " already installed; all stale instances exited and existing executable restarted."
                     : "SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
@@ -1420,34 +1424,133 @@ internal static class Program
         }
     }
 
-    // A hanging older UpdateHost is separately actionable only after its
-    // transaction stage is known. Thread count and parent PID are NOT enough
-    // to authorize termination. Log it so no update silently masks the fault.
-    private static void ReportResidualUpdateHostsWithoutTerminating()
+    // Only updater hosts from an older four-component release, launched from
+    // our immutable attempt cache, can be retired. The real desktop process
+    // is named AccountingAutomationHub and is NEVER a candidate here.
+    // This purely lexical helper is also exercised against unrelated paths
+    // and same/newer release versions by the Windows regression suite.
+    internal static bool IsObsoleteUpdaterFromCache(
+        string updaterPath, string cacheRoot, Version installedVersion)
     {
-        var cache = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AccountingAutomationHub", "GitHubAutoUpdate") + Path.DirectorySeparatorChar;
-        foreach (var updater in Process.GetProcessesByName("AAH_Update"))
+        if (string.IsNullOrWhiteSpace(updaterPath) ||
+            string.IsNullOrWhiteSpace(cacheRoot)) return false;
+        var relative = Path.GetRelativePath(
+            Path.GetFullPath(cacheRoot), Path.GetFullPath(updaterPath));
+        var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (segments.Length != 3 ||
+            !Regex.IsMatch(segments[0], @"\\Av\\d+\\.\\d+\\.\\d+\\.\\d+\\z",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            !Regex.IsMatch(segments[1], @"\\Aattempt-[0-9a-f]{32}\\z",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            !segments[2].Equals("AAH_Update.exe", StringComparison.OrdinalIgnoreCase) ||
+            !Version.TryParse(segments[0][1..], out var cachedVersion))
+            return false;
+        return cachedVersion < installedVersion;
+    }
+
+    // This runs ONLY after the new installed binary and restarted genuine AAH
+    // passed their existing readiness + single-instance checks, while THIS
+    // updater still owns the exclusive cross-process installation mutex.
+    // Older hosts may have blocked indefinitely in a historical PowerShell
+    // child wait. They are no longer allowed to remain live after a newer
+    // release has committed. Do not kill a process-name match: validate the
+    // cache release, EXE path and unchanging PID/start-time identity TWICE.
+    private static async Task<bool> RetireObsoleteUpdateHostsAfterVerifiedRestartAsync(
+        string installedExe)
+    {
+        var installedVersionText = FileVersionInfo.GetVersionInfo(installedExe).FileVersion;
+        if (!Version.TryParse(installedVersionText, out var installedVersion))
         {
-            using (updater)
+            Log("WARNING: cannot verify installed version for obsolete updater cleanup.");
+            return false;
+        }
+        var cacheRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AccountingAutomationHub", "GitHubAutoUpdate");
+        var clean = true;
+        foreach (var candidate in Process.GetProcessesByName("AAH_Update"))
+        {
+            using (candidate)
             {
+                if (candidate.Id == Environment.ProcessId) continue;
                 try
                 {
-                    if (updater.Id == Environment.ProcessId || updater.HasExited) continue;
-                    var path = updater.MainModule?.FileName ?? string.Empty;
-                    if (!path.StartsWith(cache, StringComparison.OrdinalIgnoreCase)) continue;
-                    Log("WARNING: older AAH updater PID " + updater.Id +
-                        " remains running from verified cache " + path +
-                        ". No forced termination without transaction-stage proof.");
+                    if (candidate.HasExited)
+                    {
+                        // CL019 v590 PID 8968: CIM can continue listing a dead
+                        // executable for hours. No live process remains to kill.
+                        Log("SKIP: old updater PID " + candidate.Id +
+                            " has already exited; Windows may retain its process record.");
+                        continue;
+                    }
+                    var path = candidate.MainModule?.FileName ?? string.Empty;
+                    if (!IsObsoleteUpdaterFromCache(path, cacheRoot, installedVersion))
+                        continue; // Other installations and same/newer hosts untouched.
+                    var expectedStart = candidate.StartTime.ToUniversalTime();
+                    if (!File.Exists(path) || IsUpdaterCachePathReparsed(cacheRoot, path))
+                    {
+                        Log("WARNING: obsolete updater PID " + candidate.Id +
+                            " has missing/reparsed cache path; refusing to terminate blindly.");
+                        clean = false;
+                        continue;
+                    }
+
+                    using var fresh = Process.GetProcessById(candidate.Id);
+                    if (fresh.HasExited) continue;
+                    var freshPath = fresh.MainModule?.FileName ?? string.Empty;
+                    if (!fresh.ProcessName.Equals("AAH_Update", StringComparison.OrdinalIgnoreCase) ||
+                        fresh.StartTime.ToUniversalTime() != expectedStart ||
+                        !Path.GetFullPath(freshPath).Equals(
+                            Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase) ||
+                        !IsObsoleteUpdaterFromCache(freshPath, cacheRoot, installedVersion))
+                    {
+                        Log("WARNING: updater PID " + candidate.Id +
+                            " changed identity during verification; not killed.");
+                        clean = false;
+                        continue;
+                    }
+
+                    Log("Retiring VERIFIED obsolete updater PID " + candidate.Id +
+                        " from " + path + " after successful AAH " + installedVersion + " restart.");
+                    fresh.Kill(entireProcessTree: false); // Never kill AAH, Tally or child trees.
+                    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    await fresh.WaitForExitAsync(deadline.Token);
+                    Log("PASS: obsolete updater PID " + candidate.Id + " exited.");
+                }
+                catch (ArgumentException) when (candidate.HasExited)
+                {
+                    Log("SKIP: updater PID " + candidate.Id + " exited during verification.");
+                }
+                catch (InvalidOperationException) when (candidate.HasExited)
+                {
+                    Log("SKIP: updater PID " + candidate.Id + " exited during verification.");
                 }
                 catch (Exception exception)
                 {
-                    Log("Could not safely inspect other AAH updater PID " +
-                        updater.Id + ": " + exception.Message);
+                    clean = false;
+                    Log("WARNING: cannot safely retire old updater PID " + candidate.Id +
+                        ": " + exception.GetType().Name + ": " + exception.Message);
                 }
             }
         }
+        return clean;
+    }
+
+    // A reparse point in any cache segment could redirect an otherwise correct
+    // path into an unrelated process location. Refuse cleanup in that case.
+    private static bool IsUpdaterCachePathReparsed(string cacheRoot, string updaterPath)
+    {
+        var root = Path.GetFullPath(cacheRoot);
+        var relative = Path.GetRelativePath(root, Path.GetFullPath(updaterPath));
+        var current = root;
+        if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint)) return true;
+        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            current = Path.Combine(current, segment);
+            if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+                return true;
+        }
+        return false;
     }
 
     private static async Task<int?> StartAndVerifyAsync(string exe, string install)
