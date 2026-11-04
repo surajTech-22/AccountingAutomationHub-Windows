@@ -12,6 +12,7 @@ using AccountingAutomationHub.Domain.Governance;
 using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Infrastructure.Gst;
 using AccountingAutomationHub.Infrastructure.Masters;
+using AccountingAutomationHub.Infrastructure.Tally;
 using AccountingAutomationHub.Infrastructure.Governance;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
