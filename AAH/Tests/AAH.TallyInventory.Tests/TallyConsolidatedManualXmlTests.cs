@@ -61,6 +61,30 @@ internal static class TallyConsolidatedManualXmlTests
                    "ViewModels", "MainWindowViewModel.cs")))
             root = root.Parent;
         Check(root is not null, "source tree must be present for read-only release contract");
+
+        // A live Generate XML click must be incapable of reaching the Tally
+        // importer, even if another method accidentally calls ImportXmlAsync.
+        // Port 65534 deliberately has no Tally server: passing means the
+        // import was rejected before transport, not that it failed on a socket.
+        using (var tally = new TallyHttpService(port: 65534))
+        using (TallyHttpService.BeginReadOnlyTallyScope())
+        {
+            var blocked = false;
+            try
+            {
+                System.Threading.Tasks.Task.Run(async () =>
+                    await tally.ImportXmlAsync(
+                        "<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER></ENVELOPE>"))
+                    .GetAwaiter().GetResult();
+            }
+            catch (InvalidOperationException ex) when (
+                ex.Message.Contains("read-only", StringComparison.OrdinalIgnoreCase) &&
+                ex.Message.Contains("BEFORE transport", StringComparison.Ordinal))
+            {
+                blocked = true;
+            }
+            Check(blocked, "Generate XML guard must reject import on awaited async flow without any network I/O");
+        }
         var infra = File.ReadAllText(Path.Combine(root!.FullName, "AAH", "src",
             "AccountingAutomationHub.Infrastructure", "Tally",
             "TallyConsolidatedVoucherImportService.cs"));
@@ -85,6 +109,9 @@ internal static class TallyConsolidatedManualXmlTests
                  })
             Check(!method.Contains(forbidden, StringComparison.Ordinal),
                 "Generate Consolidated XML must never mutate Tally or its accepted-write database: " + forbidden);
+        Check(view.Contains("using var readOnlyTallyScope = TallyHttpService.BeginReadOnlyTallyScope();", StringComparison.Ordinal) &&
+              view.Contains("Source preview: {result.FinalVouchers} prepared vouchers", StringComparison.Ordinal),
+              "Generate must enforce no Tally writes and retain read-only source counts after a disputed MASTERID");
         Check(view.Contains("File.WriteAllText(vouchersPath, manual.VouchersXml", StringComparison.Ordinal) &&
               !view.Contains("File.WriteAllText(vouchersPath, result.VouchersXml", StringComparison.Ordinal) &&
               view.Contains("AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt", StringComparison.Ordinal) &&

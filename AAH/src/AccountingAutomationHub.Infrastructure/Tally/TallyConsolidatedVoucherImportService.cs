@@ -212,9 +212,20 @@ public sealed class TallyConsolidatedVoucherImportService(
                 if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
                         link.ClientId, financialYear, link.CompanyKey,
                         SourceEntityType, anchor, previous.MasterId))
+                {
+                    var competing = tallyRepository.ReadTallyMasterIdCompetingClaims(
+                        link.ClientId, financialYear, link.CompanyKey,
+                        SourceEntityType, anchor, previous.MasterId);
+                    var details = string.Join("; ", competing.Select(other =>
+                        $"ClientId={other.ClientId}, Type={other.EntityType}, " +
+                        $"Anchor={other.SourceAnchor}, State={other.State}"));
                     throw new InvalidOperationException(
-                        "Another original AAH voucher claims the same destination MASTERID; " +
-                        "manual XML must not ALTER a disputed voucher: " + anchor);
+                        "Destination MASTERID " + previous.MasterId +
+                        " is claimed by another original AAH source; manual XML " +
+                        "must not ALTER or CREATE a disputed voucher: " + anchor +
+                        (details.Length == 0 ? "." : ". Existing claimant(s): " + details +
+                         ". Confirm the original source's full signed DR/CR and saved version before rebinding."));
+                }
                 if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
                     FullVoucherMatches(
                         new ExpectedVoucher(date, type, number, postings, voucher,

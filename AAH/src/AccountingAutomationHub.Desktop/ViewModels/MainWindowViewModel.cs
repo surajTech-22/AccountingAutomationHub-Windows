@@ -2496,6 +2496,10 @@ public sealed class MainWindowViewModel :
             throw new InvalidOperationException("Tally export permission on the host computer is required.");
         if (_tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected)
             throw new InvalidOperationException("Verify the existing Dashboard Tally Link.");
+        // Even an accidental call into the standard importer from this XML
+        // generation path must fail BEFORE transport. No Tally master/voucher
+        // CREATE, ALTER or DELETE can leave the Generate command.
+        using var readOnlyTallyScope = TallyHttpService.BeginReadOnlyTallyScope();
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (link is null || link.ClientId != parentId)
             throw new InvalidOperationException("Confirm the parent Client/FY Tally Link first.");
@@ -2632,13 +2636,44 @@ public sealed class MainWindowViewModel :
             "original consolidated master preview");
         TallyConsolidatedXmlTextSafety.ParseDocument(result.VouchersXml,
             "original consolidated voucher preview");
+        // The branch-prepared source counts are valid even when a different
+        // source has disputed ownership of a live destination MASTERID.
+        // Show source counts in the ORIGINAL Tally panel without treating
+        // those counts as permission to post or as imported vouchers.
+        TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+            branchSourceFingerprints,
+            child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
+        _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
+            parentId, financialYear, result.VouchersXml,
+            voucherTypeParents: result.VoucherTypeBaseByDestination,
+            configuredBranchNames: configured.Select(branch => branch.Name).ToArray());
         TallyConsolidatedManualImportXmlResult? manual = null;
-        if (produceManualImportFiles)
+        try
         {
-            var readonlyMaterializer = new TallyConsolidatedVoucherImportService(
-                _tallyHttpService, tallyRepository: _tallyRepository);
-            manual = await readonlyMaterializer.PrepareManualImportXmlAsync(
-                link, company, result, accountingFinancialYear: financialYear);
+            if (produceManualImportFiles)
+            {
+                var readonlyMaterializer = new TallyConsolidatedVoucherImportService(
+                    _tallyHttpService, tallyRepository: _tallyRepository);
+                manual = await readonlyMaterializer.PrepareManualImportXmlAsync(
+                    link, company, result, accountingFinancialYear: financialYear);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Keep the safe, plainly non-importable source preview available
+            // for the original Dashboard counts. Never leave a stale manual
+            // CREATE/ALTER XML under an importable filename after rejection.
+            TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+                branchSourceFingerprints,
+                child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
+            File.WriteAllText(sourcePreviewPath, result.VouchersXml, System.Text.Encoding.UTF8);
+            _lastConsolidatedDisplayPreviewToken = string.Empty;
+            throw new InvalidOperationException(
+                $"Source preview: {result.FinalVouchers} prepared vouchers from " +
+                $"{result.BranchCount} branch(es). REAL MANUAL IMPORT XML BLOCKED " +
+                "without posting anything to Tally: " + ex.Message +
+                " Resolve disputed source MASTERID ownership before manual import.",
+                ex);
         }
         TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
             branchSourceFingerprints,
@@ -3080,6 +3115,11 @@ public sealed class MainWindowViewModel :
                         (types, cash) => VerifyConsolidatedAcceptedReadOnlyAsync(
                             client.Id, client.FinancialYear, types, cash),
                         () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
+                // Both screens reuse the exact same import commands, safety gates,
+                // option selections and prepared-XML statuses. Dashboard must not
+                // display a disabled export card without its real importer.
+                _consolidatedDashboardPage!.AttachExistingConsolidatedImport(
+                    _consolidatedTallyImportPage!);
             }
 
             PageViewModel view = scope.IsConsolidated && _branchWorkspaceProblem.Length == 0

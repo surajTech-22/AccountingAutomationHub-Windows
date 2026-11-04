@@ -61,6 +61,47 @@ public sealed class TallyHttpService : IDisposable
     private int _activeExportRequests;
     private int _activeImportRequests;
 
+    // Enforce a no-write boundary across every awaited Tally request made by
+    // Generate Consolidated XML. The normal importer remains unaffected when
+    // that separate explicit command is used. AsyncLocal makes this per async
+    // call flow, not a global ban on unrelated Tally activity.
+    private static readonly AsyncLocal<int> ReadOnlyTallyScopeDepth = new();
+
+    public static IDisposable BeginReadOnlyTallyScope()
+    {
+        var priorDepth = ReadOnlyTallyScopeDepth.Value;
+        ReadOnlyTallyScopeDepth.Value = checked(priorDepth + 1);
+        return new ReadOnlyTallyScope(priorDepth);
+    }
+
+    private sealed class ReadOnlyTallyScope(int priorDepth) : IDisposable
+    {
+        private bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            ReadOnlyTallyScopeDepth.Value = priorDepth;
+            _disposed = true;
+        }
+    }
+
+    // All requests in a generated-XML scope must be Tally EXPORT operations.
+    // Tally's HTTP endpoint uses POST even for read-only EXPORT, so the HTTP
+    // verb alone is not evidence that a voucher/master import was sent.
+    private static void RequireNoTallyWriteInReadOnlyScope(string? xml, bool isImport)
+    {
+        if (ReadOnlyTallyScopeDepth.Value == 0) return;
+        var safe = xml ?? string.Empty;
+        if (isImport ||
+            !Regex.IsMatch(safe, @"<TALLYREQUEST>\s*EXPORT\s*</TALLYREQUEST>",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(safe, @"<IMPORTDATA\b|<TALLYREQUEST>\s*IMPORT\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            throw new InvalidOperationException(
+                "Generate Consolidated XML is read-only: a Tally import/mutation " +
+                "request was blocked BEFORE transport. No XML was sent by this request.");
+    }
+
     private enum TallyRuntimeFamily
     {
         Unknown = 0,
@@ -2374,6 +2415,9 @@ public sealed class TallyHttpService : IDisposable
         string xml,
         CancellationToken cancellationToken = default)
     {
+        // Enforce the read-only Generate XML contract at the public import
+        // entry point too, before runtime probes or any Tally transport.
+        RequireNoTallyWriteInReadOnlyScope(xml, isImport: true);
         var response = await PostImportAsync(xml, cancellationToken).ConfigureAwait(false);
         // Any accepted Tally mutation invalidates the pre-import read snapshot. A later
         // verification/read must come from Tally again instead of reusing stale authority.
@@ -3638,6 +3682,7 @@ public sealed class TallyHttpService : IDisposable
         bool isImport)
     {
         var safeXml = xml ?? string.Empty;
+        RequireNoTallyWriteInReadOnlyScope(safeXml, isImport);
         var operation = isImport ? "Import" : "Export";
 
         using var trace = ApplicationPerformanceTrace.Measure(
