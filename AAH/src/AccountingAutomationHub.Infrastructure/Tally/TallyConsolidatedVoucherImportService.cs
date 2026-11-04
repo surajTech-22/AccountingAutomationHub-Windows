@@ -209,6 +209,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                     throw new InvalidOperationException(
                         "Manual XML cannot find one unique bound destination MASTERID for " + anchor);
                 var previous = bound[0];
+                if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
+                        link.ClientId, financialYear, link.CompanyKey,
+                        SourceEntityType, anchor, previous.MasterId))
+                    throw new InvalidOperationException(
+                        "Another original AAH voucher claims the same destination MASTERID; " +
+                        "manual XML must not ALTER a disputed voucher: " + anchor);
                 if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
                     FullVoucherMatches(
                         new ExpectedVoucher(date, type, number, postings, voucher,
@@ -272,7 +278,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                  (reference.Length > 0 && IgnoreCase.Equals(item.Reference, reference) &&
                   (IgnoreCase.Equals(item.VoucherType, type) ||
                    (prepared.VoucherTypeBaseByDestination.TryGetValue(type, out var baseType) &&
-                    IgnoreCase.Equals(item.VoucherType, baseType)))))))
+                    IgnoreCase.Equals(item.VoucherType, baseType)))) ||
+                 // A missing/blank Tally reference or auto-number must not
+                 // authorize re-CREATE of the same original DR/CR under a
+                 // different type. Fail closed for ambiguous manual files.
+                 SamePostings(postings, item.LedgerPostings
+                     .Select(p => (p.LedgerName, p.SignedAmount)).ToArray()))))
                 throw new InvalidOperationException(
                     "Manual CREATE denied: existing Tally voucher may own source " + anchor +
                     ". Resolve its unique MASTERID in AAH instead of duplicating it.");
