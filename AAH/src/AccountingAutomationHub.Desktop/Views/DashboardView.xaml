@@ -896,6 +896,7 @@
                                                            Margin="0,0,0,9"/>
                                                 <WrapPanel Margin="0,0,0,5">
                                                     <CheckBox Content="Separate voucher types per branch (optional)"
+                                                              ToolTip="Only voucher types used in each branch are created under their original Tally parent. Existing vouchers switch type through verified same-MASTERID ALTER, in either direction."
                                                               IsChecked="{Binding SeparateVoucherTypes, Mode=TwoWay}" Margin="0,0,18,5"/>
                                                     <CheckBox Content="Separate branch cash ledgers (optional)"
                                                               IsChecked="{Binding SeparateCashLedgers, Mode=TwoWay}" Margin="0,0,8,5"/>
