@@ -307,7 +307,8 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         bool separateVoucherTypes = false,
         bool separateCashLedgers = false,
         CancellationToken cancellationToken = default,
-        string? accountingFinancialYear = null)
+        string? accountingFinancialYear = null,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedVoucherTypesByBranch = null)
     {
         ArgumentNullException.ThrowIfNull(confirmedLink);
         ArgumentNullException.ThrowIfNull(destination);
@@ -329,7 +330,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         var plan = TallyBranchConsolidationMasterPlanner.Build(
             destination.Name, destination.CompanyKey, financialYear,
             branches, before, true, separateVoucherTypes, separateCashLedgers,
-            separateVoucherTypes ? allVoucherTypes : null);
+            separateVoucherTypes ? allVoucherTypes : null, usedVoucherTypesByBranch);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
 
         // Fail before ANY writes when a base type or generated destination name
@@ -398,7 +399,8 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         IReadOnlyCollection<TallyBranchMasterIdentity> branches,
         bool separateVoucherTypes = false, bool separateCashLedgers = false,
         CancellationToken cancellationToken = default,
-        string? accountingFinancialYear = null)
+        string? accountingFinancialYear = null,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedVoucherTypesByBranch = null)
     {
         ArgumentNullException.ThrowIfNull(confirmedLink);
         ArgumentNullException.ThrowIfNull(destination);
@@ -414,7 +416,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         var plan = TallyBranchConsolidationMasterPlanner.Build(
             destination.Name, destination.CompanyKey, financialYear,
             branches, fresh, true, separateVoucherTypes, separateCashLedgers,
-            separateVoucherTypes ? baseTypes : null);
+            separateVoucherTypes ? baseTypes : null, usedVoucherTypesByBranch);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
         // Generate Consolidated XML is read-only: already existing branch
         // Groups are not repeated in the master CREATE file. Explicitly

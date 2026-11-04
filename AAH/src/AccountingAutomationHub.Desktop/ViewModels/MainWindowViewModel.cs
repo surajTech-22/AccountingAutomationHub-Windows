@@ -2423,9 +2423,40 @@ public sealed class MainWindowViewModel :
         }).ToArray();
         try
         {
+            // Inspect the SAME already-persisted branch vouchers used by the
+            // consolidated XML builder. Only types actually present in a branch
+            // may become destination subtypes; never create one copy of every
+            // type exposed by Tally's entire voucher type catalog.
+            IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedTypes = null;
+            if (separateVoucherTypes)
+            {
+                var prepared = new List<TallyPreparedBranchXml>();
+                var fingerprints = new List<(ClientProfile Client, string BranchName, string Fingerprint)>();
+                foreach (var identity in identities)
+                {
+                    // Private branch accounts are separate scopes, not
+                    // necessarily entries in the parent Client Directory.
+                    // Resolve through the ORIGINAL branch account catalog.
+                    var child = _privateBranchAccounts.GetOrCreate(
+                        parent.Id, identity.BranchId, identity.DisplayName, identity.Gstin);
+                    if (child.Id != identity.ClientId ||
+                        !child.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(
+                            "Original private branch Client/FY changed before type planning.");
+                    var (xml, _, fingerprint) = await PrepareMissingBranchXmlAsync(
+                        child, identity.DisplayName, financialYear);
+                    prepared.Add(new TallyPreparedBranchXml(
+                        identity, xml, Array.Empty<MasterRecord>()));
+                    fingerprints.Add((child, identity.DisplayName, fingerprint));
+                }
+                TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
+                    fingerprints,
+                    child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
+                usedTypes = TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(prepared);
+            }
             var imported = await _consolidatedMasterImporter.ImportMastersAsync(
                 link, destination, identities, separateVoucherTypes, separateCashLedgers,
-                accountingFinancialYear: financialYear);
+                accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 parent, destination, "Consolidated branch master verification: " + imported.Status,
                 0, 0);
@@ -2562,9 +2593,12 @@ public sealed class MainWindowViewModel :
         TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
             branchSourceFingerprints,
             child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
+        var usedTypes = separateTypes
+            ? TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(branchSources)
+            : null;
         var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
             link, company, identities, separateTypes, separateCash,
-            accountingFinancialYear: financialYear);
+            accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes);
         var result = TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);
 
         var safeClient = string.Concat(parent.ClientCode.Where(c =>

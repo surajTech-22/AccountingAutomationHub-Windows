@@ -14,15 +14,23 @@ internal static class TallyBranchMasterPlannerTests
     private static readonly string[] VoucherTypes =
         ["Sales", "Purchase", "Payment", "Receipt", "Journal", "Debit Note", "Credit Note", "Contra"];
 
+    private static readonly IReadOnlyDictionary<string, IReadOnlyCollection<string>> UsedTypes =
+        new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["KA-1"] = ["Sales", "Journal", "Debit Note"],
+            ["TN-1"] = ["Purchase", "Receipt", "Contra"]
+        };
+
     private static TallyBranchMasterPlan Build(
         IReadOnlyCollection<TallyBranchMasterIdentity>? branches = null,
         IReadOnlyCollection<MasterRecord>? existing = null,
         bool verified = true, bool voucherTypes = false, bool separateCash = false,
-        IReadOnlyCollection<string>? eligible = null) =>
+        IReadOnlyCollection<string>? eligible = null,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? used = null) =>
         TallyBranchConsolidationMasterPlanner.Build(
             "ABC Consolidated", "LIVE-DEST-123", Fy,
             branches ?? Branches, existing ?? Array.Empty<MasterRecord>(), verified,
-            voucherTypes, separateCash, eligible);
+            voucherTypes, separateCash, eligible, used);
 
     private static void Check(bool yes, string reason)
     {
@@ -63,19 +71,57 @@ internal static class TallyBranchMasterPlannerTests
               "Tally company identity must not reuse branch company link");
         Console.WriteLine("PASS: compulsory branch groups independent of optional voucher types or cash ledgers.");
 
-        var optional = Build(voucherTypes: true, separateCash: true, eligible: VoucherTypes);
+        var optional = Build(voucherTypes: true, separateCash: true,
+            eligible: VoucherTypes, used: UsedTypes);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(optional);
         Check(optional.Groups.Count == required.Groups.Count &&
               optional.CashLedgers.Count == 2 &&
-              optional.VoucherTypes.Count == VoucherTypes.Length * 2 &&
+              optional.VoucherTypes.Count == 6 &&
               optional.VoucherTypes.Any(x => x.BaseType == "Debit Note" && x.Name == "Debit Note - Karnataka") &&
-              optional.VoucherTypes.Any(x => x.BaseType == "Journal" && x.Name == "Journal - Tamil Nadu") &&
-              optional.VoucherTypes.Any(x => x.BaseType == "Contra" && x.Name == "Contra - Karnataka"),
-              "when enabled ALL selected voucher types, not just Sales/Purchase, must be branch-specific");
+              optional.VoucherTypes.Any(x => x.BaseType == "Journal" && x.Name == "Journal - Karnataka") &&
+              optional.VoucherTypes.Any(x => x.BaseType == "Contra" && x.Name == "Contra - Tamil Nadu") &&
+              !optional.VoucherTypes.Any(x => x.Name == "Payment - Karnataka" ||
+                  x.Name == "Sales - Tamil Nadu" || x.Name == "Credit Note - Tamil Nadu"),
+              "create only actually used branch voucher subtypes, each under its original parent");
         Check(XDocument.Parse(optional.CashLedgerXml).Descendants("LEDGER").Count() == 2 &&
-              XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE").Count() == VoucherTypes.Length * 2,
-              "optional cash and voucher XML previews must not be coupled to group XML");
-        Console.WriteLine("PASS: optional ALL voucher types and optional branch cash ledger XML preview.");
+              XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE").Count() == 6 &&
+              XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE")
+                  .All(v => optional.VoucherTypes.Any(t => t.Name == (string?)v.Attribute("NAME") &&
+                      t.BaseType == (string?)v.Element("PARENT"))),
+              "only used optional subtype masters under their real parents in the unchanged XML layout");
+        Console.WriteLine("PASS: optional used-only branch voucher types and original parent hierarchy.");
+        var xmlUsage = TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(
+        [
+            new TallyPreparedBranchXml(Branches[0], """
+                <ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Alter"><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><REFERENCE>AAH-INTERBANK:TRANSFER-X</REFERENCE><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>
+                """, Array.Empty<MasterRecord>()),
+            new TallyPreparedBranchXml(Branches[1], """
+                <ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><REFERENCE>AAH-INTERBANK:TRANSFER-X</REFERENCE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>
+                """, Array.Empty<MasterRecord>())
+        ]);
+        Check(xmlUsage["KA-1"].Count == 2 &&
+              xmlUsage["KA-1"].Contains("Sales") &&
+              xmlUsage["KA-1"].Contains("Journal") &&
+              xmlUsage["TN-1"].SequenceEqual(["Purchase"]),
+              "actual prepared XML must drive minimal unique type planning; " +
+              "matched interbank source Payment/Receipt must not create unused subtypes");
+        Reject(() => Build(voucherTypes: true, eligible: VoucherTypes),
+            "full Tally catalog without source usage must not multiply voucher types");
+        Reject(() => Build(voucherTypes: true, eligible: VoucherTypes,
+            used: new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["KA-1"] = ["Sales"],
+                ["TN-1"] = ["Unknown Voucher Type"]
+            }), "unknown base type must not become a subtype");
+        Console.WriteLine("PASS: original XML usage, no unused/unknown voucher type proliferation.");
 
         // A fresh Tally MASTERID under the exact correct parent is reused; a
         // name-only collision, unknown parent or wrong type is NOT acceptable.
