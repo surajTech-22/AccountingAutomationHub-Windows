@@ -81,3 +81,17 @@ scanned statement or live Tally operation, and does not sign a Windows setup.
 **Never flip auto-update ON based solely on green compile jobs.**
 Publisher certificates/private keys belong in GitHub encrypted secrets or
 a trusted signing service, never in source control or the release ZIP.
+
+
+## v4.0.0.603 consolidated manual Tally XML release
+
+"Generate Consolidated XML" performs Tally EXPORT/readback only. It never posts
+masters or vouchers. It saves manually importable master and voucher XML only
+when a fresh linked-company snapshot and saved AAH source binding version prove
+unique identity. Existing changed vouchers must use destination MASTERID-bound
+ALTER with the original signed DR/CR; unchanged vouchers are excluded. Only
+unique unbound sources may use CREATE. Unknown, pending, or conflicting identity
+must stop generation, not guess. The original unbound source XML is retained
+separately under a DO_NOT_IMPORT preview filename. Manual import bypasses AAH
+write acknowledgements: re-read/reconcile linked Tally before any later AAH
+automatic posting. Verify SHA256 package and the updater before installation.
