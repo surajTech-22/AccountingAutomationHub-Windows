@@ -827,13 +827,14 @@ internal static class Program
     }
 
     /// <summary>
-    /// A repeated-update race left AAH process handles alive after the app logged
-    /// completed accounting/Tally disposal and final OnExit ownership release.
-    /// Enumerate/verify EVERY executable path before replacement. A running
-    /// process with no complete, post-start verified-shutdown evidence is NEVER
-    /// terminated or overwritten. The update host may retire ONLY an already
-    /// cleaned ghost (same exact installation/PID, observed process start time,
-    /// complete ordered shutdown log), then recensus before transaction.
+    /// User-selected v597 update policy:
+    /// - ONE real active AAH process (prefer its registered shutdown listener)
+    ///   closes gracefully, preserving its normal import/Tally drain.
+    /// - Other LIVE processes of the exact SAME installation are forced closed.
+    /// - Already-exited .NET process objects are NOT alive. Windows may retain
+    ///   their one-thread PID records for hours; never treat those as blockers
+    ///   or attempt to kill them.
+    /// - Foreign installations, Tally and updater hosts are never targeted.
     /// </summary>
     internal static async Task<bool> ShutdownAllVerifiedInstallProcessesAsync(string installedExe)
     {
@@ -844,40 +845,41 @@ internal static class Program
             {
                 if (processes.Count == 0)
                 {
-                    Log("All exact-install AAH processes exited; replacement permitted.");
+                    Log("All live exact-install AAH processes exited; replacement permitted.");
                     return true;
                 }
-                Log("Update shutdown pass " + pass + ": gracefully closing " +
-                    processes.Count + " exact-install AAH process(es): " +
-                    string.Join(",", processes.Select(x => x.Id)));
-                var results = await Task.WhenAll(processes.Select(async process =>
-                    await RequestVerifiedUpdateExitWithRetryAsync(process, installedExe)));
-                if (results.Any(x => !x))
+                var primaryPid = SelectPrimaryGracefulPid(processes.Select(p =>
+                    (pid: p.Id, hasListener: HasRegisteredShutdownListener(p.Id),
+                     hasMainWindow: p.MainWindowHandle != IntPtr.Zero,
+                     startedTicks: p.StartTime.ToUniversalTime().Ticks)).ToArray());
+                Log("Update shutdown pass " + pass + ": primary AAH PID " + primaryPid +
+                    " will close gracefully; forcing ONLY " +
+                    string.Join(",", processes.Where(p => p.Id != primaryPid).Select(p => p.Id)) +
+                    " secondary exact-install AAH process(es).");
+
+                // Force secondary processes FIRST, so they cannot interfere with
+                // the real primary's own verified graceful accounting shutdown.
+                foreach (var process in processes.Where(p => p.Id != primaryPid))
                 {
-                    // The user's v575 failure was a race: a PID without a
-                    // shutdown listener returned false, then exited during
-                    // another sibling's graceful drain/recovery. The old
-                    // updater kept that stale false result and refused to
-                    // replace files even though EVERY AAH PID was gone.
-                    // Never trust the earlier result over a NEW, path-verified
-                    // census of every AAH process from this installation.
-                    var stillRunning = GetSameInstallationProcesses(installedExe);
-                    try
+                    if (!await ForceCloseVerifiedSecondaryAahAsync(process, installedExe))
                     {
-                        if (ShouldDeferAfterFreshProcessCensus(results, stillRunning.Count))
-                        {
-                            Log("Shutdown deferred: " + stillRunning.Count +
-                                " exact-install AAH process(es) still running: " +
-                                string.Join(",", stillRunning.Select(p => p.Id)) +
-                                ". No program files were changed.");
-                            return false;
-                        }
-                        Log("A prior shutdown request returned false but every exact-install " +
-                            "AAH process has since exited; rechecking before application replacement.");
+                        Log("Secondary AAH PID " + process.Id +
+                            " could not be safely identity-verified and ended. No files changed.");
+                        return false;
                     }
-                    finally
+                }
+
+                var primary = processes.Single(p => p.Id == primaryPid);
+                if (!primary.HasExited &&
+                    !await RequestGracefulUpdateExitAsync(
+                        primary, TimeSpan.FromSeconds(90), installedExe))
+                {
+                    if (!primary.HasExited)
                     {
-                        foreach (var process in stillRunning) process.Dispose();
+                        Log("Real primary AAH PID " + primary.Id +
+                            " did not finish graceful accounting/Tally shutdown. " +
+                            "User policy protects the real instance from forced termination.");
+                        return false;
                     }
                 }
             }
@@ -885,20 +887,92 @@ internal static class Program
             {
                 foreach (var process in processes) process.Dispose();
             }
-            // A previous window can briefly spawn another same-path process.
-            // Recheck before entering the manual transaction; never rely on a
-            // prior PID snapshot.
-            await Task.Delay(500);
+            await Task.Delay(350);
         }
+
         var remaining = GetSameInstallationProcesses(installedExe);
         try
         {
-            if (remaining.Count == 0) return true;
-            Log("Cannot replace files: same-install AAH processes remain: " +
-                string.Join(",", remaining.Select(x => x.Id)));
+            if (remaining.Count == 0)
+            {
+                Log("PASS: no live AAH exact-install processes remain after user-selected shutdown.");
+                return true;
+            }
+            Log("Cannot replace files: LIVE exact-install AAH processes remain: " +
+                string.Join(",", remaining.Select(p => p.Id)));
             return false;
         }
-        finally { foreach (var p in remaining) p.Dispose(); }
+        finally { foreach (var process in remaining) process.Dispose(); }
+    }
+
+    // Deterministic authority rule. A registered update listener is a better
+    // indication of the real, initialized AAH than thread count, PID order or
+    // stale Task Manager rows. A visible window breaks ties, then newest start.
+    internal static int SelectPrimaryGracefulPid(
+        IReadOnlyCollection<(int pid, bool hasListener, bool hasMainWindow, long startedTicks)> candidates)
+    {
+        if (candidates.Count == 0)
+            throw new ArgumentException("No active AAH candidates.", nameof(candidates));
+        return candidates.OrderByDescending(x => x.hasListener)
+            .ThenByDescending(x => x.hasMainWindow)
+            .ThenByDescending(x => x.startedTicks)
+            .ThenByDescending(x => x.pid)
+            .First().pid;
+    }
+
+    private static bool HasRegisteredShutdownListener(int pid)
+    {
+        try
+        {
+            using var listener = EventWaitHandle.OpenExisting(
+                @"Local\AccountingAutomationHub.UpdateShutdown.v1." + pid);
+            return true;
+        }
+        catch (WaitHandleCannotBeOpenedException) { return false; }
+        catch (UnauthorizedAccessException)
+        {
+            // An uninspectable listener must not be chosen over a known real
+            // primary. The verified exact-path process remains in the census.
+            Log("Could not inspect AAH shutdown listener for PID " + pid + ".");
+            return false;
+        }
+    }
+
+    private static async Task<bool> ForceCloseVerifiedSecondaryAahAsync(
+        Process candidate, string installedExe)
+    {
+        if (candidate.HasExited) return true;
+        try
+        {
+            // Check identity TWICE before force-close, including lifetime.
+            // A reused PID / different installation is not a valid target.
+            var expectedStart = candidate.StartTime.ToUniversalTime();
+            var expectedPath = candidate.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(expectedPath) ||
+                !IsExactInstallationProcess(candidate.ProcessName, expectedPath, installedExe))
+                throw new InvalidDataException(
+                    "Secondary PID " + candidate.Id + " does not belong to the exact AAH installation.");
+            using var fresh = Process.GetProcessById(candidate.Id);
+            if (fresh.HasExited) return true;
+            if (fresh.StartTime.ToUniversalTime() != expectedStart ||
+                !SameProcessPath(fresh, installedExe))
+                throw new InvalidDataException(
+                    "Secondary AAH PID identity changed before force close.");
+            Log("FORCE-CLOSE user-selected SECONDARY exact-install AAH PID " + candidate.Id +
+                "; the real AAH primary still uses graceful Tally shutdown.");
+            fresh.Kill(entireProcessTree: false);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await fresh.WaitForExitAsync(timeout.Token);
+            return true;
+        }
+        catch (ArgumentException) when (candidate.HasExited) { return true; }
+        catch (InvalidOperationException) when (candidate.HasExited) { return true; }
+        catch (Exception exception)
+        {
+            Log("Secondary AAH PID " + candidate.Id + " force-close failed safely: " +
+                exception.GetType().Name + ": " + exception.Message);
+            return candidate.HasExited;
+        }
     }
 
     /// <summary>
@@ -959,11 +1033,12 @@ internal static class Program
                     // provide its executable or Process.Handle after HasExited.
                     // This branch NEVER kills a process; it only stops counting
                     // one verified dead PID as a live installation blocker.
-                    if (IsConfirmedKernelTermination(process))
+                    if (process.HasExited)
                     {
                         Log("AAH PID " + process.Id +
-                            " is kernel-confirmed dead, despite stale process-name " +
-                            "enumeration. Excluding from live-install census.");
+                            " is already exited per the original .NET process object. " +
+                            "Excluding a stale OS PID record without accessing MainModule, " +
+                            "Process.Handle or calling Kill.");
                         process.Dispose();
                         continue;
                     }
@@ -977,8 +1052,11 @@ internal static class Program
                     if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
                     {
                         if (process.HasExited)
-                            Log("WARNING: AAH PID " + process.Id +
-                                " has managed HasExited but native exit not confirmed. Blocking replacement.");
+                        {
+                            // Exit can race the earlier observation.
+                            process.Dispose();
+                            continue;
+                        }
                         selected.Add(process);
                     }
                     else process.Dispose();
@@ -991,9 +1069,19 @@ internal static class Program
                     // and MainModule. Skip only when a SECOND independent
                     // enumeration proves it absent; otherwise fail closed.
                     if (IsPidStillEnumeratedAsAah(pid))
-                        throw new InvalidDataException(
-                            "AAH PID " + pid + " is still enumerated, but its executable " +
-                            "cannot be verified. Refusing an unsafe replacement.", exception);
+                    {
+                        // A name-only listing does NOT establish running state.
+                        // Windows can retain terminated PIDs with a single
+                        // thread after their .NET Process.HasExited is true.
+                        // Reopen to distinguish a dead PID from a still-live
+                        // uninspectable process before any update transaction.
+                        using var retry = Process.GetProcessesByName("AccountingAutomationHub")
+                            .FirstOrDefault(p => p.Id == pid);
+                        if (retry is not null && !retry.HasExited)
+                            throw new InvalidDataException(
+                                "AAH PID " + pid + " is live but its executable " +
+                                "cannot be verified. Refusing an unsafe replacement.", exception);
+                    }
                 }
                 catch
                 {
