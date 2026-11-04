@@ -112,6 +112,28 @@ internal static class TallyConsolidatedManualXmlTests
         Check(view.Contains("using var readOnlyTallyScope = TallyHttpService.BeginReadOnlyTallyScope();", StringComparison.Ordinal) &&
               view.Contains("Source preview: {result.FinalVouchers} prepared vouchers", StringComparison.Ordinal),
               "Generate must enforce no Tally writes and retain read-only source counts after a disputed MASTERID");
+        // v602 restored original source counts from a cached XML when Tally
+        // Import opened. v603-v604 renamed that file and silently displayed
+        // zero when the new source-only preview had not been generated yet.
+        // Open both consolidated screens using the SAME already-tested
+        // branch-to-consolidated builder, with no Tally import, manual-file
+        // overwrite, or a new accounting summation method.
+        Check(view.Contains("case ConsolidatedBranchDashboardViewModel:", StringComparison.Ordinal) &&
+              view.Contains("case ConsolidatedTallyImportViewModel:", StringComparison.Ordinal) &&
+              view.Contains("QueueConsolidatedSourcePreviewWarm(client);", StringComparison.Ordinal) &&
+              view.Contains("produceManualImportFiles: false, displayOnlyWarm: true", StringComparison.Ordinal) &&
+              System.Text.RegularExpressions.Regex.IsMatch(view,
+                  @"if\s*\(produceManualImportFiles\)\s*foreach\s*\(var filename",
+                  System.Text.RegularExpressions.RegexOptions.CultureInvariant) &&
+              view.Contains("AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt", StringComparison.Ordinal) &&
+              view.Contains("v602 original source-only voucher preview", StringComparison.Ordinal),
+              "consolidated original Tally panels must restore missing counts without overwriting valid manual import XML");
+        var dashboard = File.ReadAllText(Path.Combine(root.FullName, "AAH", "src",
+            "AccountingAutomationHub.Desktop", "ViewModels", "DashboardViewModel.cs"));
+        Check(dashboard.Contains("ReportConsolidatedSourcePreviewLoadFailure(", StringComparison.Ordinal) &&
+              dashboard.Contains("zero is not a verified count", StringComparison.Ordinal) &&
+              dashboard.Contains("RefreshConsolidatedTallySummaryFromPreparedSources();", StringComparison.Ordinal),
+              "a missing source preview must remain distinguishable from an actually empty source");
         Check(view.Contains("File.WriteAllText(vouchersPath, manual.VouchersXml", StringComparison.Ordinal) &&
               !view.Contains("File.WriteAllText(vouchersPath, result.VouchersXml", StringComparison.Ordinal) &&
               view.Contains("AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt", StringComparison.Ordinal) &&

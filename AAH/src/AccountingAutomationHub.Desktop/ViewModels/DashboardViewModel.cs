@@ -235,6 +235,16 @@ public sealed class DashboardViewModel :
     private string _consolidatedDisplayFinancialYear = string.Empty;
     private string _consolidatedDisplayCompanyKey = string.Empty;
     private bool _consolidatedDisplayFromSavedPreview;
+    private string _consolidatedDisplayLoadFailure = string.Empty;
+
+    // Status is presentation-only. Never reinterpret missing source preview
+    // as zero vouchers, or let a failed read authorize Tally CREATE/ALTER.
+    public void ReportConsolidatedSourcePreviewLoadFailure(string status)
+    {
+        if (!_isConsolidatedTallyScope) return;
+        _consolidatedDisplayLoadFailure = status ?? string.Empty;
+        RefreshTallyExportSummaryState();
+    }
 
     // Original dashboard Tally link/export applies to the current Client/FY,
     // including separate private branch accounts. No parent-link inheritance.
@@ -4474,6 +4484,7 @@ public sealed class DashboardViewModel :
                 display.SourceAnchor, preparedHash));
         }
         _consolidatedDisplayVouchers = rows;
+        _consolidatedDisplayLoadFailure = string.Empty;
         _consolidatedDisplayClientId = clientId;
         _consolidatedDisplayFinancialYear = financialYear.Trim();
         _consolidatedDisplayFromSavedPreview = savedPreview;
@@ -4670,13 +4681,17 @@ public sealed class DashboardViewModel :
         // Show the different denominators instead of claiming local source
         // rows are already present in destination Tally.
         var note = total == 0
-            ? "Consolidated source preview is not loaded. Generate Consolidated XML to load the original branch-prepared counts."
+            ? (_consolidatedDisplayLoadFailure.Length > 0
+                ? _consolidatedDisplayLoadFailure
+                : "Loading original branch-prepared voucher XML. Source counts are not yet available; zero is not a verified count.")
             : $"Consolidated prepared {total:N0} · AAH verified {verified:N0} · " +
               $"Tally accepted awaiting exact readback {accepted:N0} · " +
               $"new sources {pending:N0} · changed sources awaiting verified ALTER {changed:N0} · " +
               $"held {held:N0}" +
               (_consolidatedDisplayFromSavedPreview ? " · counts from last saved XML preview" : "") +
-              ". A fresh live Tally check is required before every voucher write.";
+              ". A fresh live Tally check is required before every voucher write." +
+              (_consolidatedDisplayLoadFailure.Length > 0
+                  ? " Preview refresh warning: " + _consolidatedDisplayLoadFailure : "");
         // Avoid setting TallyExportStatus inside this getter-like method:
         // its setter calls RefreshTallyExportSummaryState recursively.
         _consolidatedPresentationStatus = note;
