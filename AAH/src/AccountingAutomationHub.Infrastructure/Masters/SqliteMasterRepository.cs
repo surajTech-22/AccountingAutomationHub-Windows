@@ -426,6 +426,20 @@ public sealed class SqliteMasterRepository : IMasterRepository
                     (!IsTallyMaster(source) || sourceTallyId.Length == 0 ||
                      saved.TallyMasterId.Trim().Length == 0 ||
                      saved.TallyMasterId.Trim().Equals(sourceTallyId, StringComparison.OrdinalIgnoreCase)));
+
+                // Preserve the original singular-client behavior: an unscoped
+                // local suggestion may reuse ONE unambiguous bound ledger.
+                // After branches are consolidated two books can have the same
+                // name, so an unscoped source must never pick either one.
+                if (existing is null && !IsTallyMaster(source) &&
+                    string.IsNullOrWhiteSpace(source.Company))
+                {
+                    var uniqueBound = sameNameCandidates.Where(saved =>
+                        IsTallyMaster(saved) && !saved.IsArchived &&
+                        saved.PersistentId > 0).ToArray();
+                    if (uniqueBound.Length == 1)
+                        existing = uniqueBound[0];
+                }
             }
 
             var preserveArchivedTallyMergeSource = false;
