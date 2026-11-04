@@ -226,7 +226,8 @@ public sealed class DashboardViewModel :
     // Never used to authorize Tally writes or to replace the source binding
     // version/MASTERID gate. The ordinary Client/FY export matrix is separate.
     private sealed record ConsolidatedDisplayVoucher(
-        DateTime Date, string Type, string Module, string SourceAnchor, string ContentHash);
+        DateTime Date, string Type, string Module, string BranchName,
+        string SourceAnchor, string ContentHash);
     private IReadOnlyList<ConsolidatedDisplayVoucher> _consolidatedDisplayVouchers = [];
     private IReadOnlyDictionary<string, (string State, string LastVerifiedHash)> _consolidatedDisplayBindingStates =
         new Dictionary<string, (string State, string LastVerifiedHash)>(StringComparer.OrdinalIgnoreCase);
@@ -4428,7 +4429,10 @@ public sealed class DashboardViewModel :
     // The original Tally panel, month tiles and status strips are REUSED.
     // No new voucher generator, separate importer, or DR/CR recomputation.
     public void ApplyConsolidatedPreparedVoucherDisplay(
-        long clientId, string financialYear, string vouchersXml, bool savedPreview = false)
+        long clientId, string financialYear, string vouchersXml,
+        bool savedPreview = false,
+        IReadOnlyDictionary<string, string>? voucherTypeParents = null,
+        IReadOnlyCollection<string>? configuredBranchNames = null)
     {
         var client = _clientContext.CurrentClient;
         if (client is null || client.Id != clientId ||
@@ -4453,28 +4457,21 @@ public sealed class DashboardViewModel :
                     DateTimeStyles.None, out var date))
                 throw new InvalidDataException(
                     "Consolidated preview has an invalid original voucher type, number or date.");
-            var anchor = TallyConsolidatedVoucherImportService.BuildConsolidatedSourceAnchor(type, number);
-            if (!seen.Add(anchor))
+            // Preserve the real destination type and exact prepared
+            // fingerprint, but display only its ORIGINAL parent type in
+            // the existing Dashboard module tiles. This also reuses
+            // original source anchors on both checkbox directions, including
+            // after the saved XML preview is reloaded from Downloads.
+            var display = TallyConsolidatedVoucherDisplayClassifier.Classify(
+                type, number, voucherTypeParents, configuredBranchNames);
+            if (!seen.Add(display.SourceAnchor))
                 throw new InvalidDataException(
-                    "Consolidated preview repeats original source identity " + anchor);
-            // Payment/Receipt/Contra also occur in CASH. Only the original
-            // bank-source BANK-row anchor identifies a Bank Statement voucher.
-            // Classifying by voucher TYPE alone made all 296 Bank rows look
-            // like Cash in the reused monthly Tally panel.
-            var bankSource = number.StartsWith("BANK-", StringComparison.OrdinalIgnoreCase) ||
-                number.Contains("-BANK-", StringComparison.OrdinalIgnoreCase);
-            var module = bankSource ? "Bank" :
-                type.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? "Purchase" :
-                type.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? "Sales" :
-                type.Equals("Journal", StringComparison.OrdinalIgnoreCase) ? "Journal" :
-                type.Equals("Debit Note", StringComparison.OrdinalIgnoreCase) ? "Debit Note" :
-                type.Equals("Contra", StringComparison.OrdinalIgnoreCase) ||
-                type.Equals("Receipt", StringComparison.OrdinalIgnoreCase) ||
-                type.Equals("Payment", StringComparison.OrdinalIgnoreCase) ? "Cash" : type;
+                    "Consolidated preview repeats original source identity " + display.SourceAnchor);
             var (preparedHash, _) =
                 TallyConsolidatedVoucherImportService.ComputePreparedContentIdentity(voucher);
             rows.Add(new ConsolidatedDisplayVoucher(
-                date, type, module, anchor, preparedHash));
+                date, type, display.Module, display.BranchName,
+                display.SourceAnchor, preparedHash));
         }
         _consolidatedDisplayVouchers = rows;
         _consolidatedDisplayClientId = clientId;
@@ -4613,6 +4610,22 @@ public sealed class DashboardViewModel :
             accepted += moduleAccepted;
             held += moduleHeld;
             pending += modulePending;
+            // Keep Karnataka/Gujarat (and actual destination subtype)
+            // information in the SAME tile tooltip instead of manufacturing
+            // more red/green module tiles for every separate Voucher Type.
+            var branchDetails = entries.Where(row => row.BranchName.Length > 0)
+                .GroupBy(row => row.BranchName, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Key + " " +
+                    group.Count().ToString("N0", CultureInfo.InvariantCulture))
+                .ToArray();
+            var subtypeDetails = entries.Where(row =>
+                    !row.Type.Equals(module, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(row => row.Type, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Key + " " +
+                    group.Count().ToString("N0", CultureInfo.InvariantCulture))
+                .ToArray();
             TallyExportModuleStatuses.Add(new TallyExportModuleStatus
             {
                 Module = module,
@@ -4623,10 +4636,15 @@ public sealed class DashboardViewModel :
                 State = entries.Length == 0 ? "Neutral" :
                     modulePending == 0 && moduleChanged == 0 &&
                     moduleAccepted == 0 && moduleHeld == 0 ? "Green" : "Red",
-                Detail = $"Prepared {entries.Length:N0} · current version verified {moduleVerified:N0} · " +
+                Detail = $"Parent category {module}. Prepared {entries.Length:N0} · current version verified {moduleVerified:N0} · " +
                          $"Tally accepted awaiting readback {moduleAccepted:N0} · " +
                          $"new source {modulePending:N0} · changed source needing previous-version ALTER {moduleChanged:N0} · " +
-                         $"held {moduleHeld:N0}. Only the original full Tally safety gate authorizes writes."
+                         $"held {moduleHeld:N0}. " +
+                         (branchDetails.Length == 0 ? "" :
+                             "Branches: " + string.Join(", ", branchDetails) + ". ") +
+                         (subtypeDetails.Length == 0 ? "" :
+                             "Actual Tally voucher types: " + string.Join(", ", subtypeDetails) + ". ") +
+                         "Only the original full Tally safety gate authorizes writes."
             });
         }
         TallyExportTotalTransactions = total;
