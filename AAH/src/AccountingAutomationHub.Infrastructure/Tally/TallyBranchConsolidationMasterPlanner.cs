@@ -69,6 +69,16 @@ public static class TallyBranchConsolidationMasterPlanner
                 x.Parent is not null &&
                 x.Parent.Name.LocalName.Equals("TALLYMESSAGE", StringComparison.OrdinalIgnoreCase)))
             {
+                // The consolidated wrapper replaces explicitly matched
+                // interbank source Payment/Receipt entries with ONE common
+                // Contra. They do not need branch-specific destination types.
+                var sourceReference = voucher.Elements().FirstOrDefault(x =>
+                    x.Name.LocalName.Equals("REFERENCE", StringComparison.OrdinalIgnoreCase))
+                    ?.Value.Trim() ?? string.Empty;
+                if (sourceReference.StartsWith(
+                        TallyConsolidatedPreparedXmlBuilder.InterbankReferencePrefix,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
                 var names = voucher.Elements().Where(x =>
                     x.Name.LocalName.Equals("VOUCHERTYPENAME", StringComparison.OrdinalIgnoreCase))
                     .Select(x => x.Value.Trim()).ToArray();
