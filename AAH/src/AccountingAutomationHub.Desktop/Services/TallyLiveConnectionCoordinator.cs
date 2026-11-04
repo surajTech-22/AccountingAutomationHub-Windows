@@ -62,12 +62,35 @@ public sealed class TallyLiveConnectionCoordinator :
     private string _outboundModeFy = string.Empty;
     private bool _outboundModeEnabled;
     private Func<ClientProfile, bool>? _outboundAutomaticWorkPending;
+    // The host's existing saved branch accounting mode/ownership decides when
+    // the current ClientId is a consolidated PARENT rather than a branch.
+    // Its normal Purchase/Sales/Journal records are NOT consolidated postings.
+    private Func<ClientProfile, bool>? _consolidatedParentScopeProvider;
     public int PreparedAccountingXmlReadyCount => _lastLiveXmlReadyVouchers;
+
+    public void AttachConsolidatedParentScopeProvider(Func<ClientProfile, bool> provider)
+    {
+        _consolidatedParentScopeProvider = provider
+            ?? throw new ArgumentNullException(nameof(provider));
+        QueueLiveXmlGeneration();
+    }
+
+    private bool IsConsolidatedParentClient(ClientProfile client) =>
+        _consolidatedParentScopeProvider?.Invoke(client) == true;
+
 
     // Signalled only by automatic outbound selection once local preparation is ready.
     // Manual Export never calls this, and no XML is sent here.
     public void SetOutboundAutoExportReady(ClientProfile client, bool ready, string? desiredSourceRevision = null)
     {
+        // Never turn a legacy parent accounting row into an automatic
+        // consolidated Tally CREATE/ALTER. A branch's own private ClientId
+        // continues to use the normal original export rules.
+        if (ready && IsConsolidatedParentClient(client))
+        {
+            SetOutboundAutoExportReady(client, false);
+            return;
+        }
         if (ready)
         {
             // A stale callback from a switched-away client cannot re-arm launch.
@@ -1695,6 +1718,10 @@ public sealed class TallyLiveConnectionCoordinator :
         ArgumentNullException.ThrowIfNull(request);
         var client = _clientContext.CurrentClient
             ?? throw new InvalidOperationException("Open a client before exporting vouchers to Tally.");
+        if (IsConsolidatedParentClient(client))
+            throw new InvalidOperationException(
+                "Consolidated parent export must use the existing branch-prepared Consolidated Tally Import wrapper. " +
+                "Ordinary parent Purchase/Sales/Journal XML cannot CREATE or ALTER consolidated vouchers.");
         var link = _repository.GetLinkForClient(client.Id)
             ?? throw new InvalidOperationException("Confirm a Tally company link in the dashboard first.");
         var company = OpenCompanies.FirstOrDefault(item =>
@@ -3941,6 +3968,24 @@ Tally-style report availability
                 return;
             }
 
+            // Critical CL019 guard: a consolidated parent has ONLY Dashboard +
+            // Consolidated Tally Import. The normal background Live XML builder
+            // sees old parent Purchase/Sales/Journal records and may create
+            // wrong party/tax LEDGERNAMEs (61 rejected Purchase ALTER candidates).
+            // Remove the stale parent preview instead; leave private branch XML
+            // snapshots and the existing consolidated wrapper untouched.
+            if (IsConsolidatedParentClient(client))
+            {
+                DeleteLiveXmlIfPresent(client);
+                LiveXmlStatus = "Consolidated scope: use Generate Consolidated XML in Tally Import. " +
+                                "Ordinary parent Live XML is disabled; branch-prepared DR/CR is authoritative.";
+                LastLiveXmlPath = string.Empty;
+                LastLiveXmlReadyVouchers = 0;
+                LastLiveXmlNewMasters = 0;
+                Changed?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
             var link = _repository.GetLinkForClient(client.Id);
             if (link is null || string.IsNullOrWhiteSpace(link.CompanyName))
             {
@@ -4064,10 +4109,15 @@ Tally-style report availability
             var folder = GetLiveXmlFolder(client);
             var path = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT.xml");
             if (File.Exists(path)) File.Delete(path);
+            // A previous parent's 61-ALTER/12-Journal summary must not
+            // remain next to a removed XML and be mistaken for an import plan.
+            var status = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
+            if (File.Exists(status)) File.Delete(status);
         }
         catch
         {
-            // Link removal must never fail because an old preview could not be deleted.
+            // Link removal/parent scope switch must never fail on a stale
+            // preview file lock. Never authorize a wrong XML because cleanup failed.
         }
     }
 
