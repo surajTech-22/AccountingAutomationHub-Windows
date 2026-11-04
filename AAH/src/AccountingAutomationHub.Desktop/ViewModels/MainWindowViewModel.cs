@@ -498,9 +498,10 @@ public sealed class MainWindowViewModel :
         // parent Purchase/Sales/Journal records as consolidated postings.
         // No new Tally writer or reclassification of branch-prepared DR/CR.
         _tallyCoordinator.AttachConsolidatedParentScopeProvider(client =>
-            BranchAccountingModePreference.IsEnabled(
-                _applicationPreferences.Get(BranchAccountingModePreference.Key(client.Id))) &&
-            _privateBranchAccounts.FindByChild(client.Id) is null);
+            _privateBranchAccounts.FindByChild(client.Id) is null &&
+            (BranchAccountingModePreference.IsEnabled(
+                 _applicationPreferences.Get(BranchAccountingModePreference.Key(client.Id))) ||
+             _privateBranchAccounts.FindByParent(client.Id).Count > 0));
         _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);
         // FIXED41 R5: restore the proven Tally-last startup boundary without reintroducing the
         // old runtime interlock. The coordinator releases only after workspace startup scheduling,
