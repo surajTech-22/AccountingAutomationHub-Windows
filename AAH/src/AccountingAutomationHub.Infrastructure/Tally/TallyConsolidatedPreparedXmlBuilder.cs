@@ -583,7 +583,14 @@ public static class TallyConsolidatedPreparedXmlBuilder
             "Original branch amounts, entries, tax values and journals were not recalculated. " +
             "XML is staged only; live Tally duplicate/readback checks are still mandatory.")
         {
-            RebasedBranchAlterCount = rawSourceAltersConverted
+            RebasedBranchAlterCount = rawSourceAltersConverted,
+            // This is an AAH-only, verified PREPARED type map. It is never
+            // serialized into Tally XML. The original base type remains the
+            // durable source-binding identity when the user later enables
+            // or disables branch-specific destination voucher types.
+            VoucherTypeBaseByDestination = plan.VoucherTypes.ToDictionary(
+                item => item.Name, item => item.BaseType,
+                StringComparer.OrdinalIgnoreCase)
         };
     }
 
@@ -689,4 +696,6 @@ public sealed record TallyConsolidatedPreparedXmlResult(
     // This is a source-company bound master, never the target company's MASTERID.
     // The target's old-version/read-back gate must make the final CREATE/ALTER decision.
     public int RebasedBranchAlterCount { get; init; }
+    public IReadOnlyDictionary<string, string> VoucherTypeBaseByDestination { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
