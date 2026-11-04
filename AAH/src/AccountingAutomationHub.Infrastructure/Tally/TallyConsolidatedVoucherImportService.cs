@@ -92,9 +92,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             // The source identity is the ORIGINAL branch voucher type.
             // Selecting a separate destination type changes the DESIRED Tally
             // version, never its existing AAH source->MASTERID binding.
-            var originalType = prepared.VoucherTypeBaseByDestination.TryGetValue(
-                type, out var sourceBaseType) ? sourceBaseType : type;
-            var anchor = BuildConsolidatedSourceAnchor(originalType, number);
+            var anchor = BuildConsolidatedSourceAnchor(
+                type, number, prepared.VoucherTypeBaseByDestination);
             if (!seen.Add(anchor))
                 throw new InvalidOperationException("Repeated original source anchor in prepared XML.");
             var state = tallyRepository.GetSourceBindingVersionState(
@@ -254,9 +253,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             // across the optional destination voucher-type toggle. Without
             // this mapping a previously verified MASTERID looked unbound,
             // which could incorrectly enter the CREATE path.
-            var originalType = prepared.VoucherTypeBaseByDestination.TryGetValue(
-                type, out var sourceBaseType) ? sourceBaseType : type;
-            var sourceAnchor = BuildConsolidatedSourceAnchor(originalType, number);
+            var sourceAnchor = BuildConsolidatedSourceAnchor(
+                type, number, prepared.VoucherTypeBaseByDestination);
             if (!stableAnchors.Add(sourceAnchor))
                 throw new InvalidOperationException(
                     "Original Bank source was repeated with different voucher treatments: " +
@@ -995,6 +993,24 @@ public sealed class TallyConsolidatedVoucherImportService(
     /// the existing source binding must ALTER that same destination MASTERID.
     /// Normal Sales/Purchase/Journal anchors keep their previous format.
     /// </summary>
+    /// <summary>
+    /// Resolve the immutable branch SOURCE type, not the mutable linked
+    /// destination Tally voucher type. This preserves the old binding from
+    /// the original import when switching Sales -> Sales - Karnataka and
+    /// back, including the original BANK-row direction-independent anchor.
+    /// </summary>
+    public static string BuildConsolidatedSourceAnchor(
+        string voucherType, string preparedNumber,
+        IReadOnlyDictionary<string, string> destinationTypeBaseMap)
+    {
+        ArgumentNullException.ThrowIfNull(destinationTypeBaseMap);
+        var originalType = destinationTypeBaseMap.TryGetValue(
+            (voucherType ?? string.Empty).Trim(), out var baseType) &&
+            !string.IsNullOrWhiteSpace(baseType)
+            ? baseType.Trim() : voucherType;
+        return BuildConsolidatedSourceAnchor(originalType, preparedNumber);
+    }
+
     public static string BuildConsolidatedSourceAnchor(string voucherType, string preparedNumber)
     {
         var number = (preparedNumber ?? string.Empty).Trim();
