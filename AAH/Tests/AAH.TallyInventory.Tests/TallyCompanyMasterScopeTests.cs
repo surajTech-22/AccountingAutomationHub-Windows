@@ -93,15 +93,15 @@ internal static class TallyCompanyMasterScopeTests
             Check(!repo.GetNormalizedDuplicateGroups(ClientId, Fy)
                 .Any(g => g.Any(m => m.Name == "JABBAR SINGH")),
                 "Distinct branch and consolidated JABBAR ledgers were flagged as duplicates.");
-            Check(repo.FindNormalizedDuplicate(
+            Check(repo.FindNormalizedDuplicateInCompany(
                 ClientId, Fy, "Ledger", "JABBAR SINGH",
                 tallyCompany: "Mitansh Branch Tally")?.TallyMasterId == "212",
                 "Branch Master duplicate lookup selected consolidated Tally.");
-            Check(repo.FindNormalizedDuplicate(
+            Check(repo.FindNormalizedDuplicateInCompany(
                 ClientId, Fy, "Ledger", "JABBAR SINGH",
                 tallyCompany: "Mitansh Technology Pvt Ltd Consolidated")?.TallyMasterId == "350",
                 "Consolidated Master duplicate lookup selected branch Tally.");
-            Check(repo.FindNormalizedDuplicate(
+            Check(repo.FindNormalizedDuplicateInCompany(
                 ClientId, Fy, "Ledger", "JABBAR SINGH",
                 tallyCompany: "Another completely different Tally") is null,
                 "A foreign-company same-name Ledger was treated as an in-company duplicate.");
