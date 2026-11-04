@@ -2873,6 +2873,74 @@ public sealed class MainWindowViewModel :
     // accounting rows are source counts and must not be displayed as the number
     // of vouchers successfully imported into the consolidated Tally company.
     // Local read only; never sends a voucher or creates a separate import route.
+    // v602 restored the last source voucher XML immediately on navigation.
+    // v603 split that source-only file from the REAL manual import file, so
+    // a new Client/FY with no source preview remained incorrectly at ZERO
+    // until the user generated XML. Warm the SAME existing branch->consolidated
+    // wrapper once in the background after painting a consolidated screen.
+    // NEVER call the manual XML materializer, voucher writer, or master importer.
+    private void QueueConsolidatedSourcePreviewWarm(ClientProfile client)
+    {
+        if (!_dashboardViewModel.IsConsolidatedTallyScope ||
+            SelectedBranchWorkspace?.IsConsolidated != true || _isPrivateBranchActive ||
+            !_tallyCoordinator.IsConnected || _tallyCoordinator.IsBusy ||
+            _tallyCoordinator.GetCurrentClientLink() is not { } link ||
+            link.ClientId != client.Id)
+            return;
+        var key = client.Id.ToString(CultureInfo.InvariantCulture) + "|" +
+            client.FinancialYear + "|" + link.CompanyKey;
+        if (string.Equals(_consolidatedDisplayWarmScopeKey, key, StringComparison.Ordinal))
+            return;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+        _consolidatedDisplayWarmScopeKey = key;
+        _ = dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            // Delayed execution must recheck the selected workspace/link; a
+            // navigation or switch of company cannot warm the previous scope.
+            if (_clientContext.CurrentClient?.Id != client.Id ||
+                !_clientContext.CurrentClient.FinancialYear.Equals(
+                    client.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
+                SelectedBranchWorkspace?.IsConsolidated != true || _isPrivateBranchActive ||
+                _tallyCoordinator.GetCurrentClientLink()?.CompanyKey != link.CompanyKey)
+                return;
+            _ = WarmConsolidatedSourcePreviewReadOnlyAsync(
+                client.Id, client.FinancialYear, link.CompanyKey);
+        }));
+    }
+
+    private async Task WarmConsolidatedSourcePreviewReadOnlyAsync(
+        long parentId, string financialYear, string companyKey)
+    {
+        try
+        {
+            // Existing wrapper only. This prepares ORIGINAL branch vouchers,
+            // preserves complete signed DR/CR and explicit interbank matching,
+            // refreshes the original Tally tiles and saves a local source-only
+            // preview. No manually importable XML, Tally mutation, or diagnostic
+            // pack is created by opening a dashboard.
+            await GenerateConsolidatedPreparedXmlAsync(
+                parentId, financialYear, separateTypes: false, separateCash: false,
+                produceManualImportFiles: false, displayOnlyWarm: true);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            if (_clientContext.CurrentClient?.Id == parentId &&
+                _clientContext.CurrentClient.FinancialYear.Equals(
+                    financialYear, StringComparison.OrdinalIgnoreCase) &&
+                SelectedBranchWorkspace?.IsConsolidated == true &&
+                _tallyCoordinator.GetCurrentClientLink()?.CompanyKey == companyKey)
+            {
+                _dashboardViewModel.ReportConsolidatedSourcePreviewLoadFailure(
+                    "Source preview unavailable: " + exception.Message +
+                    ". No Tally vouchers were posted. Generate Consolidated XML " +
+                    "to retry using the same original branch exporter.");
+                ApplicationState = "Consolidated source counts not refreshed: " +
+                    exception.Message;
+            }
+        }
+    }
+
     private void RestoreConsolidatedDisplayCountsFromLastPreparedXml(
         ClientProfile client)
     {
@@ -2886,11 +2954,25 @@ public sealed class MainWindowViewModel :
         {
             var safeClient = string.Concat(client.ClientCode.Where(c =>
                 !Path.GetInvalidFileNameChars().Contains(c)));
-            var sourcePath = Path.Combine(
+            var folder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 "Downloads", "AAH Consolidated Tally",
-                safeClient + "-" + client.FinancialYear,
+                safeClient + "-" + client.FinancialYear);
+            var sourcePath = Path.Combine(folder,
                 "AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt");
+            // Backward-compatible, read-only migration of the ORIGINAL v602
+            // source preview. NEVER load v603/v604's manually importable
+            // AAH_CONSOLIDATED_VOUCHERS.xml (which may be only a subset or
+            // contain live MASTERIDs/ALTERs) as source accounting evidence.
+            var legacyPath = Path.Combine(folder, "AAH_CONSOLIDATED_VOUCHERS.xml");
+            var isLegacyPreview = false;
+            if (!File.Exists(sourcePath) &&
+                File.Exists(legacyPath) &&
+                !File.Exists(Path.Combine(folder, "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt")))
+            {
+                sourcePath = legacyPath;
+                isLegacyPreview = true;
+            }
             var file = new FileInfo(sourcePath);
             if (!file.Exists || file.Length <= 0 || file.Length > 64L * 1024 * 1024)
                 return;
@@ -2900,6 +2982,9 @@ public sealed class MainWindowViewModel :
             if (_lastConsolidatedDisplayPreviewToken.Equals(token, StringComparison.Ordinal))
                 return;
             var xml = File.ReadAllText(sourcePath, System.Text.Encoding.UTF8);
+            if (isLegacyPreview)
+                TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+                    xml, "v602 original source-only voucher preview");
             // Recover the same original branch parent categories when
             // reopening the existing Downloads preview. This only drives
             // presentation: never treat a saved XML as posting evidence.
@@ -4938,6 +5023,11 @@ public sealed class MainWindowViewModel :
         {
             case DashboardViewModel:
                 _dashboardViewModel.RefreshAccountingOverviewAfterExternalChange();
+                break;
+            case ConsolidatedBranchDashboardViewModel:
+            case ConsolidatedTallyImportViewModel:
+                if (client is not null)
+                    QueueConsolidatedSourcePreviewWarm(client);
                 break;
             case PurchaseImportViewModel:
                 _purchaseViewModel.PrepareForDisplay();
