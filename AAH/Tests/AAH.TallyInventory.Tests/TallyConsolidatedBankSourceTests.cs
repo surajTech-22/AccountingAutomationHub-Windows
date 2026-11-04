@@ -261,7 +261,12 @@ internal static class TallyConsolidatedBankSourceTests
         var bindingSource = File.ReadAllText(Path.Combine(root.FullName,
             "AAH", "src", "AccountingAutomationHub.Infrastructure", "Tally",
             "SqliteTallyRepository.cs"));
-        Check(dashboardSource.Contains("number.Contains(\"-BANK-\"", StringComparison.Ordinal) &&
+        var classifierSource = File.ReadAllText(Path.Combine(root.FullName,
+            "AAH", "src", "AccountingAutomationHub.Infrastructure", "Tally",
+            "TallyConsolidatedVoucherDisplayClassifier.cs"));
+        Check(dashboardSource.Contains("TallyConsolidatedVoucherDisplayClassifier.Classify(",
+                  StringComparison.Ordinal) &&
+              classifierSource.Contains("number.Contains(\"-BANK-\"", StringComparison.Ordinal) &&
               dashboardSource.Contains("ComputePreparedContentIdentity(voucher)", StringComparison.Ordinal) &&
               dashboardSource.Contains("LastVerifiedHash", StringComparison.Ordinal) &&
               dashboardSource.Contains("moduleChanged", StringComparison.Ordinal) &&
