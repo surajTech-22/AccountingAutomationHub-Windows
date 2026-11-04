@@ -4126,7 +4126,7 @@ public sealed class MainWindowViewModel :
         // idle. The scope-key gate prevents a new XML preparation on any
         // subsequent 5-second heartbeat or passive link-status notification.
         if (tallyConnectedNow && !_tallyCoordinator.IsBusy &&
-            CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel &&
+            (CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel) &&
             _clientContext.CurrentClient is { } previewClient)
         {
             var linkKey = _tallyCoordinator.GetCurrentClientLink();
@@ -4140,7 +4140,7 @@ public sealed class MainWindowViewModel :
                         new Action(() =>
                         {
                             if (_clientContext.CurrentClient?.Id == previewClient.Id &&
-                                CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel)
+                                (CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel))
                                 QueueConsolidatedSourcePreviewWarm(previewClient);
                         }));
             }
