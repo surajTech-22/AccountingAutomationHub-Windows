@@ -511,10 +511,16 @@ internal static class EntryPoint
         var updaterSource = File.ReadAllText(Path.Combine(sourceRoot.FullName, "AAH", "src",
             "AAH.UpdateHost", "Program.cs"));
         Assert(updaterSource.Contains("GetSameInstallationProcesses(installedExe)", StringComparison.Ordinal) &&
-               updaterSource.Contains("ShouldDeferAfterFreshProcessCensus(results, stillRunning.Count)", StringComparison.Ordinal) &&
-               updaterSource.Contains("foreach (var process in stillRunning) process.Dispose();", StringComparison.Ordinal),
-            "Updater does not recensus verified live processes after a listener-timeout race.");
-        Console.WriteLine("PASS: after listener timeout, fresh same-install PID census decides installer gate.");
+               updaterSource.Contains("ForceCloseVerifiedSecondaryAahAsync(process, installedExe)", StringComparison.Ordinal) &&
+               updaterSource.Contains("await Task.Delay(350);", StringComparison.Ordinal) &&
+               updaterSource.Contains("Cannot replace files: LIVE exact-install AAH processes remain:",
+                   StringComparison.Ordinal) &&
+               !updaterSource.Contains("ShouldDeferAfterFreshProcessCensus(results, stillRunning.Count)",
+                   StringComparison.Ordinal),
+            "v597 must force-close verified secondaries then recensus live same-install AAH, " +
+            "not rely on stale listener-timeout results.");
+        Console.WriteLine("PASS: after real primary graceful exit and secondary forced exit, " +
+                          "fresh same-install live PID census gates replacement.");
 
         // v582 regression from 2026-11-03 installed v579: PIDs 15912 and
         // 17296 logged safe verified-update completion but remained alive;
