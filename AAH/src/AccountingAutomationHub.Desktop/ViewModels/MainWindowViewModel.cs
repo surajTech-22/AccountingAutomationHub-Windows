@@ -2351,7 +2351,9 @@ public sealed class MainWindowViewModel :
         int preparedVouchers, int verifiedImported,
         IReadOnlyDictionary<string, string>? artifacts = null,
         int? tallyAcknowledgedCreates = null, string? readbackError = null,
-        int? tallyAcknowledgedAlters = null)
+        int? tallyAcknowledgedAlters = null,
+        int? manualReadyCreates = null, int? manualReadyAlters = null,
+        int? manualAlreadyIdentical = null)
     {
         try
         {
@@ -2359,7 +2361,10 @@ public sealed class MainWindowViewModel :
                 parent, company, outcome, preparedVouchers, verifiedImported,
                 artifacts, acknowledgedVoucherCreates: tallyAcknowledgedCreates,
                 readbackError: readbackError,
-                acknowledgedVoucherAlters: tallyAcknowledgedAlters);
+                acknowledgedVoucherAlters: tallyAcknowledgedAlters,
+                manualReadyCreates: manualReadyCreates,
+                manualReadyAlters: manualReadyAlters,
+                manualAlreadyIdentical: manualAlreadyIdentical);
             return "Detailed Tally diagnostics saved: " + path;
         }
         catch (Exception exception)
@@ -2474,7 +2479,8 @@ public sealed class MainWindowViewModel :
     /// <summary>
     /// Collect already-built branch XML only; never run sales, purchase, bank, GST,
     /// journal preparation or the parent exporter in the consolidated workspace.
-    /// Files in Downloads are previews and are NOT sent to Tally.
+    /// Generate emits true, read-only bound manual Tally import XML separately
+    /// from the original AAH source preview. It NEVER posts to Tally.
     /// </summary>
     private async Task<TallyConsolidatedPreparedXmlResult> GenerateConsolidatedPreparedXmlAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash,
@@ -2663,7 +2669,10 @@ public sealed class MainWindowViewModel :
             {
                 ["INTERNAL-Source-Masters-DO-NOT-IMPORT.xml"] = result.MastersXml,
                 ["INTERNAL-Source-Vouchers-DO-NOT-IMPORT.xml"] = result.VouchersXml
-            });
+            },
+            manualReadyCreates: manual?.ReadyCreates,
+            manualReadyAlters: manual?.ReadyAlters,
+            manualAlreadyIdentical: manual?.UnchangedVouchers);
         // Original branch-prepared XML is authoritative for the numeric
         // Tally selection projection. The old parent 677-row summary is not.
         _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
@@ -2686,7 +2695,8 @@ public sealed class MainWindowViewModel :
                      $"{plan.Groups.Count(g => g.Create)} missing compulsory Groups included for master-first CREATE. " +
                      (skippedOptionalSourceLinks == 0 ? "" :
                          $"Ignored {skippedOptionalSourceLinks} unrelated/outdated optional branch Tally link(s). ") +
-                     "XML preview saved to: " + destination +
+                     (manual is null ? "Internal source preview saved to: " :
+                         "REAL Tally manual import XML saved to: ") + destination +
                      ". No Tally import was sent; duplicate/version/readback gate still required. " +
                      diagnostic
         };
