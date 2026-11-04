@@ -55,6 +55,23 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     public string PrimaryGstin { get; }
     public string State { get; }
     public DashboardViewModel ExistingDashboardWorkspace { get; }
+    // The dashboard and the Tally Import tab must project ONE existing
+    // consolidated importer; never create a second link or export path.
+    private ConsolidatedTallyImportViewModel? _consolidatedImportWorkspace;
+    public ConsolidatedTallyImportViewModel? ConsolidatedImportWorkspace
+    {
+        get => _consolidatedImportWorkspace;
+        private set => SetProperty(ref _consolidatedImportWorkspace, value);
+    }
+
+    public void AttachExistingConsolidatedImport(ConsolidatedTallyImportViewModel importer)
+    {
+        if (importer is null || importer.ParentClientId != ParentClientId ||
+            !importer.FinancialYear.Equals(FinancialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Consolidated Tally importer must match this Client/FY.");
+        ConsolidatedImportWorkspace = importer;
+    }
+
     public RelayCommand RefreshConsolidatedCommand { get; }
     public string TallyImportProgressStatus
     {
