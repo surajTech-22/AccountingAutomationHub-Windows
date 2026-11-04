@@ -89,7 +89,12 @@ public sealed class TallyConsolidatedVoucherImportService(
             var number = Value(voucher, "VOUCHERNUMBER");
             if (type.Length == 0 || number.Length == 0)
                 throw new InvalidOperationException("Source voucher identity is missing.");
-            var anchor = BuildConsolidatedSourceAnchor(type, number);
+            // The source identity is the ORIGINAL branch voucher type.
+            // Selecting a separate destination type changes the DESIRED Tally
+            // version, never its existing AAH source->MASTERID binding.
+            var originalType = prepared.VoucherTypeBaseByDestination.TryGetValue(
+                type, out var sourceBaseType) ? sourceBaseType : type;
+            var anchor = BuildConsolidatedSourceAnchor(originalType, number);
             if (!seen.Add(anchor))
                 throw new InvalidOperationException("Repeated original source anchor in prepared XML.");
             var state = tallyRepository.GetSourceBindingVersionState(
@@ -245,7 +250,13 @@ public sealed class TallyConsolidatedVoucherImportService(
             // branch identity. The destination owns its eventual Tally number;
             // this stable SOURCE anchor is kept only in AAH's existing
             // Client/FY/CompanyKey source-binding table.
-            var sourceAnchor = BuildConsolidatedSourceAnchor(type, number);
+            // Preserve legacy consolidated source anchors (e.g. Sales|KA-INV)
+            // across the optional destination voucher-type toggle. Without
+            // this mapping a previously verified MASTERID looked unbound,
+            // which could incorrectly enter the CREATE path.
+            var originalType = prepared.VoucherTypeBaseByDestination.TryGetValue(
+                type, out var sourceBaseType) ? sourceBaseType : type;
+            var sourceAnchor = BuildConsolidatedSourceAnchor(originalType, number);
             if (!stableAnchors.Add(sourceAnchor))
                 throw new InvalidOperationException(
                     "Original Bank source was repeated with different voucher treatments: " +
@@ -593,6 +604,26 @@ public sealed class TallyConsolidatedVoucherImportService(
         // destination Cash MASTERID and parent; never CREATE/reparent a Tally
         // built-in merely because a cash withdrawal uses that ledger.
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
+        // Separate voucher types must ALREADY exist in the linked consolidated
+        // Tally company and inherit the original base type with a positive
+        // destination MASTERID. The existing master importer creates and
+        // independently verifies them BEFORE the voucher ALTER stage.
+        // Never create a voucher type after the first voucher was posted.
+        foreach (var type in vouchers.Select(v => Value(v, "VOUCHERTYPENAME"))
+                     .Where(prepared.VoucherTypeBaseByDestination.ContainsKey)
+                     .Distinct(IgnoreCase))
+        {
+            var baseType = prepared.VoucherTypeBaseByDestination[type];
+            if (!available.TryGetValue(MasterKey("VOUCHERTYPE", type), out var liveType) ||
+                !IgnoreCase.Equals(Value(liveType, "PARENT"), baseType) ||
+                !long.TryParse(Value(liveType, "MASTERID"),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out var typeMasterId) ||
+                typeMasterId <= 0)
+                throw new InvalidOperationException(
+                    "The consolidated branch voucher type '" + type +
+                    "' has not been created and verified under '" + baseType +
+                    "' in the linked destination company. No voucher CREATE/ALTER sent.");
+        }
         // The compulsory branch groups and optional voucher types must have
         // passed the existing separate master-first UI. Never recreate them here.
         foreach (var element in masters.Where(x => PriorMasters.Contains(x.Name.LocalName)))
