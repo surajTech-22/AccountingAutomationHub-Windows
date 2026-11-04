@@ -29,6 +29,75 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
         var watcher = Source("AccountingAutomationHub.Desktop/Services",
             "BackgroundAutomationService.cs");
 
+        // CL019 2026-11-03: existing consolidated Purchase ref 2180052410
+        // had the correct supplier in the original branch-prepared XML, yet
+        // ordinary parent Live XML proposed 61 supplier-to-tax-ledger ALTERs.
+        // The normal coordinator must NOT create parent Live XML or send
+        // ordinary Voucher Export while saved separate branch books exist.
+        // This verifies ROUTING only: never introduce a second DR/CR/GST
+        // calculation path or modify the original branch XML builder.
+        var parentScopeAttach = main.IndexOf(
+            "_tallyCoordinator.AttachConsolidatedParentScopeProvider(client =>",
+            StringComparison.Ordinal);
+        Check(parentScopeAttach >= 0 &&
+              main.Contains("BranchAccountingModePreference.IsEnabled(", StringComparison.Ordinal) &&
+              main.Contains("_privateBranchAccounts.FindByChild(client.Id) is null",
+                  StringComparison.Ordinal) &&
+              main.Contains("_privateBranchAccounts.FindByParent(client.Id).Count > 0",
+                  StringComparison.Ordinal),
+            "consolidated parent accounting mode/private branch identity is not routed to Tally coordinator");
+
+        var backgroundPreview = coordinator.IndexOf(
+            "private async Task GenerateLiveXmlNowAsync(", StringComparison.Ordinal);
+        var previewGuard = coordinator.IndexOf(
+            "if (IsConsolidatedParentClient(client))", backgroundPreview,
+            StringComparison.Ordinal);
+        var normalLiveBuilder = coordinator.IndexOf(
+            "_accountingExportService.GenerateLiveXml(", backgroundPreview,
+            StringComparison.Ordinal);
+        Check(backgroundPreview >= 0 && previewGuard > backgroundPreview &&
+              normalLiveBuilder > previewGuard &&
+              coordinator.Contains("DeleteLiveXmlIfPresent(client, requireDeleted: true);",
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("AAH_TALLY_LIVE_CURRENT_STATUS.txt", StringComparison.Ordinal) &&
+              coordinator.Contains("Cannot remove stale ordinary parent Live XML.",
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("Consolidated parent activated during ordinary XML preparation;",
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("LastLiveXmlPath = string.Empty;", StringComparison.Ordinal),
+            "ordinary background Live XML still generates wrong consolidated parent ALTERs or leaves stale unsafe files");
+
+        var exportStart = coordinator.IndexOf(
+            "public async Task<TallyVoucherExportResult> ExportSelectedAsync(",
+            StringComparison.Ordinal);
+        var exportGuard = coordinator.IndexOf(
+            "if (IsConsolidatedParentClient(client))", exportStart,
+            StringComparison.Ordinal);
+        var exportBankRanges = coordinator.IndexOf(
+            "var bankRanges = CoalesceContiguousRanges(", exportStart,
+            StringComparison.Ordinal);
+        Check(exportStart >= 0 && exportGuard > exportStart &&
+              exportBankRanges > exportGuard &&
+              coordinator.Contains(
+                  "Ordinary parent Purchase/Sales/Journal XML cannot CREATE or ALTER consolidated vouchers.",
+                  StringComparison.Ordinal),
+            "normal explicit Tally Export may send parent accounting ALTER to consolidated target");
+
+        var autoReadyStart = coordinator.IndexOf(
+            "public void SetOutboundAutoExportReady(", StringComparison.Ordinal);
+        var autoReadyGuard = coordinator.IndexOf(
+            "if (ready && IsConsolidatedParentClient(client))",
+            autoReadyStart, StringComparison.Ordinal);
+        var autoReadyArm = coordinator.IndexOf(
+            "_outboundReadyClientId = client.Id;", autoReadyStart,
+            StringComparison.Ordinal);
+        Check(autoReadyGuard > autoReadyStart && autoReadyArm > autoReadyGuard &&
+              main.Contains("GenerateConsolidatedPreparedXmlAsync(", StringComparison.Ordinal) &&
+              main.Contains("TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);",
+                  StringComparison.Ordinal),
+            "automatic parent Tally export was not disabled or the original consolidated builder was replaced");
+        Console.WriteLine("PASS: consolidated parent never generates/exports normal Live XML; source branch XML and destination import remain original.");
+
         Check(coordinator.Contains("SaveConsolidatedDiagnosticPackAsync(", StringComparison.Ordinal) &&
               coordinator.Contains("await GenerateDiagnosticPackAsync(", StringComparison.Ordinal) &&
               coordinator.Contains("allowAppLogFallback: false, consolidatedEvidence:", StringComparison.Ordinal),
