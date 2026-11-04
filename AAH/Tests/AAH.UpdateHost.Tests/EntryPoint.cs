@@ -253,6 +253,67 @@ internal static class EntryPoint
             "Verified update may wait on repeatable scans, interrupt manual jobs or fail to restore watchers.");
         Console.WriteLine("PASS: updater-exclusive graceful shutdown quiesces repeatable work, protects active accounting and restores deferred watchers.");
 
+        // User-selected v597 update rule: only the actual AAH primary
+        // receives graceful accounting/Tally shutdown; any other still-live
+        // verified exact-install secondary is force-closed without /T.
+        // Stale Windows one-thread PIDs with HasExited=true are already dead
+        // and must NEVER be counted as live or killed.
+        Assert(Program.SelectPrimaryGracefulPid(new[]
+            {
+                (pid: 2652, hasListener: false, hasMainWindow: false, startedTicks: 2L),
+                (pid: 20716, hasListener: true, hasMainWindow: false, startedTicks: 3L),
+                (pid: 2888, hasListener: false, hasMainWindow: false, startedTicks: 4L)
+            }) == 20716,
+            "Real AAH's registered shutdown listener did not take precedence over ghosts.");
+        Assert(Program.SelectPrimaryGracefulPid(new[]
+            {
+                (pid: 5001, hasListener: false, hasMainWindow: false, startedTicks: 100L),
+                (pid: 5002, hasListener: false, hasMainWindow: true, startedTicks: 90L)
+            }) == 5002,
+            "Visible real AAH window must win when no shutdown listener is registered.");
+        Assert(Program.SelectPrimaryGracefulPid(new[]
+            {
+                (pid: 5001, hasListener: false, hasMainWindow: false, startedTicks: 100L),
+                (pid: 5002, hasListener: false, hasMainWindow: false, startedTicks: 120L)
+            }) == 5002,
+            "Most recently started AAH should be primary only as final fallback.");
+        var forcePolicy = hostSource.IndexOf(
+            "internal static async Task<bool> ShutdownAllVerifiedInstallProcessesAsync(",
+            StringComparison.Ordinal);
+        var choosePrimary = hostSource.IndexOf("SelectPrimaryGracefulPid(processes.Select(",
+            forcePolicy, StringComparison.Ordinal);
+        var forceOthers = hostSource.IndexOf(
+            "await ForceCloseVerifiedSecondaryAahAsync(process, installedExe)",
+            forcePolicy, StringComparison.Ordinal);
+        var gracefulPrimary = hostSource.IndexOf(
+            "await RequestGracefulUpdateExitAsync(",
+            forcePolicy, StringComparison.Ordinal);
+        var censusStart = hostSource.IndexOf(
+            "private static List<Process> GetSameInstallationProcesses(", StringComparison.Ordinal);
+        var exitedSkip = hostSource.IndexOf("if (process.HasExited)", censusStart,
+            StringComparison.Ordinal);
+        var mainModule = hostSource.IndexOf(
+            "var fullPath = process.MainModule?.FileName;", censusStart,
+            StringComparison.Ordinal);
+        Assert(forcePolicy > 0 && choosePrimary > forcePolicy &&
+               forceOthers > choosePrimary && gracefulPrimary > forceOthers &&
+               censusStart > gracefulPrimary && exitedSkip > censusStart &&
+               exitedSkip < mainModule &&
+               hostSource.Contains("fresh.StartTime.ToUniversalTime() != expectedStart",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("!SameProcessPath(fresh, installedExe)",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("fresh.Kill(entireProcessTree: false);",
+                   StringComparison.Ordinal) &&
+               !hostSource.Contains("fresh.Kill(entireProcessTree: true);",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("User policy protects the real instance from forced termination.",
+                   StringComparison.Ordinal),
+            "v597 must skip exited ghost PIDs, force only exact-lifetime verified secondary AAH, " +
+            "and gracefully drain only the real AAH before replacing files.");
+        Console.WriteLine("PASS: v597 user-selected primary/secondary close policy " +
+                          "guards real AAH Tally cleanup, stale exit exclusions and other installations.");
+
         // The October 31 failure left two processes from the same installation
         // alive after the binary had been replaced. These identity and version
         // contracts must be tested independently of a live Tally installation.
@@ -339,13 +400,12 @@ internal static class EntryPoint
                    StringComparison.Ordinal) &&
                hostSource.Contains("IsExactInstallationProcess(process.ProcessName, fullPath, installedExe)",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("if (IsConfirmedKernelTermination(process))",
-                   StringComparison.Ordinal) &&
+               hostSource.Contains("if (process.HasExited)", StringComparison.Ordinal) &&
                hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("kernel-confirmed dead, despite stale process-name ",
+               hostSource.Contains("already exited per the original .NET process object.",
                    StringComparison.Ordinal),
-            "AAH v596 must use native OpenProcess instead of Process.Handle, and block unknown/live PIDs.");
+            "AAH v597 must keep native OpenProcess for optional proof but never block on already-exited stale PIDs; reject unknown/live PIDs.");
 
         if (OperatingSystem.IsWindows())
         {
