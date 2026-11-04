@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.593)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.594)"
         required: true
-        default: "v4.0.0.593"
+        default: "v4.0.0.594"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.593: correct actual named mutex ownership (not object existence), hold updater lock on dedicated thread across async awaits, and reuse exact-path all-AAH-process graceful shutdown with Tally/import safety.
+# v4.0.0.594: correct actual named mutex ownership (not object existence), hold updater lock on dedicated thread across async awaits, and reuse exact-path all-AAH-process graceful shutdown with Tally/import safety.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.593]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.594]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.593' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.594' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -290,7 +290,7 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "DRAFT: do not publish until production OCR, Tally, installed-client and rollback acceptance passes. Signing and CI gates passed."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.594: Fix consolidated Tally XML routing so parent legacy Purchase/Sales/Journal records cannot generate unsafe supplier-to-tax-ledger ALTER requests. The existing consolidated wrapper consumes the branch-prepared DR/CR and retains original destination MASTERID/ALTERID and verified-previous-version safety. Add post-restart exact-path process census: report success only with one restarted AAH instance, retire older AAH processes solely after completed per-PID accounting/Tally shutdown evidence, and log but never forcibly stop unverified older updater processes. Includes regression coverage for the 61 incorrect CL019 purchase ALTER candidates and the v593 leftover-process issue. No new accounting calculation or UI redesign."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.593: Correct recurring false another AAH GitHub updater running failure after owner verified v592 direct updater successfully launched but installed AAH remained 4.0.0.589. The original UpdateHost used new Mutex(true,name,out createdNew) and rejected whenever createdNew was false, although an existing named mutex object may be FREE and not owned by any live updater. The verified local preflight reported mutex available True yet new v592 host failed with another updater is running. Replace object-existence gate with real WaitOne(0) ownership, including safe recovery of abandoned mutexes, held continuously on a dedicated owner thread so that asynchronous download/extraction, verified Tally and accounting drain, transactional replacement and restart cannot release a thread-owned mutex on an unrelated continuation thread. Competing updater owning the actual lock still blocks; stale exited or non-owning PIDs do not. The original per-installation verified-PID workflow already requests graceful shutdown of ALL AAH processes using the exact installed executable path, retiring only individually verified cleaned ghosts; do not terminate Tally, active accounting operations, foreign apps or blindly kill PIDs. Preserve previous v591 bounded archive preflight, v592 desktop launch, strict GitHub SHA256/publisher, exact release identity, update transaction, rollback and data preservation. Regression tests reproduce existing-but-unowned mutex, real competing owner, lock persistence through async thread hops and reliable release. Windows full 16-component and UpdateHost contract CI must pass before signed v593 release."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.594: Correct recurring false another AAH GitHub updater running failure after owner verified v592 direct updater successfully launched but installed AAH remained 4.0.0.589. The original UpdateHost used new Mutex(true,name,out createdNew) and rejected whenever createdNew was false, although an existing named mutex object may be FREE and not owned by any live updater. The verified local preflight reported mutex available True yet new v592 host failed with another updater is running. Replace object-existence gate with real WaitOne(0) ownership, including safe recovery of abandoned mutexes, held continuously on a dedicated owner thread so that asynchronous download/extraction, verified Tally and accounting drain, transactional replacement and restart cannot release a thread-owned mutex on an unrelated continuation thread. Competing updater owning the actual lock still blocks; stale exited or non-owning PIDs do not. The original per-installation verified-PID workflow already requests graceful shutdown of ALL AAH processes using the exact installed executable path, retiring only individually verified cleaned ghosts; do not terminate Tally, active accounting operations, foreign apps or blindly kill PIDs. Preserve previous v591 bounded archive preflight, v592 desktop launch, strict GitHub SHA256/publisher, exact release identity, update transaction, rollback and data preservation. Regression tests reproduce existing-but-unowned mutex, real competing owner, lock persistence through async thread hops and reliable release. Windows full 16-component and UpdateHost contract CI must pass before signed v593 release."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
