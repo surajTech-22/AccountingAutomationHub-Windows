@@ -492,6 +492,15 @@ public sealed class MainWindowViewModel :
                 _refreshCoordinator,
                 _automationService,
                 _liveChangeHub);
+        // The SAME saved separate-books setting/real private-branch ClientId
+        // already controls workspace navigation. Reuse it for the coordinator
+        // so its background Live XML/ordinary Export cannot accidentally use
+        // parent Purchase/Sales/Journal records as consolidated postings.
+        // No new Tally writer or reclassification of branch-prepared DR/CR.
+        _tallyCoordinator.AttachConsolidatedParentScopeProvider(client =>
+            BranchAccountingModePreference.IsEnabled(
+                _applicationPreferences.Get(BranchAccountingModePreference.Key(client.Id))) &&
+            _privateBranchAccounts.FindByChild(client.Id) is null);
         _automationService.AttachLocalPreparationReadyProvider(() => _workspaceStateCache.IsStartupPreparationComplete);
         // FIXED41 R5: restore the proven Tally-last startup boundary without reintroducing the
         // old runtime interlock. The coordinator releases only after workspace startup scheduling,
