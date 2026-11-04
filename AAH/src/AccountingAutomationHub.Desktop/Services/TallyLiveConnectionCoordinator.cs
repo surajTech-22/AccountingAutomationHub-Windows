@@ -3976,7 +3976,7 @@ Tally-style report availability
             // snapshots and the existing consolidated wrapper untouched.
             if (IsConsolidatedParentClient(client))
             {
-                DeleteLiveXmlIfPresent(client);
+                DeleteLiveXmlIfPresent(client, requireDeleted: true);
                 LiveXmlStatus = "Consolidated scope: use Generate Consolidated XML in Tally Import. " +
                                 "Ordinary parent Live XML is disabled; branch-prepared DR/CR is authoritative.";
                 LastLiveXmlPath = string.Empty;
@@ -4102,7 +4102,7 @@ Tally-style report availability
             client.FinancialYear);
     }
 
-    private void DeleteLiveXmlIfPresent(ClientProfile client)
+    private void DeleteLiveXmlIfPresent(ClientProfile client, bool requireDeleted = false)
     {
         try
         {
@@ -4114,10 +4114,18 @@ Tally-style report availability
             var status = Path.Combine(folder, "AAH_TALLY_LIVE_CURRENT_STATUS.txt");
             if (File.Exists(status)) File.Delete(status);
         }
-        catch
+        catch (Exception exception)
         {
-            // Link removal/parent scope switch must never fail on a stale
-            // preview file lock. Never authorize a wrong XML because cleanup failed.
+            // A stale parent XML is dangerous because its 61 wrong ALTER
+            // candidates look valid to someone browsing the AutoFolder.
+            // When entering consolidated mode, an unremovable parent file
+            // must be reported as a blocking error, not silently hidden.
+            if (requireDeleted)
+                throw new IOException(
+                    "Cannot remove stale ordinary parent Live XML. No consolidated " +
+                    "export is permitted until its old XML/status can be removed.",
+                    exception);
+            // An unlinked ordinary client keeps the original best-effort cleanup.
         }
     }
 
