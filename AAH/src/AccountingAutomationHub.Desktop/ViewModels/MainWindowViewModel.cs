@@ -2477,7 +2477,8 @@ public sealed class MainWindowViewModel :
     /// Files in Downloads are previews and are NOT sent to Tally.
     /// </summary>
     private async Task<TallyConsolidatedPreparedXmlResult> GenerateConsolidatedPreparedXmlAsync(
-        long parentId, string financialYear, bool separateTypes, bool separateCash)
+        long parentId, string financialYear, bool separateTypes, bool separateCash,
+        bool produceManualImportFiles = true)
     {
         var current = _clientContext.CurrentClient;
         if (current is null || current.Id != parentId ||
@@ -2500,6 +2501,17 @@ public sealed class MainWindowViewModel :
             _applicationPreferences.Get(ClientBranchCatalog.Key(parent.Id)));
         if (configured.Count < 2)
             throw new InvalidOperationException("Two or more saved branches are required.");
+        var safeClient = string.Concat(parent.ClientCode.Where(c =>
+            !Path.GetInvalidFileNameChars().Contains(c)));
+        var manualDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads", "AAH Consolidated Tally", safeClient + "-" + financialYear);
+        // Never leave v602's identity-free CREATE-only files under importable names.
+        Directory.CreateDirectory(manualDirectory);
+        foreach (var filename in new[] { "AAH_CONSOLIDATED_MASTERS.xml",
+                     "AAH_CONSOLIDATED_VOUCHERS.xml",
+                     "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt" })
+            File.Delete(Path.Combine(manualDirectory, filename));
         var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
         if (pan.Length == 0 && (parent.Gstin ?? "").Length == 15)
             pan = parent.Gstin.Substring(2, 10).ToUpperInvariant();
@@ -2601,36 +2613,56 @@ public sealed class MainWindowViewModel :
             accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes);
         var result = TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);
 
-        var safeClient = string.Concat(parent.ClientCode.Where(c =>
-            !Path.GetInvalidFileNameChars().Contains(c)));
-        var destination = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Downloads", "AAH Consolidated Tally", safeClient + "-" + financialYear);
-        Directory.CreateDirectory(destination);
+        var destination = manualDirectory;
+        var sourcePreviewPath = Path.Combine(destination,
+            "AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt");
         var mastersPath = Path.Combine(destination, "AAH_CONSOLIDATED_MASTERS.xml");
         var vouchersPath = Path.Combine(destination, "AAH_CONSOLIDATED_VOUCHERS.xml");
-        // Both XML documents are built and validated in memory before anything is written.
-        TallyConsolidatedXmlTextSafety.ParseDocument(
-            result.MastersXml, "generated consolidated master XML preview");
-        TallyConsolidatedXmlTextSafety.ParseDocument(
-            result.VouchersXml, "generated consolidated voucher XML preview");
-        // Guard once more after the plan, XML construction and parsing. A
-        // concurrent edit must never leave a seemingly current mixed-time
-        // consolidated preview for this generation request.
+        var auditPath = Path.Combine(destination, "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt");
+        // Original AAH preview always remains identity-free and is NEVER the
+        // manually-importable voucher file. Manual XML is materialized from
+        // a fresh, read-only same-company MASTERID/ALTERID/signed-DRCR check.
+        TallyConsolidatedXmlTextSafety.ParseDocument(result.MastersXml,
+            "original consolidated master preview");
+        TallyConsolidatedXmlTextSafety.ParseDocument(result.VouchersXml,
+            "original consolidated voucher preview");
+        TallyConsolidatedManualImportXmlResult? manual = null;
+        if (produceManualImportFiles)
+        {
+            var readonlyMaterializer = new TallyConsolidatedVoucherImportService(
+                _tallyHttpService, tallyRepository: _tallyRepository);
+            manual = await readonlyMaterializer.PrepareManualImportXmlAsync(
+                link, company, result, accountingFinancialYear: financialYear);
+        }
         TallyConsolidatedBranchXmlSnapshotCache.RequireUnchangedSources(
             branchSourceFingerprints,
             child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
-        File.WriteAllText(mastersPath, result.MastersXml, System.Text.Encoding.UTF8);
-        File.WriteAllText(vouchersPath, result.VouchersXml, System.Text.Encoding.UTF8);
-        // Keep the existing Downloads previews for manual inspection, but save
-        // the SAME established detailed Tally ZIP under the parent's AutoFolder.
+        if (_clientContext.CurrentClient?.Id != parentId ||
+            SelectedBranchWorkspace?.IsConsolidated != true ||
+            _tallyCoordinator.GetCurrentClientLink() is not { } stillLinked ||
+            !stillLinked.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The linked consolidated Tally company changed while generating XML.");
+        File.WriteAllText(sourcePreviewPath, result.VouchersXml, System.Text.Encoding.UTF8);
+        if (manual is not null)
+        {
+            // These are the ONLY importable output filenames. Never write
+            // an unbound 645-voucher CREATE preview under these names.
+            File.WriteAllText(mastersPath, manual.MastersXml, System.Text.Encoding.UTF8);
+            File.WriteAllText(vouchersPath, manual.VouchersXml, System.Text.Encoding.UTF8);
+            File.WriteAllText(auditPath, manual.Audit, System.Text.Encoding.UTF8);
+        }
         var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
-            parent, company, "Consolidated XML PREVIEW ONLY; no Tally posting. " +
+            parent, company, (manual is null
+                ? "Internal read-only source preview; no Tally posting. "
+                : "Real manual-import XML generated; no Tally posting. " +
+                  $"Ready CREATE={manual.ReadyCreates}; Ready ALTER={manual.ReadyAlters}; " +
+                  $"unchanged={manual.UnchangedVouchers}; missing masters={manual.MissingMasters}. ") +
             result.Status, result.FinalVouchers, 0,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Prepared-Masters.xml"] = result.MastersXml,
-                ["Prepared-Vouchers.xml"] = result.VouchersXml
+                ["INTERNAL-Source-Masters-DO-NOT-IMPORT.xml"] = result.MastersXml,
+                ["INTERNAL-Source-Vouchers-DO-NOT-IMPORT.xml"] = result.VouchersXml
             });
         // Original branch-prepared XML is authoritative for the numeric
         // Tally selection projection. The old parent 677-row summary is not.
@@ -2641,7 +2673,14 @@ public sealed class MainWindowViewModel :
         _lastConsolidatedDisplayPreviewToken = string.Empty;
         return result with
         {
-            Status = $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
+            Status = (manual is null ? "Internal source preparation only. " :
+                      $"REAL MANUAL XML: ready CREATE {manual.ReadyCreates}, " +
+                      $"ALTER {manual.ReadyAlters}, unchanged {manual.UnchangedVouchers}, " +
+                      $"missing masters {manual.MissingMasters}. " +
+                      "Import missing masters first, then vouchers. " +
+                      "Manual imports need subsequent AAH readback; do not reuse the file. " +
+                      "No Tally write was sent. ") +
+                     $"Prepared {result.FinalVouchers} vouchers from {result.BranchCount} branches, " +
                      $"matched {result.InterbankReconciled} explicit interbank transfers. " +
                      $"{plan.Groups.Count(g => !g.Create)} compulsory Groups verified in the linked Tally company; " +
                      $"{plan.Groups.Count(g => g.Create)} missing compulsory Groups included for master-first CREATE. " +
@@ -2793,7 +2832,7 @@ public sealed class MainWindowViewModel :
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 "Downloads", "AAH Consolidated Tally",
                 safeClient + "-" + client.FinancialYear,
-                "AAH_CONSOLIDATED_VOUCHERS.xml");
+                "AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt");
             var file = new FileInfo(sourcePath);
             if (!file.Exists || file.Length <= 0 || file.Length > 64L * 1024 * 1024)
                 return;
@@ -2850,7 +2889,8 @@ public sealed class MainWindowViewModel :
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
-            parentId, financialYear, separateTypes, separateCash);
+            parentId, financialYear, separateTypes, separateCash,
+            produceManualImportFiles: false);
         var client = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (client is null || client.Id != parentId ||
@@ -2889,7 +2929,8 @@ public sealed class MainWindowViewModel :
             await ImportConsolidatedMastersAsync(
                 parentId, financialYear, separateTypes, separateCash);
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
-            parentId, financialYear, separateTypes, separateCash);
+            parentId, financialYear, separateTypes, separateCash,
+            produceManualImportFiles: false);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (current is null || current.Id != parentId ||
