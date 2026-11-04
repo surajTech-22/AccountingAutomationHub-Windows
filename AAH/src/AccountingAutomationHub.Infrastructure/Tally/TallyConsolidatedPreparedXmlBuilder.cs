@@ -622,7 +622,7 @@ public static class TallyConsolidatedPreparedXmlBuilder
             attr.Remove();
     }
 
-    internal static void RequireNoForeignTallyIdentity(string xml, string scope)
+    public static void RequireNoForeignTallyIdentity(string xml, string scope)
     {
         var doc = TallyConsolidatedXmlTextSafety.ParseDocument(xml, scope);
         var forbidden = doc.Descendants().FirstOrDefault(x =>
