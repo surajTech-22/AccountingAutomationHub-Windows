@@ -181,6 +181,12 @@ public sealed class TallyLiveMasterSynchronizationService
 
         var accounting = all.Where(record => !StockTypes.Contains(record.Type)).ToArray();
         var incomingKeys = accounting.Select(Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A consolidated snapshot does not own a branch's live Master rows.
+        // The company GUID prefix survives ledger renames and distinct same-name
+        // ledgers in two different Tally books.
+        var snapshotBookGuid = accounting
+            .Select(record => record.TallyGuid)
+            .FirstOrDefault(guid => TallyCompanyMasterScope.GuidBookKey(guid).Length > 0);
         var existing = _masterRepository.Get(clientId, financialYear, includeArchived: true);
         var archived = 0;
         foreach (var record in existing.Where(record =>
@@ -190,6 +196,7 @@ public sealed class TallyLiveMasterSynchronizationService
                       (!ledgerGroupOnlyAuthority && record.Source.Equals("Live Tally", StringComparison.OrdinalIgnoreCase))) &&
                      !record.IsUserEdited && !record.IsArchived &&
                      !StockTypes.Contains(record.Type) &&
+                     TallyCompanyMasterScope.BelongsToSnapshot(record, companyName, snapshotBookGuid) &&
                      !incomingKeys.Contains(Key(record))))
         {
             if (_masterRepository.TryArchive(record.PersistentId, archived: true))
