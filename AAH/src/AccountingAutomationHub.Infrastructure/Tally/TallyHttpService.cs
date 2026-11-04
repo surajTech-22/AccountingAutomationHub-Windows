@@ -2415,6 +2415,9 @@ public sealed class TallyHttpService : IDisposable
         string xml,
         CancellationToken cancellationToken = default)
     {
+        // Enforce the read-only Generate XML contract at the public import
+        // entry point too, before runtime probes or any Tally transport.
+        RequireNoTallyWriteInReadOnlyScope(xml, isImport: true);
         var response = await PostImportAsync(xml, cancellationToken).ConfigureAwait(false);
         // Any accepted Tally mutation invalidates the pre-import read snapshot. A later
         // verification/read must come from Tally again instead of reusing stale authority.
