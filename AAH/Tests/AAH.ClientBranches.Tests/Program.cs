@@ -301,7 +301,8 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       tallyApplyMethod.IndexOf("OpenCompanies.Clear();", StringComparison.Ordinal) &&
       tallySelectionMethod.Contains("ReferenceEquals(_selectedCompany, company) && !_manualSelectionPending", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (TallyMetrics.SequenceEqual(updated)) return;", StringComparison.Ordinal) &&
-      shellModel.Contains("_consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
+      shellModel.Contains("_consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(", StringComparison.Ordinal) &&
+      shellModel.Contains("client, _dashboardViewModel,", StringComparison.Ordinal) &&
        shellModel.Contains("ReferenceEquals(CurrentPage, expected.PageFactory())", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public long ParentClientId => _parentClientId;", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public void RefreshAfterCommittedAccountingChange()", StringComparison.Ordinal) &&
