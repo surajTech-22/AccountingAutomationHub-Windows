@@ -370,7 +370,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
             .GroupBy(UpsertIncomingIdentityKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(IsTallyMaster).ThenByDescending(item => item.TallyAlterId).First())
             .ToArray();
-        var archiveProtectionById = new Dictionary<long, bool>();
         var unresolvedMergeById = new Dictionary<long, bool>();
         foreach (var source in incomingForUpsert.Where(item =>
                      IsTallyMaster(item) && item.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase)))
@@ -397,8 +396,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
             var id = protectionCandidate.PersistentId;
             if (!unresolvedMergeById.ContainsKey(id))
                 unresolvedMergeById[id] = HasUnresolvedApprovedMerge(id);
-            if (!archiveProtectionById.ContainsKey(id))
-                archiveProtectionById[id] = GetArchiveProtection(id).IsProtected;
         }
 
         using var connection = OpenConnection();
@@ -452,15 +449,20 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 // that exact Master has an opening balance, AAH usage, a bound Bank Account,
                 // or live Tally Voucher usage. Only an unresolved explicit Merge lifecycle
                 // is allowed to preserve the intentional FROM archive.
+                if (preserveArchivedTallyMergeSource && existing is null)
+                    preserveArchivedTallyMergeSource = false;
                 if (preserveArchivedTallyMergeSource && existing is not null && existing.PersistentId > 0)
                 {
                     // Fix81: these decisions were captured before the write transaction
                     // began. Do not recursively open/read Masters while this transaction
                     // is writing the table.
                     var hasUnresolvedMerge = unresolvedMergeById.GetValueOrDefault(existing.PersistentId);
-                    var archiveProtected = archiveProtectionById.GetValueOrDefault(existing.PersistentId);
-                    if (!hasUnresolvedMerge && archiveProtected)
-                        preserveArchivedTallyMergeSource = false;
+                    // A historic alias is not permission to keep a freshly
+                    // verified destination MASTERID archived. Only an actual
+                    // unresolved, user-approved FROM->INTO merge retains the
+                    // intentional archive. CL019 had 20 LIVE consolidated
+                    // ledgers hidden by old alias history.
+                    preserveArchivedTallyMergeSource = hasUnresolvedMerge;
                 }
             }
 
@@ -2215,11 +2217,10 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 TallyCompanyMasterScope.CanMatch(saved, tally))).ToList();
         var mergeAliases = GetMergeAliasMap(clientId, financialYear);
 
-        // Fix82: ReconcileLedgerAuthorityWithTally has its own stale-alias archive path.
-        // Snapshot protection before opening its write transaction so a live MASTERID that
-        // has opening/AAH/Tally usage or an active BankAccount binding cannot be re-archived
-        // by old alias history. Only a real unresolved approved Merge may remain inactive.
-        var protectedAliasMasterIds = new Dictionary<long, bool>();
+        // Only a real unresolved user-approved Merge FROM may remain archived.
+        // Stale alias history is never an independent reason to archive a
+        // freshly verified live Tally Ledger. Capture the merge decision
+        // before the write transaction to preserve Fix81 lock safety.
         var unresolvedAliasMergeIds = new Dictionary<long, bool>();
         foreach (var record in existing.Where(record => record.PersistentId > 0 &&
                      record.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase)))
@@ -2228,7 +2229,6 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 string.IsNullOrWhiteSpace(canonical) ||
                 TallyMasterIdentity.Equivalent(canonical, record.Name)) continue;
             unresolvedAliasMergeIds[record.PersistentId] = HasUnresolvedApprovedMerge(record.PersistentId);
-            protectedAliasMasterIds[record.PersistentId] = GetArchiveProtection(record.PersistentId).IsProtected;
         }
 
         using var connection = OpenConnection();
@@ -2392,12 +2392,13 @@ public sealed class SqliteMasterRepository : IMasterRepository
                                             !TallyMasterIdentity.Equivalent(intentionalCanonical, target.Name) &&
                                             !TallyMasterIdentity.Equivalent(intentionalCanonical, tally.Name);
             if (hasIntentionalMergeAlias && target.PersistentId > 0 &&
-                !unresolvedAliasMergeIds.GetValueOrDefault(target.PersistentId) &&
-                protectedAliasMasterIds.GetValueOrDefault(target.PersistentId))
+                !unresolvedAliasMergeIds.GetValueOrDefault(target.PersistentId))
             {
-                // Fix82: stale alias history is not permission to archive a protected live
-                // identity. In particular, the newly-created Bank MASTERID stays active once
-                // the BankAccount has claimed it.
+                // Fix82/CL019: the actual live destination Tally Ledger and its
+                // MASTERID always remain active unless an explicitly approved
+                // FROM->INTO merge is still unresolved. Stale aliases, even
+                // without a linked BankAccount/opening balance, must not hide
+                // 20 used consolidated supplier/party ledgers.
                 hasIntentionalMergeAlias = false;
             }
             var referenceDestination = hasIntentionalMergeAlias

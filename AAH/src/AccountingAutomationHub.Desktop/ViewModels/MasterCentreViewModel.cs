@@ -12,6 +12,7 @@ using AccountingAutomationHub.Domain.Governance;
 using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Infrastructure.Gst;
 using AccountingAutomationHub.Infrastructure.Masters;
+using AccountingAutomationHub.Infrastructure.Tally;
 using AccountingAutomationHub.Infrastructure.Governance;
 
 namespace AccountingAutomationHub.Desktop.ViewModels;
@@ -245,6 +246,41 @@ public sealed class MasterCentreViewModel : PageViewModel
         .GroupBy(MasterDuplicateIdentity, StringComparer.OrdinalIgnoreCase)
         .Count(group => group.Count() > 1);
 
+    // The consolidated parent may still retain historic branch-origin
+    // MASTERID rows in its Client/FY cache. Never present those as Masters
+    // available for selection/rename/merge in the linked destination Tally.
+    // Leave ordinary single-company and private branch Master Centre unchanged.
+    // No new Tally transport request is made for the display filter.
+    private bool IncludeLinkedConsolidatedMaster(MasterRecord record)
+    {
+        if (!_tallyCoordinator.IsCurrentClientConsolidatedParent ||
+            record.TallyMasterId.Trim().Length == 0)
+            return true;
+        var link = _tallyCoordinator.GetCurrentClientLink();
+        if (link is null || link.ClientId != CurrentClientId)
+            return false; // A foreign bound identity cannot be selected without a link.
+        var company = record.Company.Trim();
+        if (company.Length == 0) return false;
+        if (company.Equals(link.CompanyName.Trim(), StringComparison.OrdinalIgnoreCase))
+            return true;
+        // The existing parent Tally resolver allows a UNIQUE independently
+        // verified live company-number/GSTIN/BooksFrom match even if Tally
+        // recomputed the display name or CompanyKey. Never pick the last-opened
+        // branch or a same-name unrelated company as the destination.
+        try
+        {
+            if (_tallyCoordinator.OpenCompanies.Count == 0) return false;
+            var linkedDestination = TallyBranchConsolidationImportService.ResolveLinkedDestination(
+                link, _tallyCoordinator.SelectedCompany,
+                _tallyCoordinator.OpenCompanies.ToArray(), CurrentFinancialYear);
+            return company.Equals(linkedDestination.Name.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (InvalidOperationException)
+        {
+            return false; // Unsafe/unverified company: no foreign Master selection.
+        }
+    }
+
     private long CurrentClientId => _clientContext.CurrentClient?.Id ?? 0;
     private string CurrentFinancialYear => _clientContext.CurrentClient?.FinancialYear ?? string.Empty;
 
@@ -269,6 +305,7 @@ public sealed class MasterCentreViewModel : PageViewModel
         _allRecords.Clear(); Records.Clear(); MasterTree.Clear();
         _allRecords.AddRange(snapshot.Masters
             .Where(record => !StockTypes.Contains(record.Type))
+            .Where(IncludeLinkedConsolidatedMaster)
             .Where(record => IncludeArchived || !record.IsArchived));
         // Completion 61: usage counts are populated by the Masters cache worker.
         // Opening Ledger Master must not issue another SQLite usage scan on the UI thread.
@@ -310,7 +347,8 @@ public sealed class MasterCentreViewModel : PageViewModel
             client.FinancialYear,
             IncludeArchived,
             string.Empty)
-            .Where(record => !StockTypes.Contains(record.Type)));
+            .Where(record => !StockTypes.Contains(record.Type))
+            .Where(IncludeLinkedConsolidatedMaster));
 
         _repository.PopulateUsageCounts(client.Id, client.FinancialYear, _allRecords);
         ApplyDuplicateReviewState();

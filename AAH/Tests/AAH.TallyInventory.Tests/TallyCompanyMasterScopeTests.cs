@@ -124,6 +124,78 @@ internal static class TallyCompanyMasterScopeTests
                 "Numeric MASTERID from the second book overwrote the first book.");
             repo.VerifyLiveLedgerMasterIdAuthority(ClientId, Fy, [sameNumberBranch]);
             repo.VerifyLiveLedgerMasterIdAuthority(ClientId, Fy, [sameNumberConsolidated]);
+
+            // CL019 2026-11-04: twenty consolidated supplier ledgers had
+            // live destination MASTERID/GUID but were still archived locally.
+            // A stale alias (without an unresolved user-approved merge) is
+            // never permission to keep a currently live Tally Master hidden.
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                using var stale = connection.CreateCommand();
+                stale.CommandText =
+                    """
+                    UPDATE Masters SET IsArchived=1
+                    WHERE ClientId=919 AND FinancialYear='2025-26'
+                      AND TallyMasterId='350' AND Company='Mitansh Technology Pvt Ltd Consolidated';
+                    INSERT INTO MasterMergeAliases
+                      (ClientId,FinancialYear,Type,NormalizedKey,CanonicalName,CreatedUtc,UpdatedUtc)
+                    VALUES
+                      (919,'2025-26','Ledger','JABBARSINGH',
+                       'LEGACY MERGE TARGET','2026-11-04T10:00:00Z','2026-11-04T10:00:00Z')
+                    ON CONFLICT(ClientId,FinancialYear,Type,NormalizedKey)
+                    DO UPDATE SET CanonicalName=excluded.CanonicalName;
+                    """;
+                stale.ExecuteNonQuery();
+            }
+            repo.Upsert(ClientId, Fy, [consolidated]);
+            var restored = repo.Get(ClientId, Fy, includeArchived: true)
+                .Single(m => m.TallyMasterId == "350" &&
+                             m.Company == "Mitansh Technology Pvt Ltd Consolidated");
+            var stillBranch = repo.Get(ClientId, Fy, includeArchived: true)
+                .Single(m => m.TallyMasterId == "212" &&
+                             m.Company == "Mitansh Branch Tally");
+            Check(!restored.IsArchived && restored.Name == consolidated.Name &&
+                  restored.TallyGuid == consolidated.TallyGuid &&
+                  !stillBranch.IsArchived && stillBranch.TallyGuid == branch.TallyGuid,
+                "Fresh live consolidated MASTERID failed to restore an archived alias row " +
+                "or accidentally changed the separate branch identity.");
+            repo.VerifyLiveLedgerMasterIdAuthority(ClientId, Fy, [consolidated]);
+
+            // A genuine unresolved APPROVED FROM->INTO merge is different
+            // from a stale display alias. Its archived source remains held.
+            var targetInSameConsolidatedBook = repo.Get(ClientId, Fy, true)
+                .Single(m => m.Company == consolidated.Company &&
+                             m.TallyMasterId == "410");
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                using var intentional = connection.CreateCommand();
+                intentional.CommandText =
+                    $"""
+                    UPDATE Masters SET IsArchived=1 WHERE Id={restored.PersistentId};
+                    INSERT INTO PendingTallyMasterMerges
+                        (ClientId,FinancialYear,CompanyKey,SourcePersistentId,
+                         SourceType,SourceName,SourceParent,TargetPersistentId,
+                         TargetType,TargetName,TargetParent,Status,CreatedUtc,UpdatedUtc)
+                    VALUES(919,'2025-26','CONSOLIDATED-KEY',{restored.PersistentId},
+                           'Ledger','JABBAR SINGH','Karnataka Debtors',
+                           {targetInSameConsolidatedBook.PersistentId},
+                           'Ledger','COMMON PARTY','Karnataka Debtors',
+                           'Watching','2026-11-04T10:00:00Z','2026-11-04T10:00:00Z');
+                    INSERT INTO MasterMergeAliases
+                        (ClientId,FinancialYear,Type,NormalizedKey,CanonicalName,CreatedUtc,UpdatedUtc)
+                    VALUES(919,'2025-26','Ledger','JABBARSINGH',
+                           'COMMON PARTY','2026-11-04T10:00:00Z','2026-11-04T10:00:00Z')
+                    ON CONFLICT(ClientId,FinancialYear,Type,NormalizedKey)
+                    DO UPDATE SET CanonicalName=excluded.CanonicalName;
+                    """;
+                intentional.ExecuteNonQuery();
+            }
+            repo.Upsert(ClientId, Fy, [consolidated]);
+            Check(repo.Get(ClientId, Fy, true).Single(m =>
+                    m.PersistentId == restored.PersistentId).IsArchived,
+                "An unresolved user-approved FROM->INTO merge source was wrongly reactivated.");
         }
         finally
         {

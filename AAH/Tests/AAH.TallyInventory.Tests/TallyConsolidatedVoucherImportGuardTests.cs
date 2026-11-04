@@ -259,6 +259,67 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             throw new InvalidOperationException(
                 "Consolidated ledger edit did not reuse the normal bound-MASTERID ALTER writer " +
                 "and preserve the branch's original signed DR/CR and Tally-owned number.");
+        // Optional separate destination voucher types MUST reuse the original
+        // source anchor and original destination MASTERID: 645 already-live
+        // CL019 vouchers must ALTER, never enter a new CREATE queue.
+        var separateTypes = new Dictionary<string, string>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["Sales - Karnataka"] = "Sales",
+            ["Purchase - Gujarat"] = "Purchase",
+            ["Payment - Karnataka"] = "Payment"
+        };
+        var oldSalesAnchor = TallyConsolidatedVoucherImportService
+            .BuildConsolidatedSourceAnchor("Sales", "KA-INV-001");
+        var branchSalesAnchor = TallyConsolidatedVoucherImportService
+            .BuildConsolidatedSourceAnchor(
+                "Sales - Karnataka", "KA-INV-001", separateTypes);
+        if (!string.Equals(oldSalesAnchor, branchSalesAnchor, StringComparison.Ordinal) ||
+            !string.Equals(oldSalesAnchor,
+                TallyConsolidatedVoucherImportService.BuildConsolidatedSourceAnchor(
+                    "Sales", "KA-INV-001", separateTypes), StringComparison.Ordinal) ||
+            !string.Equals(
+                TallyConsolidatedVoucherImportService.BuildConsolidatedSourceAnchor(
+                    "Payment", "KA-BANK-123"),
+                TallyConsolidatedVoucherImportService.BuildConsolidatedSourceAnchor(
+                    "Payment - Karnataka", "KA-BANK-123", separateTypes),
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Optional branch voucher type changed the durable source binding; duplicate CREATE risk.");
+        var desiredBranchType = new System.Xml.Linq.XElement(preparedAlterSource);
+        desiredBranchType.Element("VOUCHERTYPENAME")!.Value = "Sales - Karnataka";
+        desiredBranchType.SetAttributeValue("VCHTYPE", "Sales - Karnataka");
+        var branchTypeAlter = System.Xml.Linq.XDocument.Parse(
+            TallyAccountingVoucherExportService.BuildBoundConsolidatedVoucherAlterXml(
+                "Combined Books", desiredBranchType, "26", "2"))
+            .Descendants("VOUCHER").Single();
+        if (!string.Equals((string?)branchTypeAlter.Attribute("ACTION"),
+                "Alter", StringComparison.Ordinal) ||
+            !string.Equals((string?)branchTypeAlter.Attribute("TAGVALUE"),
+                "26", StringComparison.Ordinal) ||
+            !string.Equals((string?)branchTypeAlter.Attribute("VCHTYPE"),
+                "Sales - Karnataka", StringComparison.Ordinal) ||
+            branchTypeAlter.Element("VOUCHERTYPENAME")?.Value != "Sales - Karnataka" ||
+            branchTypeAlter.Element("VOUCHERNUMBER")?.Value != "2" ||
+            !branchTypeAlter.Descendants("AMOUNT").Select(e => e.Value).SequenceEqual(
+                preparedAlterSource.Descendants("AMOUNT").Select(e => e.Value)) ||
+            !branchTypeAlter.Descendants("LEDGERNAME").Select(e => e.Value).SequenceEqual(
+                preparedAlterSource.Descendants("LEDGERNAME").Select(e => e.Value)))
+            throw new InvalidOperationException(
+                "Separate destination voucher type did not preserve bound MASTERID and full DR/CR.");
+        if (!importerSource.Contains(
+                "type, number, prepared.VoucherTypeBaseByDestination", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "The consolidated branch voucher type '", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "alterResponse.Altered != 1", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Separate voucher type bypasses master-first or existing bound ALTER safety gate.");
+        Console.WriteLine("PASS: optional branch voucher-type toggle uses same source MASTERID, " +
+                          "original source anchor and signed DR/CR under normal bound ALTER.");
+
         var alterWriterSource = File.ReadAllText(Path.Combine(
             sourceRoot!.FullName, "AAH", "src",
             "AccountingAutomationHub.Infrastructure", "Tally",
