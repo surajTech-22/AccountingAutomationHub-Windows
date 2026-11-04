@@ -307,6 +307,34 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 preparedAlterSource.Descendants("LEDGERNAME").Select(e => e.Value)))
             throw new InvalidOperationException(
                 "Separate destination voucher type did not preserve bound MASTERID and full DR/CR.");
+        // Unticking the same UI option must use precisely the same bound
+        // MASTERID ALTER writer in reverse, with the original parent type
+        // restored and no change to Tally's current voucher number or DR/CR.
+        var restoredParent = new System.Xml.Linq.XElement(desiredBranchType);
+        restoredParent.Element("VOUCHERTYPENAME")!.Value = "Sales";
+        restoredParent.SetAttributeValue("VCHTYPE", "Sales");
+        var restoreXml = System.Xml.Linq.XDocument.Parse(
+            TallyAccountingVoucherExportService.BuildBoundConsolidatedVoucherAlterXml(
+                "Combined Books", restoredParent, "26", "2"));
+        var restoredVoucher = restoreXml.Descendants("VOUCHER").Single();
+        if ((string?)restoredVoucher.Attribute("ACTION") != "Alter" ||
+            (string?)restoredVoucher.Attribute("TAGVALUE") != "26" ||
+            (string?)restoredVoucher.Attribute("VCHTYPE") != "Sales" ||
+            restoredVoucher.Element("VOUCHERTYPENAME")?.Value != "Sales" ||
+            restoredVoucher.Element("VOUCHERNUMBER")?.Value != "2" ||
+            !restoredVoucher.Descendants("AMOUNT").Select(e => e.Value).SequenceEqual(
+                desiredBranchType.Descendants("AMOUNT").Select(e => e.Value)) ||
+            !restoredVoucher.Descendants("LEDGERNAME").Select(e => e.Value).SequenceEqual(
+                desiredBranchType.Descendants("LEDGERNAME").Select(e => e.Value)))
+            throw new InvalidOperationException(
+                "Unchecking separate voucher types did not restore the parent using " +
+                "the same bound-MASTERID ALTER while preserving the full old DR/CR.");
+        if (TallyConsolidatedVoucherImportService
+                .ComputePreparedContentIdentity(desiredBranchType).ContentHash ==
+            TallyConsolidatedVoucherImportService
+                .ComputePreparedContentIdentity(restoredParent).ContentHash)
+            throw new InvalidOperationException(
+                "Changing only voucher type failed to stage a new desired version for ALTER.");
         if (!importerSource.Contains(
                 "type, number, prepared.VoucherTypeBaseByDestination", StringComparison.Ordinal) ||
             !importerSource.Contains(
