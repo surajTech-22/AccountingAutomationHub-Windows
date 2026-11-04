@@ -723,11 +723,11 @@ public sealed class DashboardViewModel :
     public bool HasRecentImports => RecentImports.Count > 0;
     public bool HasValidGstin => TallyCompanyInfo.NormalizeGstin(
         _clientContext.CurrentClient?.Gstin ?? string.Empty).Length == 15;
-    public bool HasBankExportData => _isConsolidatedTallyScope || BankTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasPurchaseExportData => _isConsolidatedTallyScope || PurchaseTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasSalesExportData => _isConsolidatedTallyScope || SalesTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasCashExportData => _isConsolidatedTallyScope || CashTallyExportMonths.Any(option => option.SourceCount > 0);
-    public bool HasJournalExportData => _isConsolidatedTallyScope || JournalTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasBankExportData => BankTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasPurchaseExportData => PurchaseTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasSalesExportData => SalesTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasCashExportData => CashTallyExportMonths.Any(option => option.SourceCount > 0);
+    public bool HasJournalExportData => JournalTallyExportMonths.Any(option => option.SourceCount > 0);
     public bool HasAnyTallyExportData => IsConsolidatedTallyScope ||
                                          HasBankExportData || HasPurchaseExportData || HasSalesExportData ||
                                          HasCashExportData || HasJournalExportData;
@@ -4631,8 +4631,23 @@ public sealed class DashboardViewModel :
         }
         TallyExportTotalTransactions = total;
         TallyExportSelectedTransactions = total;
+        // Same health gate as the normal single-client export panel:
+        // saved source-binding flags alone are NOT proof that the linked Tally
+        // company is open, that its full voucher readback succeeded, or that
+        // the current exported source was generated rather than restored from
+        // a historical preview. The normal status colors must never show green
+        // just because 645 locally persisted states say Verified.
+        var liveLink = _tallyCoordinator.GetCurrentClientLink();
+        var liveCompany = liveLink is null ? null : _tallyCoordinator.OpenCompanies
+            .FirstOrDefault(company => company.CompanyKey.Equals(
+                liveLink.CompanyKey, StringComparison.OrdinalIgnoreCase));
+        var liveAuthorityReady = IsConfirmedTallyLinkLive(liveLink, liveCompany) &&
+                                 !_tallyCoordinator.IsBusy && !HasTallyError;
+        var allCurrentVersionsVerified = accepted == 0 && pending == 0 &&
+                                          changed == 0 && held == 0 && verified == total;
         TallyExportHealthState = total == 0 ? "Neutral" :
-            accepted == 0 && pending == 0 && changed == 0 && held == 0 ? "Green" : "Red";
+            liveAuthorityReady && allCurrentVersionsVerified &&
+            !_consolidatedDisplayFromSavedPreview ? "Green" : "Red";
         // Existing status strip only: no extra panel, no new buttons.
         // Show the different denominators instead of claiming local source
         // rows are already present in destination Tally.

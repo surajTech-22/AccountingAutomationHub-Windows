@@ -258,7 +258,8 @@ Check(automationSource.Contains("RebaseAutomationFolderPaths([", StringCompariso
       automationSource.Contains("ClientBranchAutoImportLayout.IsWithinBranchPath", StringComparison.Ordinal) &&
       automationSource.Contains("IsWithinBranchContainer(f.FolderPath, path)", StringComparison.Ordinal),
     "Flat branch import ownership/history or parent watcher exclusion is missing.");
-Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
+Check(shellModel.Contains("new ConsolidatedBranchDashboardViewModel(", StringComparison.Ordinal) &&
+      shellModel.Contains("client, _dashboardViewModel,", StringComparison.Ordinal) &&
       shellModel.Contains("Consolidated · existing Dashboard Tally link and export design", StringComparison.Ordinal) &&
       shellModel.Contains("OpenLinkedCompanyAsync(linkClient, link, _tallyCoordinator)", StringComparison.Ordinal) &&
       automationSource.Contains("SqliteGstBranchOwnershipMigration", StringComparison.Ordinal) &&
@@ -300,7 +301,8 @@ Check(tallyApplyMethod.Contains("OpenCompanies.Count == refreshed.Length", Strin
       tallyApplyMethod.IndexOf("OpenCompanies.Clear();", StringComparison.Ordinal) &&
       tallySelectionMethod.Contains("ReferenceEquals(_selectedCompany, company) && !_manualSelectionPending", StringComparison.Ordinal) &&
       dashboardNative.Contains("if (TallyMetrics.SequenceEqual(updated)) return;", StringComparison.Ordinal) &&
-      shellModel.Contains("_consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(client, _dashboardViewModel)", StringComparison.Ordinal) &&
+      shellModel.Contains("_consolidatedDashboardPage = new ConsolidatedBranchDashboardViewModel(", StringComparison.Ordinal) &&
+      shellModel.Contains("client, _dashboardViewModel,", StringComparison.Ordinal) &&
        shellModel.Contains("ReferenceEquals(CurrentPage, expected.PageFactory())", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public long ParentClientId => _parentClientId;", StringComparison.Ordinal) &&
       consolidatedDashboardModel.Contains("public void RefreshAfterCommittedAccountingChange()", StringComparison.Ordinal) &&

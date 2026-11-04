@@ -36,6 +36,7 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
     private bool _uiIsConnected;
     private bool _uiIsBusy;
     private bool _disposed;
+    private long _companyChoiceClientId;
 
     public TallyClientViewModel(
         ActiveClientContext clientContext,
@@ -215,14 +216,21 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
         NotifyAll();
         if (client is null) StatusText = "Open a client workspace to use the client-specific Tally module.";
         else if (_repository.GetLinkForClient(client.Id) is null) StatusText = "Select the open Tally company for this client and confirm the link.";
-        else StatusText = RecoverySummary;
+        else StatusText = _coordinator.IsCurrentClientConsolidatedParent
+            ? "Consolidated parent Tally authority is read-only here. Deleted-voucher restore from legacy parent sources is blocked; use the existing branch-prepared Consolidated Tally Import verification."
+            : RecoverySummary;
     }
 
     private void RefreshCompanyChoices()
     {
         var client = _clientContext.CurrentClient;
         var link = client is null ? null : _repository.GetLinkForClient(client.Id);
-        var previousKey = _selectedCompany?.CompanyKey ?? string.Empty;
+        // Client/FY switch is a different Tally authority. Never carry a
+        // branch's manually selected Tally company into the parent module.
+        // Within the same client, retain the normal manual pending selection.
+        var previousKey = _companyChoiceClientId == (client?.Id ?? 0)
+            ? _selectedCompany?.CompanyKey ?? string.Empty : string.Empty;
+        _companyChoiceClientId = client?.Id ?? 0;
         OpenCompanies.Clear();
         foreach (var company in _coordinator.OpenCompanies) OpenCompanies.Add(company);
         var preferredKey = previousKey.Length > 0
@@ -354,6 +362,15 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
     {
         var client = _clientContext.CurrentClient;
         if (client is null) return;
+        // The normal Tally module may display consolidated connection and
+        // recovery state, but its regular restore source keys are old PARENT
+        // accounting rows, not verified branch-prepared consolidated vouchers.
+        // Never let this module CREATE those old rows into consolidated Tally.
+        if (_coordinator.IsCurrentClientConsolidatedParent)
+        {
+            StatusText = "Consolidated parent restore is blocked. Use Consolidated Tally Import's existing branch-prepared destination/MASTERID verification.";
+            return;
+        }
         if (!CanExportTally())
         {
             StatusText = DesktopPermissionService.DeniedMessage(_governanceRepository, GovernancePermissions.TallyExport, "Re-import deleted Tally vouchers");
@@ -513,6 +530,7 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
         !_uiIsBusy;
 
     private bool CanExportTally() =>
+        !_coordinator.IsCurrentClientConsolidatedParent &&
         !NetworkClientRuntime.IsNetworkClient &&
         _clientContext.CurrentClient is not null &&
         DesktopPermissionService.CanMutateAccounting(_governanceRepository, GovernancePermissions.TallyExport) &&

@@ -936,8 +936,7 @@ public sealed class MainWindowViewModel :
             () => _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true),
             () => !_tallyCoordinator.IsBusy);
         ConfirmTopTallyLinkCommand = new AsyncRelayCommand(
-            ConfirmTopTallyLinkAsync,
-            () => _clientContext.CurrentClient is not null && SelectedTallyCompany is not null && !_tallyCoordinator.IsBusy);
+            ConfirmTopTallyLinkAsync, CanConfirmTopTallyLink);
         OpenLinkedTallyCommand = new AsyncRelayCommand(
             OpenLinkedTallyAsync,
             CanOpenLinkedTally);
@@ -1074,19 +1073,45 @@ public sealed class MainWindowViewModel :
 
             _tallyCoordinator.SelectedCompany = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(TallyLinkActionLabel));
+            OnPropertyChanged(nameof(TallyLinkActionTooltip));
             ConfirmTopTallyLinkCommand.RaiseCanExecuteChanged();
             OpenLinkedTallyCommand.RaiseCanExecuteChanged();
         }
     }
 
-    // The current private branch / Consolidated ClientId alone owns this link.
-    public string TallyLinkActionLabel =>
-        _clientContext.CurrentClient is { } current &&
-        _tallyRepository.GetLinkForClient(current.Id) is not null &&
-        !_tallyCoordinator.IsCurrentSelectionPending() ? "Linked" : "Link";
+    // Mirror the original singular Tally module's three distinct stages:
+    // Confirm Link (unlinked), Change Link (different chosen CompanyKey),
+    // Linked (already confirmed). A saved link is not proof of a LIVE company.
+    // The coordinator's own connection status handles offline/not-open/syncing.
+    public string TallyLinkActionLabel
+    {
+        get
+        {
+            var current = _clientContext.CurrentClient;
+            var link = current is null ? null : _tallyRepository.GetLinkForClient(current.Id);
+            if (link is null) return "Link";
+            return _tallyCoordinator.IsCurrentSelectionPending() ? "Change Link" : "Linked";
+        }
+    }
+
+    private bool CanConfirmTopTallyLink()
+    {
+        var current = _clientContext.CurrentClient;
+        var selected = SelectedTallyCompany;
+        if (NetworkClientRuntime.IsNetworkClient || current is null || selected is null ||
+            _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
+            !_tallyCoordinator.IsCurrentSelectionPending()) return false;
+        // Reuse exactly the normal link identity gate; a company linked to
+        // another client or an invalid GST/FY is never silently adopted.
+        return (!selected.IsLinked || selected.LinkedClientId == current.Id) &&
+               TallyLiveConnectionCoordinator.CanConfirmIdentity(current, selected);
+    }
 
     public string TallyLinkActionTooltip =>
-        "Link the selected Tally CompanyKey only to the active Client/FY accounting scope.";
+        TallyLinkActionLabel == "Linked"
+            ? "Already linked to this active Client/FY. The live Tally company may still be closed."
+            : "Confirm the selected open Tally CompanyKey only for the active Client/FY accounting scope.";
 
     public string TallyConnectionStatus => _tallyCoordinator.ConnectionStatus;
 
@@ -2975,6 +3000,11 @@ public sealed class MainWindowViewModel :
                 choices.Add(new NavigationItem("Tally Import", "T",
                     "Consolidated · existing Dashboard Tally link and export design",
                     () => _consolidatedTallyImportPage!));
+                // The normal Client/FY already has a distinct Tally connection
+                // and deleted-voucher recovery module. Reuse that SAME page
+                // for the consolidated parent as well; it remains separate
+                // from branch-prepared Tally Import and never posts parent XML.
+                choices.Add(_tallyNavigationItem);
             }
 
             var title = preferredTitle ?? SelectedNavigationItem?.Title ?? "Dashboard";
@@ -3381,6 +3411,14 @@ public sealed class MainWindowViewModel :
         {
             RefreshBranchWorkspaces();
             _dashboardViewModel.SetPrivateBranchDashboard(_isPrivateBranchActive);
+            // A branch and consolidated parent have DIFFERENT confirmed
+            // Tally links. The top selector must never retain the branch's
+            // previous selection when the active ClientId/FY changes.
+            _tallyCoordinator.RestoreSelectionForActiveClientScope();
+            OnPropertyChanged(nameof(SelectedTallyCompany));
+            OnPropertyChanged(nameof(TallyLinkActionLabel));
+            OnPropertyChanged(nameof(TallyLinkActionTooltip));
+            OnPropertyChanged(nameof(TallyConnectionStatus));
         }
         NotifyWorkspaceChanged();
         ConfirmTopTallyLinkCommand.RaiseCanExecuteChanged();
@@ -3826,6 +3864,7 @@ public sealed class MainWindowViewModel :
         OnPropertyChanged(nameof(SelectedTallyCompany));
         OnPropertyChanged(nameof(TallyConnectionStatus));
         OnPropertyChanged(nameof(TallyLinkActionLabel));
+        OnPropertyChanged(nameof(TallyLinkActionTooltip));
         OnPropertyChanged(nameof(IsTallyConnected));
         OnPropertyChanged(nameof(IsTallyBusy));
         RefreshTallyCommand.RaiseCanExecuteChanged();

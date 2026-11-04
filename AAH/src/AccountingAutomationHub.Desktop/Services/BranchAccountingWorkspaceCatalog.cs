@@ -8,14 +8,14 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// <summary>
 /// Workspace contract for the existing Client/FY. Scope IDs are durable and
 /// do NOT invent hidden Client profiles or Tally companies.
-/// Parent Consolidated = Dashboard + Tally Import only. Each branch owns
+/// Parent Consolidated = Dashboard + Tally Import + original Tally authority/recovery module. Each branch owns
 /// its accounting modules, but they must not be activated until EVERY
 /// repository/importer uses this scope key and its data has been reconciled.
 /// </summary>
 public static class BranchAccountingWorkspaceCatalog
 {
     private static readonly string[] ConsolidatedModules =
-        ["Dashboard", "Tally Import"];
+        ["Dashboard", "Tally Import", "Tally"];
     private static readonly string[] AccountingModules =
         ["Dashboard", "Purchase", "Sales", "Banking", "Cash", "Ledger Master",
          "Journal", "GST", "Stock", "Fixed Assets", "Other", "Tally Import"];
