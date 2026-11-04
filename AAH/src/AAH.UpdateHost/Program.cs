@@ -271,13 +271,26 @@ internal static class Program
                     Log("Repairing earlier partial update: verified " + tag +
                         " already exists on disk; no files will be overwritten.");
                 }
-                if (!await StartAndVerifyAsync(target, install))
+                var restartedPid = await StartAndVerifyAsync(target, install);
+                if (restartedPid is null)
                 {
                     // The original manual updater has already committed verified
                     // bytes. Never claim health-check rollback without restoration.
                     Log("Updated AAH startup readiness was not confirmed. The original manual updater committed installed bytes; intervention may be needed.");
                     throw new InvalidOperationException("AAH updated, but the restart readiness check failed.");
                 }
+                // A startup ready signal alone did NOT prove a clean update on CL019:
+                // v593 PID 2652 was ready, while v589 PID 15308 remained listed.
+                // Retire ONLY the existing strictly-audited, completed-cleanup
+                // ghost; never kill an active app or Tally to obtain a green result.
+                if (!await VerifySingleRestartedInstallationAsync(target, restartedPid.Value))
+                {
+                    Log("Updated AAH is on disk but post-restart exact-install process census failed. " +
+                        "Do not claim a healthy single-instance update; accounting programs remain untouched.");
+                    throw new InvalidOperationException(
+                        "AAH updated, but multiple/stale AAH processes or missing restarted PID were detected.");
+                }
+                ReportResidualUpdateHostsWithoutTerminating();
                 Log(restartOnly
                     ? "SUCCESS: AAH " + tag + " already installed; all stale instances exited and existing executable restarted."
                     : "SUCCESS: AAH " + tag + " replaced in place by original manual updater and restarted.");
@@ -863,17 +876,36 @@ internal static class Program
             {
                 try
                 {
-                    if (process.HasExited) { process.Dispose(); continue; }
+                    // CL019 v593 regression: PID 15308 had a completed-shutdown
+                    // audit and Process.HasExited said true, yet Win32_Process
+                    // and Task Manager STILL listed its one-thread process.
+                    // Never ignore an enumerated AAH PID merely because a
+                    // managed process handle claims it has exited.
+                    var handleSaysExited = process.HasExited;
                     var fullPath = process.MainModule?.FileName;
                     if (string.IsNullOrWhiteSpace(fullPath))
                         throw new InvalidDataException("Cannot verify path for AAH PID " + process.Id);
                     if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
+                    {
+                        if (handleSaysExited)
+                            Log("WARNING: AAH PID " + process.Id +
+                                " is still in the native process census even though " +
+                                "Process.HasExited is true. Refusing to disregard it.");
                         selected.Add(process);
+                    }
                     else process.Dispose();
                 }
-                catch (InvalidOperationException) when (process.HasExited)
+                catch (InvalidOperationException exception)
                 {
-                    process.Dispose(); // Raced with a normal process exit.
+                    var pid = process.Id;
+                    process.Dispose();
+                    // A process can legitimately disappear between enumeration
+                    // and MainModule. Skip only when a SECOND independent
+                    // enumeration proves it absent; otherwise fail closed.
+                    if (IsPidStillEnumeratedAsAah(pid))
+                        throw new InvalidDataException(
+                            "AAH PID " + pid + " is still enumerated, but its executable " +
+                            "cannot be verified. Refusing an unsafe replacement.", exception);
                 }
                 catch
                 {
@@ -888,6 +920,18 @@ internal static class Program
             foreach (var process in selected) process.Dispose();
             throw;
         }
+    }
+
+    private static bool IsPidStillEnumeratedAsAah(int pid)
+    {
+        foreach (var candidate in Process.GetProcessesByName("AccountingAutomationHub"))
+        {
+            using (candidate)
+            {
+                if (candidate.Id == pid) return true;
+            }
+        }
+        return false;
     }
 
     internal static bool IsUpgradeOrRestartRecovery(Version installedOnDisk,
@@ -1133,7 +1177,104 @@ internal static class Program
         return parent.HasExited;
     }
 
-    private static async Task<bool> StartAndVerifyAsync(string exe, string install)
+    /// <summary>
+    /// After ready, require a fresh path-verified census containing ONLY the
+    /// newly launched PID. The pre-shutdown census is not enough: a stale old
+    /// process can survive/reappear after its WPF cleanup was logged complete.
+    /// Existing PID-start-time and complete ordered shutdown evidence are the
+    /// sole authority to retire a ghost. No broad kill or process-tree kill.
+    /// </summary>
+    internal static bool IsOnlyExpectedRestartPid(
+        IReadOnlyCollection<int> exactInstallPids, int restartedPid) =>
+        restartedPid > 0 && exactInstallPids.Count == 1 &&
+        exactInstallPids.Contains(restartedPid);
+
+    private static async Task<bool> VerifySingleRestartedInstallationAsync(
+        string installedExe, int restartedPid)
+    {
+        // Prove stability across multiple independent Windows process censuses.
+        // A previous false "all exited" result must not be repeated after ready.
+        for (var pass = 1; pass <= 3; pass++)
+        {
+            var candidates = GetSameInstallationProcesses(installedExe);
+            try
+            {
+                var pids = candidates.Select(process => process.Id).ToArray();
+                if (!IsOnlyExpectedRestartPid(pids, restartedPid))
+                {
+                    Log("Post-restart census " + pass +
+                        ": expected only new PID " + restartedPid + ", observed " +
+                        (pids.Length == 0 ? "(none)" : string.Join(",", pids)) + ".");
+                    foreach (var process in candidates)
+                    {
+                        if (process.Id != restartedPid && !process.HasExited)
+                            await RetireVerifiedCleanedGhostAsync(process, installedExe);
+                    }
+                }
+                else
+                {
+                    Log("Post-restart census " + pass + ": only verified new AAH PID " +
+                        restartedPid + " remains.");
+                }
+            }
+            finally
+            {
+                foreach (var process in candidates) process.Dispose();
+            }
+            if (pass < 3) await Task.Delay(1000);
+        }
+        // Final independent census after ghost retirement; never trust a stale
+        // snapshot or count a ready signal as proof that other PIDs are gone.
+        var final = GetSameInstallationProcesses(installedExe);
+        try
+        {
+            var pids = final.Select(process => process.Id).ToArray();
+            var clean = IsOnlyExpectedRestartPid(pids, restartedPid);
+            Log(clean
+                ? "PASS: post-restart single-instance gate: exactly one restarted " +
+                  "AAH process from the verified installation exists, PID " + restartedPid + "."
+                : "FAILED post-restart single-instance gate: expected PID " +
+                  restartedPid + ", found " + string.Join(",", pids) +
+                  ". Never terminate unknown/live accounting processes.");
+            return clean;
+        }
+        finally
+        {
+            foreach (var process in final) process.Dispose();
+        }
+    }
+
+    // A hanging older UpdateHost is separately actionable only after its
+    // transaction stage is known. Thread count and parent PID are NOT enough
+    // to authorize termination. Log it so no update silently masks the fault.
+    private static void ReportResidualUpdateHostsWithoutTerminating()
+    {
+        var cache = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AccountingAutomationHub", "GitHubAutoUpdate") + Path.DirectorySeparatorChar;
+        foreach (var updater in Process.GetProcessesByName("AAH_Update"))
+        {
+            using (updater)
+            {
+                try
+                {
+                    if (updater.Id == Environment.ProcessId || updater.HasExited) continue;
+                    var path = updater.MainModule?.FileName ?? string.Empty;
+                    if (!path.StartsWith(cache, StringComparison.OrdinalIgnoreCase)) continue;
+                    Log("WARNING: older AAH updater PID " + updater.Id +
+                        " remains running from verified cache " + path +
+                        ". No forced termination without transaction-stage proof.");
+                }
+                catch (Exception exception)
+                {
+                    Log("Could not safely inspect other AAH updater PID " +
+                        updater.Id + ": " + exception.Message);
+                }
+            }
+        }
+    }
+
+    private static async Task<int?> StartAndVerifyAsync(string exe, string install)
     {
         var token = Guid.NewGuid().ToString("N");
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset,
@@ -1142,7 +1283,7 @@ internal static class Program
             WorkingDirectory = install, UseShellExecute = false,
             ArgumentList = { "--update-ready=" + token }
         });
-        if (launched is null) return false;
+        if (launched is null) return null;
         // Use a monotonic elapsed timer: Windows clock corrections, DST and
         // timezone changes must not lengthen or shorten the restart budget.
         var readinessTimer = Stopwatch.StartNew();
@@ -1156,16 +1297,16 @@ internal static class Program
                 {
                     Log("Verified restart ready: new AAH PID " + launched.Id +
                         " signaled loaded UI and remained active.");
-                    return true;
+                    return launched.Id;
                 }
                 Log("Restart readiness signal arrived but the new AAH process exited.");
-                return false;
+                return null;
             }
             if (launched.HasExited)
             {
                 Log("Restart process exited before sending ready signal (PID " + launched.Id +
                     "); another stale instance may own the single-instance mutex.");
-                return false;
+                return null;
             }
             await Task.Delay(100);
         }
@@ -1185,7 +1326,7 @@ internal static class Program
         }
         if (!launched.HasExited)
             throw new UpdateRuntimeBusyException("New AAH did not exit; rollback deferred to protect running process.");
-        return false;
+        return null;
     }
 
     private static void StartWithoutReadiness(string exe, string install)
