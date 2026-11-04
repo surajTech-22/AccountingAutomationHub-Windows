@@ -2192,27 +2192,52 @@ public sealed class TallyLiveConnectionCoordinator :
         // Tally-side snapshot. This makes it possible to compare AAH PersistentId ->
         // Tally MASTERID/GUID/ALTERID -> current Ledger name row-for-row after any rename.
         var aahMasterIdentityRows = _masterRepository.Get(client.Id, client.FinancialYear, includeArchived: true);
-        var tallyLedgerDisplayNameCollisions = aahMasterIdentityRows
+        // A Ledger display name is not a global identity. A branch and the
+        // consolidated Tally books can each own the same name and MASTERID.
+        var selectedBookGuid = live
+            .Select(voucher => TallyCompanyMasterScope.GuidBookKey(voucher.Guid))
+            .FirstOrDefault(scope => scope.Length > 0) ?? string.Empty;
+        var boundLedgers = aahMasterIdentityRows
             .Where(master => master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
-                             !master.IsArchived &&
-                             master.TallyMasterId.Trim().Length > 0 &&
-                             TallyMasterIdentity.Key(master.Name).Length > 0)
-            .GroupBy(master => TallyMasterIdentity.Key(master.Name), StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Select(master => master.TallyMasterId.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
-            .Select(group => new
-            {
+                             !master.IsArchived && master.TallyMasterId.Trim().Length > 0 &&
+                             TallyMasterIdentity.Key(master.Name).Length > 0).ToArray();
+        var tallyLedgerDisplayNameCollisions = boundLedgers
+            .GroupBy(master => TallyCompanyMasterScope.BookKey(master) + "\u001f" +
+                               TallyMasterIdentity.Key(master.Name), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Select(master => master.TallyMasterId.Trim())
+                                 .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+            .Select(group => new {
                 DisplayName = group.First().Name.Trim(),
+                Book = TallyCompanyMasterScope.BookKey(group.First()),
                 MasterIds = group.Select(master => master.TallyMasterId.Trim())
-                    .Where(value => value.Length > 0)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray()
             })
-            .OrderBy(group => group.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .OrderBy(group => group.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+        var independentTallyBooksSharingLedgerNames = boundLedgers
+            .GroupBy(master => TallyMasterIdentity.Key(master.Name), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Select(TallyCompanyMasterScope.BookKey)
+                                 .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+            .Select(group => new {
+                DisplayName = group.First().Name.Trim(),
+                Identities = group.OrderBy(master => master.Company, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(master => master.TallyMasterId, StringComparer.OrdinalIgnoreCase)
+                    .Select(master => {
+                        var guidBook = TallyCompanyMasterScope.GuidBookKey(master.TallyGuid);
+                        var isDestination = selectedBookGuid.Length > 0 &&
+                            guidBook.Equals(selectedBookGuid, StringComparison.OrdinalIgnoreCase);
+                        var label = isDestination ? "Selected destination Tally"
+                            : "Separate branch/other Tally book";
+                        return label + " / " + (master.Company.Trim().Length > 0
+                            ? master.Company.Trim() : "Company name unavailable") +
+                            " / MASTERID " + master.TallyMasterId.Trim() +
+                            " / Book " + TallyCompanyMasterScope.BookKey(master);
+                    }).ToArray()
+            })
+            .OrderBy(group => group.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
         WriteAahMasterIdentityCsv(
             Path.Combine(folder, "AAH_TALLY_03-AAH-Master-Identity.csv"),
-            aahMasterIdentityRows);
+            aahMasterIdentityRows, selectedBookGuid);
 
         if (_httpService.IsLocalErp9Runtime)
         {
@@ -2359,8 +2384,10 @@ Live voucher index status: {(_httpService.IsLocalErp9Runtime
 Authority model: initial baseline followed by Master+Voucher ALTERID deltas
 Last synchronized ALTERID: {(_repository.GetBankSyncState(client.Id, client.FinancialYear, company.CompanyKey)?.LastAlterId ?? 0L)}
 AAH Master identity rows: {aahMasterIdentityRows.Count:N0}; Ledgers with Tally MASTERID: {aahMasterIdentityRows.Count(master => master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) && master.TallyMasterId.Trim().Length > 0):N0}; identity file: AAH_TALLY_03-AAH-Master-Identity.csv
-Tally Ledger display-name collisions (distinct MASTERIDs after AAH display cleanup): {tallyLedgerDisplayNameCollisions.Length:N0}
-{(tallyLedgerDisplayNameCollisions.Length == 0 ? "(none)" : string.Join(Environment.NewLine, tallyLedgerDisplayNameCollisions.Select(collision => $"- {collision.DisplayName}: MASTERID {string.Join(", ", collision.MasterIds)}")))}
+Same-Tally-book Ledger display-name collisions (distinct MASTERIDs): {tallyLedgerDisplayNameCollisions.Length:N0}
+{(tallyLedgerDisplayNameCollisions.Length == 0 ? "(none)" : string.Join(Environment.NewLine, tallyLedgerDisplayNameCollisions.Select(collision => $"- {collision.DisplayName}: MASTERID {string.Join(", ", collision.MasterIds)} / {collision.Book}")))}
+Independent branch/consolidated Tally books sharing a Ledger name (NOT duplicates): {independentTallyBooksSharingLedgerNames.Length:N0}
+{(independentTallyBooksSharingLedgerNames.Length == 0 ? "(none)" : string.Join(Environment.NewLine, independentTallyBooksSharingLedgerNames.Select(group => $"- {group.DisplayName}: {string.Join(" | ", group.Identities)}")))}
 Copied request/response files: {string.Join(", ", copied)}
 Tally.Imp detailed import log: {(tallyImpCopy.Length > 0 ? tallyImpCopy : "Not found through the running Tally process path") }
 
@@ -2472,11 +2499,12 @@ Tally-style report availability
 
     private static void WriteAahMasterIdentityCsv(
         string path,
-        IReadOnlyCollection<MasterRecord> rows)
+        IReadOnlyCollection<MasterRecord> rows,
+        string selectedBookGuid)
     {
         var lines = new List<string>
         {
-            "AAH Master ID,Type,Name,Parent,Source,Archived,User Edited,Tally Master ID,Tally GUID,Tally Alter ID,Internal Row ID,Updated UTC"
+            "AAH Master ID,Type,Name,Parent,Source,Archived,User Edited,Tally Master ID,Tally GUID,Tally Alter ID,Internal Row ID,Updated UTC,Tally Company,Tally Book Scope,Selected Linked Tally Book"
         };
         lines.AddRange(rows
             .OrderBy(row => row.Type, StringComparer.OrdinalIgnoreCase)
@@ -2490,7 +2518,11 @@ Tally-style report availability
                 Csv(row.TallyMasterId), Csv(row.TallyGuid),
                 Csv(row.TallyAlterId > 0 ? row.TallyAlterId.ToString(CultureInfo.InvariantCulture) : string.Empty),
                 Csv(row.PersistentId.ToString(CultureInfo.InvariantCulture)),
-                Csv(row.UpdatedUtc == DateTime.MinValue ? string.Empty : row.UpdatedUtc.ToString("O"))
+                Csv(row.UpdatedUtc == DateTime.MinValue ? string.Empty : row.UpdatedUtc.ToString("O")),
+                Csv(row.Company), Csv(TallyCompanyMasterScope.BookKey(row)),
+                Csv(selectedBookGuid.Length > 0 &&
+                    TallyCompanyMasterScope.GuidBookKey(row.TallyGuid).Equals(
+                        selectedBookGuid, StringComparison.OrdinalIgnoreCase) ? "Yes" : "No")
             })));
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }

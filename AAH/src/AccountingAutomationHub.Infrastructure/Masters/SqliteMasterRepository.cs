@@ -168,11 +168,19 @@ public sealed class SqliteMasterRepository : IMasterRepository
             masterIdentityIndex.CommandText =
                 """
                 DROP INDEX IF EXISTS UX_Masters_ClientFyNameType;
+                -- Tally numeric MASTERID is book-scoped, not Client/FY-scoped.
+                -- Preserve legacy branch and consolidated rows independently.
+                DROP INDEX IF EXISTS UX_Masters_ClientFyBoundTallyIdType;
                 CREATE UNIQUE INDEX IF NOT EXISTS UX_Masters_ClientFyBoundTallyIdType
-                ON Masters(ClientId, FinancialYear, Type COLLATE NOCASE, TallyMasterId COLLATE NOCASE)
+                ON Masters(ClientId, FinancialYear, Type COLLATE NOCASE, TallyMasterId COLLATE NOCASE,
+                    CASE WHEN LENGTH(TRIM(TallyGuid)) >= 38 AND SUBSTR(TRIM(TallyGuid),37,1)='-'
+                         THEN UPPER(SUBSTR(TRIM(TallyGuid),1,36))
+                         ELSE UPPER(TRIM(Company)) END)
                 WHERE TRIM(TallyMasterId) <> '' AND UPPER(TRIM(Type)) IN ('LEDGER','GROUP');
+                DROP INDEX IF EXISTS UX_Masters_ClientFyUnboundNameType;
                 CREATE UNIQUE INDEX IF NOT EXISTS UX_Masters_ClientFyUnboundNameType
-                ON Masters(ClientId, FinancialYear, Name COLLATE NOCASE, Type COLLATE NOCASE)
+                ON Masters(ClientId, FinancialYear, Name COLLATE NOCASE, Type COLLATE NOCASE,
+                           Company COLLATE NOCASE)
                 WHERE TRIM(TallyMasterId) = '' AND UPPER(TRIM(Type)) IN ('LEDGER','GROUP');
                 CREATE UNIQUE INDEX IF NOT EXISTS UX_Masters_ClientFyNonLedgerGroupNameType
                 ON Masters(ClientId, FinancialYear, Name COLLATE NOCASE, Type COLLATE NOCASE)
@@ -338,20 +346,25 @@ public sealed class SqliteMasterRepository : IMasterRepository
         // write transaction begins; the transaction itself then performs database writes
         // only through its own connection.
         var allExisting = Get(clientId, financialYear, includeArchived: true);
+        // The same Client/FY can carry historical branch masters and current
+        // consolidated masters. Keep ALL candidate rows, then select only a
+        // matching company authority. A dictionary of one MASTERID/name
+        // previously selected the first row from the wrong Tally company.
         var existingByKey = allExisting
             .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
+            .ToDictionary(group => group.Key,
                 group => group.OrderByDescending(IsTallyMaster)
                               .ThenBy(item => item.IsArchived)
                               .ThenByDescending(item => item.IsUserEdited)
-                              .ThenBy(item => item.PersistentId)
-                              .First(),
+                              .ThenBy(item => item.PersistentId).ToArray(),
                 StringComparer.OrdinalIgnoreCase);
         var existingByTallyMasterId = allExisting
             .Where(item => item.TallyMasterId.Trim().Length > 0)
-            .GroupBy(item => $"{item.Type.Trim().ToUpperInvariant()}\u001f{item.TallyMasterId.Trim()}", StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.OrderBy(item => item.PersistentId).First(), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(item => $"{item.Type.Trim().ToUpperInvariant()}\u001f{item.TallyMasterId.Trim()}",
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => group.OrderBy(item => item.PersistentId).ToArray(),
+                StringComparer.OrdinalIgnoreCase);
 
         var incomingForUpsert = incoming
             .GroupBy(UpsertIncomingIdentityKey, StringComparer.OrdinalIgnoreCase)
@@ -368,14 +381,18 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
             MasterRecord? protectionCandidate = null;
             var sourceMasterId = source.TallyMasterId.Trim();
-            if (sourceMasterId.Length > 0)
-                existingByTallyMasterId.TryGetValue($"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceMasterId}", out protectionCandidate);
-            if (protectionCandidate is null && existingByKey.TryGetValue(MasterIdentityKey(source), out var sameNameCandidate))
-            {
-                if (sourceMasterId.Length == 0 || sameNameCandidate.TallyMasterId.Trim().Length == 0 ||
-                    sameNameCandidate.TallyMasterId.Trim().Equals(sourceMasterId, StringComparison.OrdinalIgnoreCase))
-                    protectionCandidate = sameNameCandidate;
-            }
+            if (sourceMasterId.Length > 0 &&
+                existingByTallyMasterId.TryGetValue(
+                    $"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceMasterId}",
+                    out var protectionMatches))
+                protectionCandidate = protectionMatches.FirstOrDefault(saved =>
+                    TallyCompanyMasterScope.CanMatch(saved, source));
+            if (protectionCandidate is null &&
+                existingByKey.TryGetValue(MasterIdentityKey(source), out var sameNameCandidates))
+                protectionCandidate = sameNameCandidates.FirstOrDefault(saved =>
+                    TallyCompanyMasterScope.CanMatch(saved, source) &&
+                    (sourceMasterId.Length == 0 || saved.TallyMasterId.Trim().Length == 0 ||
+                     saved.TallyMasterId.Trim().Equals(sourceMasterId, StringComparison.OrdinalIgnoreCase)));
             if (protectionCandidate is null || protectionCandidate.PersistentId <= 0) continue;
             var id = protectionCandidate.PersistentId;
             if (!unresolvedMergeById.ContainsKey(id))
@@ -394,17 +411,35 @@ public sealed class SqliteMasterRepository : IMasterRepository
             var duplicateKey = MasterIdentityKey(source);
             MasterRecord? existing = null;
             var sourceTallyId = source.TallyMasterId.Trim();
-            if (IsTallyMaster(source) && sourceTallyId.Length > 0)
-                existingByTallyMasterId.TryGetValue($"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}", out existing);
-            if (existing is null && existingByKey.TryGetValue(duplicateKey, out var sameName))
+            if (IsTallyMaster(source) && sourceTallyId.Length > 0 &&
+                existingByTallyMasterId.TryGetValue(
+                    $"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}",
+                    out var boundCandidates))
+                existing = boundCandidates.FirstOrDefault(saved =>
+                    TallyCompanyMasterScope.CanMatch(saved, source));
+            if (existing is null && existingByKey.TryGetValue(duplicateKey, out var sameNameCandidates))
             {
-                // Fix71 simple identity rule: MASTERID first, name second. Name may bind
-                // a first-time local Ledger/Group only while that row has no different
-                // Tally MASTERID. A name match can never steal an already-bound identity.
-                if (!IsTallyMaster(source) || sourceTallyId.Length == 0 ||
-                    sameName.TallyMasterId.Trim().Length == 0 ||
-                    sameName.TallyMasterId.Trim().Equals(sourceTallyId, StringComparison.OrdinalIgnoreCase))
-                    existing = sameName;
+                // MASTERID first, name fallback only for a matching company.
+                // Never bind an already-owned branch identity to consolidated.
+                existing = sameNameCandidates.FirstOrDefault(saved =>
+                    TallyCompanyMasterScope.CanMatch(saved, source) &&
+                    (!IsTallyMaster(source) || sourceTallyId.Length == 0 ||
+                     saved.TallyMasterId.Trim().Length == 0 ||
+                     saved.TallyMasterId.Trim().Equals(sourceTallyId, StringComparison.OrdinalIgnoreCase)));
+
+                // Preserve the original singular-client behavior: an unscoped
+                // local suggestion may reuse ONE unambiguous bound ledger.
+                // After branches are consolidated two books can have the same
+                // name, so an unscoped source must never pick either one.
+                if (existing is null && !IsTallyMaster(source) &&
+                    string.IsNullOrWhiteSpace(source.Company))
+                {
+                    var uniqueBound = sameNameCandidates.Where(saved =>
+                        IsTallyMaster(saved) && !saved.IsArchived &&
+                        saved.PersistentId > 0).ToArray();
+                    if (uniqueBound.Length == 1)
+                        existing = uniqueBound[0];
+                }
             }
 
             var preserveArchivedTallyMergeSource = false;
@@ -517,9 +552,16 @@ public sealed class SqliteMasterRepository : IMasterRepository
                     Parent = source.Parent, Company = source.Company, Source = source.Source,
                     TallyMasterId = source.TallyMasterId, TallyGuid = source.TallyGuid, TallyAlterId = source.TallyAlterId
                 };
-                existingByKey[duplicateKey] = inserted;
+                existingByKey[duplicateKey] =
+                    existingByKey.TryGetValue(duplicateKey, out var previousNames)
+                        ? previousNames.Append(inserted).ToArray() : [inserted];
                 if (sourceTallyId.Length > 0)
-                    existingByTallyMasterId[$"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}"] = inserted;
+                {
+                    var boundKey = $"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}";
+                    existingByTallyMasterId[boundKey] =
+                        existingByTallyMasterId.TryGetValue(boundKey, out var previousIds)
+                            ? previousIds.Append(inserted).ToArray() : [inserted];
+                }
             }
         }
 
@@ -534,9 +576,10 @@ public sealed class SqliteMasterRepository : IMasterRepository
         record.Parent = string.Equals(record.Parent?.Trim(), "Primary", StringComparison.OrdinalIgnoreCase)
             ? "Primary" : AccountingText.DisplayName(record.Parent);
         record.Company = AccountingText.DisplayName(record.Company);
-        var duplicate = FindNormalizedDuplicate(
+        var duplicate = FindNormalizedDuplicateInCompany(
             record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
-            ignoreArchivedTally: IsLocalEditableSource(record.Source));
+            ignoreArchivedTally: IsLocalEditableSource(record.Source),
+            tallyCompany: record.Company);
         if (duplicate is not null)
             throw new InvalidOperationException($"Duplicate {record.Type} '{record.Name}' already exists as '{duplicate.Name}'.");
         if (record.PersistentId <= 0)
@@ -598,22 +641,36 @@ public sealed class SqliteMasterRepository : IMasterRepository
         return changed;
     }
 
+    // Preserve IMasterRepository's original binary/API contract for all
+    // ordinary single-company callers. Company-aware master edits use the
+    // additional method below instead of altering that shared interface.
     public MasterRecord? FindNormalizedDuplicate(
         long clientId, string financialYear, string type, string name,
-        long excludePersistentId = 0, bool ignoreArchivedTally = false)
+        long excludePersistentId = 0, bool ignoreArchivedTally = false) =>
+        FindNormalizedDuplicateInCompany(
+            clientId, financialYear, type, name, excludePersistentId,
+            ignoreArchivedTally, tallyCompany: null);
+
+    public MasterRecord? FindNormalizedDuplicateInCompany(
+        long clientId, string financialYear, string type, string name,
+        long excludePersistentId = 0, bool ignoreArchivedTally = false,
+        string? tallyCompany = null)
     {
         var requestedKey = MasterIdentityKey(type, name);
         return Get(clientId, financialYear, includeArchived: true)
             .FirstOrDefault(record =>
                 record.PersistentId != excludePersistentId &&
                 !(ignoreArchivedTally && record.IsArchived && IsTallyMaster(record)) &&
+                (tallyCompany is null ||
+                 record.Company.Trim().Equals(tallyCompany.Trim(), StringComparison.OrdinalIgnoreCase)) &&
                 MasterIdentityKey(record).Equals(requestedKey, StringComparison.OrdinalIgnoreCase));
     }
 
 
     public IReadOnlyList<IReadOnlyList<MasterRecord>> GetNormalizedDuplicateGroups(long clientId, string financialYear) =>
         Get(clientId, financialYear, includeArchived: true)
-            .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(record => TallyCompanyMasterScope.BookKey(record) + "\u001f" +
+                                MasterIdentityKey(record), StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => (IReadOnlyList<MasterRecord>)group.OrderBy(item => item.PersistentId).ToArray())
             .ToArray();
@@ -719,8 +776,9 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
         ValidateManualMasterHierarchy(record, originalName);
 
-        var duplicate = FindNormalizedDuplicate(
-            record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId);
+        var duplicate = FindNormalizedDuplicateInCompany(
+            record.ClientId, record.FinancialYear, record.Type, record.Name, record.PersistentId,
+            tallyCompany: record.Company);
         if (duplicate is not null)
             throw new InvalidOperationException(
                 $"Duplicate {record.Type} '{record.Name}' already exists as '{duplicate.Name}' from {duplicate.Source}.");
@@ -1902,11 +1960,12 @@ public sealed class SqliteMasterRepository : IMasterRepository
             (type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) || type.Equals("Group", StringComparison.OrdinalIgnoreCase)))
         {
             var masterId = record.TallyMasterId.Trim();
-            if (masterId.Length > 0) return $"{type.ToUpperInvariant()}\u001fMID\u001f{masterId}";
+            if (masterId.Length > 0) return $"{type.ToUpperInvariant()}\u001f{TallyCompanyMasterScope.BookKey(record)}\u001fMID\u001f{masterId}";
             var guid = record.TallyGuid.Trim();
-            if (guid.Length > 0) return $"{type.ToUpperInvariant()}\u001fGUID\u001f{guid.ToUpperInvariant()}";
+            if (guid.Length > 0) return $"{type.ToUpperInvariant()}\u001f{TallyCompanyMasterScope.BookKey(record)}\u001fGUID\u001f{guid.ToUpperInvariant()}";
         }
-        return MasterIdentityKey(record);
+        return TallyCompanyMasterScope.BookKey(record) + "\u001f" +
+               MasterIdentityKey(record);
     }
 
     public void VerifyLiveGroupMasterIdAuthority(
@@ -1927,6 +1986,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
         foreach (var tally in expected)
         {
             var matches = saved.Where(record =>
+                    TallyCompanyMasterScope.CanMatch(record, tally) &&
                     record.Type.Equals("Group", StringComparison.OrdinalIgnoreCase) &&
                     record.TallyMasterId.Trim().Equals(tally.TallyMasterId.Trim(), StringComparison.OrdinalIgnoreCase))
                 .OrderBy(record => record.PersistentId)
@@ -1968,7 +2028,9 @@ public sealed class SqliteMasterRepository : IMasterRepository
             .ToArray();
         if (incoming.Length == 0) return 0;
 
-        var existing = Get(clientId, financialYear, includeArchived: true).ToList();
+        var existing = Get(clientId, financialYear, includeArchived: true)
+            .Where(saved => incoming.Any(tally =>
+                TallyCompanyMasterScope.CanMatch(saved, tally))).ToList();
         using var connection = OpenConnection();
         using var transaction = connection.BeginTransaction();
         var changed = 0;
@@ -2023,9 +2085,10 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 using var children = connection.CreateCommand();
                 children.Transaction = transaction;
                 children.CommandText =
-                    "UPDATE Masters SET Parent=$New, UpdatedUtc=$Utc WHERE ClientId=$ClientId AND FinancialYear=$Fy AND Parent=$Old COLLATE NOCASE;";
+                    "UPDATE Masters SET Parent=$New, UpdatedUtc=$Utc WHERE ClientId=$ClientId AND FinancialYear=$Fy AND Parent=$Old COLLATE NOCASE AND (Company=$Company COLLATE NOCASE OR (TRIM(Company)='' AND TRIM(TallyMasterId)=''));";
                 children.Parameters.AddWithValue("$New", newName);
                 children.Parameters.AddWithValue("$Old", oldName);
+                children.Parameters.AddWithValue("$Company", tally.Company.Trim());
                 children.Parameters.AddWithValue("$ClientId", clientId);
                 children.Parameters.AddWithValue("$Fy", financialYear.Trim());
                 children.Parameters.AddWithValue("$Utc", now);
@@ -2090,6 +2153,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
         foreach (var tally in expected)
         {
             var matches = saved.Where(record =>
+                    TallyCompanyMasterScope.CanMatch(record, tally) &&
                     record.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
                     record.TallyMasterId.Trim().Equals(tally.TallyMasterId.Trim(), StringComparison.OrdinalIgnoreCase))
                 .OrderBy(record => record.PersistentId)
@@ -2146,7 +2210,9 @@ public sealed class SqliteMasterRepository : IMasterRepository
             .ToArray();
         if (incoming.Length == 0) return 0;
 
-        var existing = Get(clientId, financialYear, includeArchived: true).ToList();
+        var existing = Get(clientId, financialYear, includeArchived: true)
+            .Where(saved => incoming.Any(tally =>
+                TallyCompanyMasterScope.CanMatch(saved, tally))).ToList();
         var mergeAliases = GetMergeAliasMap(clientId, financialYear);
 
         // Fix82: ReconcileLedgerAuthorityWithTally has its own stale-alias archive path.
