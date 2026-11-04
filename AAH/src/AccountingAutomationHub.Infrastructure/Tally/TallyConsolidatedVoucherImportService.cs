@@ -403,6 +403,34 @@ public sealed class TallyConsolidatedVoucherImportService(
                 alterTargets.Add(planned.SourceAnchor, liveBound);
                 continue;
             }
+            // A legacy already-imported voucher can exist under its
+            // ORIGINAL base type even if its binding is missing/corrupt.
+            // Never CREATE a second voucher merely because the destination
+            // type was switched to/from a branch subtype. Another branch's
+            // separately verified MASTERID is not this source's property.
+            if (state is null && before.Vouchers.Any(live =>
+                live.VoucherDate?.Date == planned.Date.Date &&
+                !IgnoreCase.Equals(live.VoucherType, planned.Type) &&
+                (live.VoucherType.StartsWith(planned.Type + " - ",
+                     StringComparison.OrdinalIgnoreCase) ||
+                 planned.Type.StartsWith(live.VoucherType + " - ",
+                     StringComparison.OrdinalIgnoreCase)) &&
+                !HasDifferentPreparedBranchScopes(live.VoucherNumber, planned.Number) &&
+                !tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
+                    link.ClientId, financialYear, link.CompanyKey,
+                    SourceEntityType, planned.SourceAnchor, live.MasterId) &&
+                (IgnoreCase.Equals(live.VoucherNumber, planned.Number) ||
+                 (planned.Reference.Length > 0 &&
+                  IgnoreCase.Equals(live.Reference, planned.Reference) &&
+                  SamePostings(planned.Postings, live.LedgerPostings
+                      .Select(p => (p.LedgerName, p.SignedAmount)).ToArray())))))
+                throw new InvalidOperationException(
+                    "An existing destination voucher under the original/branch " +
+                    "voucher type matches source " + planned.SourceAnchor +
+                    ", but its saved MASTERID binding is missing. No duplicate " +
+                    "CREATE or blind ALTER is allowed; reconcile original " +
+                    "Tally source ownership first.");
+
             // AAH's durable source anchor survives Tally auto-numbering.
             // Never equate a new Tally VOUCHERNUMBER with a new source.
             var candidates = before.Vouchers.Where(live =>
