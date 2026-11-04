@@ -314,17 +314,38 @@ internal static class EntryPoint
             "WAIT_TIMEOUT (actual running native process) was ignored.");
         Assert(!Program.IsConfirmedKernelTermination(true, 0xFFFFFFFF),
             "WAIT_FAILED/unknown native process state was ignored.");
+        // v595 on CL019: .NET Process.Handle throws InvalidOperationException
+        // when HasExited==true (even though .NET's stale process-name list still
+        // includes the PID). Native OpenProcess avoids that managed-property
+        // exception while distinguishing ENDED from live/unknown processes.
+        Assert(Program.IsConfirmedKernelTermination(true, false, 0xFFFFFFFF, 87),
+            "Windows ERROR_INVALID_PARAMETER for an already-exited PID must not block v596.");
+        Assert(!Program.IsConfirmedKernelTermination(false, false, 0xFFFFFFFF, 87),
+            "Native PID-not-found without independent managed exit was treated as safe.");
+        Assert(!Program.IsConfirmedKernelTermination(true, false, 0xFFFFFFFF, 5),
+            "Windows access-denied was incorrectly treated as a terminated process.");
+        Assert(!Program.IsConfirmedKernelTermination(true, false, 0xFFFFFFFF, 6),
+            "Windows invalid-handle error was incorrectly treated as a terminated process.");
+        Assert(Program.IsConfirmedKernelTermination(true, true, 0, 0),
+            "A signaled native kernel process handle was not recognized as terminated.");
+        Assert(!Program.IsConfirmedKernelTermination(true, true, 0x102, 0),
+            "An active kernel process handle was incorrectly treated as terminated.");
         Assert(!hostSource.Contains(
                    "if (process.HasExited) { process.Dispose(); continue; }",
                    StringComparison.Ordinal) &&
+               !hostSource.Contains("WaitForSingleObject(process.Handle, 0)",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("OpenProcess(SynchronizeAccess | QueryLimitedInformationAccess",
+                   StringComparison.Ordinal) &&
                hostSource.Contains("IsExactInstallationProcess(process.ProcessName, fullPath, installedExe)",
                    StringComparison.Ordinal) &&
-               hostSource.Contains("if (IsConfirmedKernelTermination(process))", StringComparison.Ordinal) &&
-               hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))", StringComparison.Ordinal) &&
-               hostSource.Contains("Excluding only this ", StringComparison.Ordinal) &&
-               hostSource.Contains("kernel-confirmed dead process from live-install census.",
+               hostSource.Contains("if (IsConfirmedKernelTermination(process))",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))",
+                   StringComparison.Ordinal) &&
+               hostSource.Contains("kernel-confirmed dead, despite stale process-name ",
                    StringComparison.Ordinal),
-            "AAH census must verify exact executable path, OS termination and never skip an unknown live PID.");
+            "AAH v596 must use native OpenProcess instead of Process.Handle, and block unknown/live PIDs.");
 
         if (OperatingSystem.IsWindows())
         {
@@ -343,12 +364,20 @@ internal static class EntryPoint
                 ?? throw new InvalidOperationException("Unable to start isolated Windows process for exit verification.");
             Assert(actualExited.WaitForExit(15000),
                 "Isolated Windows process did not exit.");
+            // Reproduces user PC failure: an already-exited .NET Process
+            // can refuse Process.Handle entirely, but native OpenProcess(PID)
+            // must still resolve safe termination without that managed handle.
+            Assert(actualExited.HasExited,
+                "Real exited Windows fixture must be independently marked exited.");
             Assert(Program.IsConfirmedKernelTermination(actualExited),
-                "Real signaled Windows process kernel handle was not recognized as terminated.");
+                "Exited managed Windows process cannot be confirmed by native PID check.");
+            Assert(!hostSource.Contains("process.Handle", StringComparison.Ordinal) ||
+                   !hostSource.Contains("WaitForSingleObject(process.Handle", StringComparison.Ordinal),
+                "Updater cannot depend on .NET Process.Handle after HasExited.");
         }
-        Console.WriteLine("PASS: v594 lingering PID regression: only BOTH managed exit and " +
-                          "signaled original Windows kernel handle exclude dead census entries; " +
-                          "live/unknown processes remain protected.");
+        Console.WriteLine("PASS: v595 Process.Handle crash regression: native OpenProcess " +
+                          "detects already-exited stale PIDs, rejects live/unknown/access-denied " +
+                          "PIDs, and leaves the original accounting/Tally shutdown guards intact.");
 
         Assert(Program.LauncherExitedOrBelongsToInstallation(int.MaxValue, originalExe),
             "Updater blocked a verified release when the launcher already exited before preflight.");
