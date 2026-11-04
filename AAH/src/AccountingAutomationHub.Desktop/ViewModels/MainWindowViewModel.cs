@@ -2903,7 +2903,10 @@ public sealed class MainWindowViewModel :
                     client.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
                 SelectedBranchWorkspace?.IsConsolidated != true || _isPrivateBranchActive ||
                 _tallyCoordinator.GetCurrentClientLink()?.CompanyKey != link.CompanyKey)
+            {
+                _consolidatedDisplayWarmScopeKey = string.Empty;
                 return;
+            }
             _ = WarmConsolidatedSourcePreviewReadOnlyAsync(
                 client.Id, client.FinancialYear, link.CompanyKey);
         }));
@@ -4117,6 +4120,31 @@ public sealed class MainWindowViewModel :
         if (tallyConnectedNow && !_lastBankingTallyConnectionState)
             _bankingViewModel.NotifyTallyConnectionChanged(true);
         _lastBankingTallyConnectionState = tallyConnectedNow;
+
+        // A read-only consolidated preview skipped while Tally was briefly
+        // busy gets exactly one opportunity when the existing link becomes
+        // idle. The scope-key gate prevents a new XML preparation on any
+        // subsequent 5-second heartbeat or passive link-status notification.
+        if (tallyConnectedNow && !_tallyCoordinator.IsBusy &&
+            CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel &&
+            _clientContext.CurrentClient is { } previewClient)
+        {
+            var linkKey = _tallyCoordinator.GetCurrentClientLink();
+            var scopeKey = previewClient.Id.ToString(CultureInfo.InvariantCulture) + "|" +
+                previewClient.FinancialYear + "|" + linkKey?.CompanyKey;
+            if (!string.Equals(_consolidatedDisplayWarmScopeKey, scopeKey, StringComparison.Ordinal))
+            {
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher is not null)
+                    _ = dispatcher.BeginInvoke(DispatcherPriority.Background,
+                        new Action(() =>
+                        {
+                            if (_clientContext.CurrentClient?.Id == previewClient.Id &&
+                                CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel)
+                                QueueConsolidatedSourcePreviewWarm(previewClient);
+                        }));
+            }
+        }
 
         // Fix92: the coordinator has already merged the current baseline/ALTERID delta
         // into the shared SQLite authority before this notification. Audit therefore
