@@ -32,28 +32,71 @@ internal static class Program
     private const uint WaitTimeout = 0x00000102;
     private const uint WaitFailed = 0xFFFFFFFF;
 
+    private const uint SynchronizeAccess = 0x00100000;
+    private const uint QueryLimitedInformationAccess = 0x1000;
+    private const int ErrorInvalidParameter = 87;
+
     [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
     private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
 
-    // Keep this pure so regression tests cover false HasExited values,
-    // live native handles and unknown/failed native waits.
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    // The v595 CL019 failure was Process.Handle throwing
+    // InvalidOperationException AFTER Process.HasExited == true, while the
+    // process-name snapshot still listed PID 15308. OpenProcess is a native
+    // independent observation and does not call .NET Process.Handle.
+    //
+    // Signaled kernel handle OR a native PID-not-found result (87) can prove
+    // a PID already exited, but ONLY when .NET separately reports HasExited.
+    // Access denied, a still-live handle and unknown errors are all blockers.
     internal static bool IsConfirmedKernelTermination(bool managedHasExited, uint nativeWaitResult) =>
         managedHasExited && nativeWaitResult == WaitObject0;
+
+    internal static bool IsConfirmedKernelTermination(
+        bool managedHasExited, bool nativeOpenSucceeded, uint nativeWaitResult, int nativeOpenError) =>
+        managedHasExited &&
+        (nativeOpenSucceeded
+            ? nativeWaitResult == WaitObject0
+            : nativeOpenError == ErrorInvalidParameter);
 
     internal static bool IsConfirmedKernelTermination(Process process)
     {
         if (!OperatingSystem.IsWindows() || !process.HasExited) return false;
-        // Process.Handle is an OS kernel handle to this exact process object,
-        // not a newly looked-up/reused PID. Wait(0)==WAIT_OBJECT_0 proves
-        // termination without touching/ending the process.
-        var wait = WaitForSingleObject(process.Handle, 0);
-        if (wait == WaitFailed)
-            throw new Win32Exception(Marshal.GetLastWin32Error(),
-                "Could not verify native exit state for AAH PID " + process.Id);
-        if (wait != WaitObject0 && wait != WaitTimeout)
-            throw new InvalidDataException(
-                "Unexpected native process wait state " + wait + " for AAH PID " + process.Id);
-        return IsConfirmedKernelTermination(true, wait);
+        var pid = process.Id;
+        // Do not use process.Handle: its getter explicitly refuses to return a
+        // kernel handle for a Process already reported as exited on .NET 10.
+        var handle = OpenProcess(SynchronizeAccess | QueryLimitedInformationAccess, false, (uint)pid);
+        if (handle == IntPtr.Zero)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if (IsConfirmedKernelTermination(true, false, WaitFailed, error))
+            {
+                Log("AAH PID " + pid +
+                    " is an already-exited managed process and Windows OpenProcess " +
+                    "confirms the PID no longer exists. Excluding stale enumeration.");
+                return true;
+            }
+            throw new Win32Exception(error,
+                "Native OpenProcess could not verify AAH PID " + pid +
+                "; refusing to treat an inaccessible or unknown process as exited");
+        }
+        try
+        {
+            var result = WaitForSingleObject(handle, 0);
+            if (result == WaitFailed)
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Native wait could not verify AAH PID " + pid);
+            if (result != WaitObject0 && result != WaitTimeout)
+                throw new InvalidDataException(
+                    "Unexpected native process wait state " + result + " for AAH PID " + pid);
+            return IsConfirmedKernelTermination(true, true, result, 0);
+        }
+        finally { CloseHandle(handle); }
     }
     private static string LogPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "AccountingAutomationHub", "AutoUpdateLogs", "github-update-host.log");
@@ -910,37 +953,33 @@ internal static class Program
             {
                 try
                 {
-                    // v594 on CL019: the updater marked three FULLY CLOSED
-                    // AAH process handles as HasExited=true, but still counted
-                    // each in its process-name census. That repeatedly blocked
-                    // installing v594, although the app had safely completed
-                    // its own shutdown and no installer transaction began.
-                    //
-                    // For this exact installed executable, exclude only if
-                    // BOTH .NET observed exit AND the original kernel process
-                    // handle is independently signaled. A live/unknown handle
-                    // remains a hard blocker regardless of a Tally cleanup log.
+                    // A dead AAH process is harmless to replacement, even if
+                    // Windows still lists an obsolete one-thread PID. Test this
+                    // native condition BEFORE MainModule: .NET can refuse to
+                    // provide its executable or Process.Handle after HasExited.
+                    // This branch NEVER kills a process; it only stops counting
+                    // one verified dead PID as a live installation blocker.
+                    if (IsConfirmedKernelTermination(process))
+                    {
+                        Log("AAH PID " + process.Id +
+                            " is kernel-confirmed dead, despite stale process-name " +
+                            "enumeration. Excluding from live-install census.");
+                        process.Dispose();
+                        continue;
+                    }
+
+                    // Anything still running or unverified MUST be exact-path
+                    // verified and then sent through original graceful Tally /
+                    // accounting drain. No broad taskkill or new exit protocol.
                     var fullPath = process.MainModule?.FileName;
                     if (string.IsNullOrWhiteSpace(fullPath))
                         throw new InvalidDataException("Cannot verify path for AAH PID " + process.Id);
                     if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
                     {
-                        if (IsConfirmedKernelTermination(process))
-                        {
-                            Log("AAH PID " + process.Id +
-                                " still enumerated, but its exact OS process handle " +
-                                "is signaled terminated. Excluding only this " +
-                                "kernel-confirmed dead process from live-install census.");
-                            process.Dispose();
-                        }
-                        else
-                        {
-                            if (process.HasExited)
-                                Log("WARNING: AAH PID " + process.Id +
-                                    " reports managed HasExited, but native kernel " +
-                                    "exit is NOT proven. Blocking replacement.");
-                            selected.Add(process);
-                        }
+                        if (process.HasExited)
+                            Log("WARNING: AAH PID " + process.Id +
+                                " has managed HasExited but native exit not confirmed. Blocking replacement.");
+                        selected.Add(process);
                     }
                     else process.Dispose();
                 }
