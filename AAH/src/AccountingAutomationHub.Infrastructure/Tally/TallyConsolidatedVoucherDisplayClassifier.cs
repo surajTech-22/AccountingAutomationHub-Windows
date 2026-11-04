@@ -27,10 +27,15 @@ public static class TallyConsolidatedVoucherDisplayClassifier
         // mapping. On navigation the saved Vouchers XML is display-only, so
         // recover the naming rule from CURRENT configured branch display names
         // instead of losing all parent types and source identity on reload.
-        var mapped = parentByDestinationType is not null &&
-                     parentByDestinationType.TryGetValue(type, out var explicitParent) &&
-                     !string.IsNullOrWhiteSpace(explicitParent);
-        var parent = mapped ? explicitParent!.Trim() : type;
+        var mapped = false;
+        var parent = type;
+        if (parentByDestinationType is not null &&
+            parentByDestinationType.TryGetValue(type, out var explicitParent) &&
+            !string.IsNullOrWhiteSpace(explicitParent))
+        {
+            parent = explicitParent.Trim();
+            mapped = true;
+        }
         var branch = string.Empty;
         var suffix = (configuredBranchNames ?? Array.Empty<string>())
             .Where(x => !string.IsNullOrWhiteSpace(x))
