@@ -321,7 +321,8 @@ internal static class EntryPoint
                    StringComparison.Ordinal) &&
                hostSource.Contains("if (IsConfirmedKernelTermination(process))", StringComparison.Ordinal) &&
                hostSource.Contains("if (IsPidStillEnumeratedAsAah(pid))", StringComparison.Ordinal) &&
-               hostSource.Contains("Excluding only this kernel-confirmed dead process",
+               hostSource.Contains("Excluding only this ", StringComparison.Ordinal) &&
+               hostSource.Contains("kernel-confirmed dead process from live-install census.",
                    StringComparison.Ordinal),
             "AAH census must verify exact executable path, OS termination and never skip an unknown live PID.");
 
