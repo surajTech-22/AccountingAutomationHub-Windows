@@ -78,6 +78,11 @@ public sealed class TallyLiveConnectionCoordinator :
     private bool IsConsolidatedParentClient(ClientProfile client) =>
         _consolidatedParentScopeProvider?.Invoke(client) == true;
 
+    // Expose ONLY the existing branch-accounting scope decision to the ordinary
+    // Tally recovery page. Its parent legacy sources may not be reimported as
+    // branch-prepared consolidated vouchers. No new source or Tally authority.
+    public bool IsCurrentClientConsolidatedParent =>
+        _clientContext.CurrentClient is { } client && IsConsolidatedParentClient(client);
 
     // Signalled only by automatic outbound selection once local preparation is ready.
     // Manual Export never calls this, and no XML is sent here.
@@ -3902,6 +3907,23 @@ Tally-style report availability
             OpenCompanies[index] = company;
         }
         OnPropertyChanged(nameof(OpenCompanies));
+    }
+
+    // The shell's top company selector is shared by ordinary clients,
+    // private branches and the consolidated parent. Switching ClientId/FY
+    // must restore THAT client\'s saved linked CompanyKey rather than leaving
+    // the previous branch selected or silently borrowing its Tally authority.
+    // Called only on a real workspace switch, not on five-second pulses.
+    public void RestoreSelectionForActiveClientScope()
+    {
+        var current = _clientContext.CurrentClient;
+        var link = current is null ? null : _repository.GetLinkForClient(current.Id);
+        var linkedCompany = link is null ? null : OpenCompanies.FirstOrDefault(company =>
+            company.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase));
+        if (ReferenceEquals(_selectedCompany, linkedCompany) && !_manualSelectionPending)
+            return;
+        SetSelectionFromRememberedLink(linkedCompany);
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetSelectionFromRememberedLink(TallyCompanyInfo? company)
