@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -21,6 +23,38 @@ internal static class Program
     private const string AssetName = "AAH_App-win-x64.zip";
     private const string ProtocolName = "AAH_AutoUpdate.json";
     private static readonly HttpClient Http = CreateClient();
+    // PIDs of terminated WPF applications can remain in Windows process
+    // enumeration (CL019: 15308, 2652, 2888), even after HasExited=true.
+    // Do NOT rely on a process name/census entry alone as proof of a live
+    // process. A signaled native process handle proves the kernel process
+    // has terminated, regardless of a stale CIM/process-name listing.
+    private const uint WaitObject0 = 0x00000000;
+    private const uint WaitTimeout = 0x00000102;
+    private const uint WaitFailed = 0xFFFFFFFF;
+
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    // Keep this pure so regression tests cover false HasExited values,
+    // live native handles and unknown/failed native waits.
+    internal static bool IsConfirmedKernelTermination(bool managedHasExited, uint nativeWaitResult) =>
+        managedHasExited && nativeWaitResult == WaitObject0;
+
+    private static bool IsConfirmedKernelTermination(Process process)
+    {
+        if (!OperatingSystem.IsWindows() || !process.HasExited) return false;
+        // Process.Handle is an OS kernel handle to this exact process object,
+        // not a newly looked-up/reused PID. Wait(0)==WAIT_OBJECT_0 proves
+        // termination without touching/ending the process.
+        var wait = WaitForSingleObject(process.Handle, 0);
+        if (wait == WaitFailed)
+            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                "Could not verify native exit state for AAH PID " + process.Id);
+        if (wait != WaitObject0 && wait != WaitTimeout)
+            throw new InvalidDataException(
+                "Unexpected native process wait state " + wait + " for AAH PID " + process.Id);
+        return IsConfirmedKernelTermination(true, wait);
+    }
     private static string LogPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "AccountingAutomationHub", "AutoUpdateLogs", "github-update-host.log");
 
@@ -876,22 +910,37 @@ internal static class Program
             {
                 try
                 {
-                    // CL019 v593 regression: PID 15308 had a completed-shutdown
-                    // audit and Process.HasExited said true, yet Win32_Process
-                    // and Task Manager STILL listed its one-thread process.
-                    // Never ignore an enumerated AAH PID merely because a
-                    // managed process handle claims it has exited.
-                    var handleSaysExited = process.HasExited;
+                    // v594 on CL019: the updater marked three FULLY CLOSED
+                    // AAH process handles as HasExited=true, but still counted
+                    // each in its process-name census. That repeatedly blocked
+                    // installing v594, although the app had safely completed
+                    // its own shutdown and no installer transaction began.
+                    //
+                    // For this exact installed executable, exclude only if
+                    // BOTH .NET observed exit AND the original kernel process
+                    // handle is independently signaled. A live/unknown handle
+                    // remains a hard blocker regardless of a Tally cleanup log.
                     var fullPath = process.MainModule?.FileName;
                     if (string.IsNullOrWhiteSpace(fullPath))
                         throw new InvalidDataException("Cannot verify path for AAH PID " + process.Id);
                     if (IsExactInstallationProcess(process.ProcessName, fullPath, installedExe))
                     {
-                        if (handleSaysExited)
-                            Log("WARNING: AAH PID " + process.Id +
-                                " is still in the native process census even though " +
-                                "Process.HasExited is true. Refusing to disregard it.");
-                        selected.Add(process);
+                        if (IsConfirmedKernelTermination(process))
+                        {
+                            Log("AAH PID " + process.Id +
+                                " still enumerated, but its exact OS process handle " +
+                                "is signaled terminated. Excluding only this " +
+                                "kernel-confirmed dead process from live-install census.");
+                            process.Dispose();
+                        }
+                        else
+                        {
+                            if (process.HasExited)
+                                Log("WARNING: AAH PID " + process.Id +
+                                    " reports managed HasExited, but native kernel " +
+                                    "exit is NOT proven. Blocking replacement.");
+                            selected.Add(process);
+                        }
                     }
                     else process.Dispose();
                 }
@@ -962,7 +1011,7 @@ internal static class Program
     internal static async Task<bool> RequestGracefulUpdateExitAsync(
         Process parent, TimeSpan timeout, string? verifiedInstalledExe = null)
     {
-        if (parent.HasExited) return true;
+        if (IsConfirmedKernelTermination(parent)) return true;
         if (!parent.ProcessName.Equals("AccountingAutomationHub", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Graceful update shutdown target is not AAH.");
 
@@ -974,7 +1023,7 @@ internal static class Program
         var listenerDiscovery = Stopwatch.StartNew();
         while (listenerDiscovery.Elapsed < TimeSpan.FromSeconds(20))
         {
-            if (parent.HasExited) return true;
+            if (IsConfirmedKernelTermination(parent)) return true;
             if (await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe))
                 return true;
             try
@@ -996,7 +1045,7 @@ internal static class Program
                 return false;
             }
         }
-        if (parent.HasExited) return true;
+        if (IsConfirmedKernelTermination(parent)) return true;
         Log("AAH PID " + parent.Id + " has no registered shutdown listener and no complete " +
             "verified-cleanup evidence; preserving process and accounting data.");
         return false;
@@ -1109,7 +1158,7 @@ internal static class Program
     private static async Task<bool> RetireVerifiedCleanedGhostAsync(
         Process process, string? verifiedInstalledExe)
     {
-        if (process.HasExited) return true;
+        if (IsConfirmedKernelTermination(process)) return true;
         if (string.IsNullOrWhiteSpace(verifiedInstalledExe)) return false;
         try
         {
@@ -1130,7 +1179,7 @@ internal static class Program
                 return false;
             if (now - completedAt < TimeSpan.FromSeconds(5))
                 return false; // Give WPF/foreground helpers a chance to exit.
-            if (process.HasExited) return true;
+            if (IsConfirmedKernelTermination(process)) return true;
             // Re-verify exact process identity before taking the sole narrow
             // process-ending action. This is NOT an active-app force-close:
             // verified updater-triggered idle + completed accounting/WAL
@@ -1145,12 +1194,12 @@ internal static class Program
             Log("Proven-cleaned ghost AAH PID " + process.Id + " exited; fresh process census required.");
             return true;
         }
-        catch (InvalidOperationException) when (process.HasExited) { return true; }
+        catch (InvalidOperationException) when (IsConfirmedKernelTermination(process)) { return true; }
         catch (Exception ex)
         {
             Log("AAH cleaned-ghost verification/exit deferred for PID " + process.Id +
                 ": " + ex.GetType().Name + ": " + ex.Message);
-            return process.HasExited;
+            return IsConfirmedKernelTermination(process);
         }
     }
 
@@ -1160,7 +1209,7 @@ internal static class Program
         var elapsed = Stopwatch.StartNew();
         while (elapsed.Elapsed < timeout)
         {
-            if (parent.HasExited) return true;
+            if (IsConfirmedKernelTermination(parent)) return true;
             if (await RetireVerifiedCleanedGhostAsync(parent, verifiedInstalledExe))
                 return true;
             var remaining = timeout - elapsed.Elapsed;
@@ -1174,7 +1223,7 @@ internal static class Program
             }
             catch (OperationCanceledException) { /* Recheck recorded cleanup. */ }
         }
-        return parent.HasExited;
+        return IsConfirmedKernelTermination(parent);
     }
 
     /// <summary>
@@ -1207,7 +1256,7 @@ internal static class Program
                         (pids.Length == 0 ? "(none)" : string.Join(",", pids)) + ".");
                     foreach (var process in candidates)
                     {
-                        if (process.Id != restartedPid && !process.HasExited)
+                        if (process.Id != restartedPid && !IsConfirmedKernelTermination(process))
                             await RetireVerifiedCleanedGhostAsync(process, installedExe);
                     }
                 }
