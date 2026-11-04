@@ -1935,7 +1935,8 @@ public sealed class SqliteMasterRepository : IMasterRepository
             var guid = record.TallyGuid.Trim();
             if (guid.Length > 0) return $"{type.ToUpperInvariant()}\u001f{TallyCompanyMasterScope.BookKey(record)}\u001fGUID\u001f{guid.ToUpperInvariant()}";
         }
-        return MasterIdentityKey(record);
+        return TallyCompanyMasterScope.BookKey(record) + "\u001f" +
+               MasterIdentityKey(record);
     }
 
     public void VerifyLiveGroupMasterIdAuthority(
@@ -2055,9 +2056,10 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 using var children = connection.CreateCommand();
                 children.Transaction = transaction;
                 children.CommandText =
-                    "UPDATE Masters SET Parent=$New, UpdatedUtc=$Utc WHERE ClientId=$ClientId AND FinancialYear=$Fy AND Parent=$Old COLLATE NOCASE;";
+                    "UPDATE Masters SET Parent=$New, UpdatedUtc=$Utc WHERE ClientId=$ClientId AND FinancialYear=$Fy AND Parent=$Old COLLATE NOCASE AND (Company=$Company COLLATE NOCASE OR (TRIM(Company)='' AND TRIM(TallyMasterId)=''));";
                 children.Parameters.AddWithValue("$New", newName);
                 children.Parameters.AddWithValue("$Old", oldName);
+                children.Parameters.AddWithValue("$Company", tally.Company.Trim());
                 children.Parameters.AddWithValue("$ClientId", clientId);
                 children.Parameters.AddWithValue("$Fy", financialYear.Trim());
                 children.Parameters.AddWithValue("$Utc", now);
