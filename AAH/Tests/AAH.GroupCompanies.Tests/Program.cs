@@ -119,11 +119,11 @@ Require(registrations.Count == 2 &&
     "unnamed GSTIN branches must use state registration names, including primary GSTIN");
 var workspaces = BranchAccountingWorkspaceCatalog.Build(unbranched, registrations);
 Require(workspaces.Count == 3 && workspaces[0].IsConsolidated &&
-        workspaces[0].AllowedModules.SequenceEqual(["Dashboard", "Tally Import"]) &&
+        workspaces[0].AllowedModules.SequenceEqual(["Dashboard", "Tally Import", "Tally"]) &&
         workspaces.Skip(1).All(x => !x.IsConsolidated &&
             x.AllowedModules.Contains("Purchase") && x.AllowedModules.Contains("Journal") &&
             x.AllowedModules.Contains("Ledger Master") && x.AllowedModules.Contains("GST")),
-    "parent Consolidated must have Dashboard+Tally only; branches need their full independent module menus");
+    "parent Consolidated must have Dashboard + Tally Import + original Tally recovery module; branches retain full independent menus");
 Require(workspaces.Skip(1).All(x => x.ClientId == unbranched.Id &&
         x.StorageScopeKey.Contains(x.ScopeId, StringComparison.Ordinal) &&
         x.ScopeId != "CONSOLIDATED"),
