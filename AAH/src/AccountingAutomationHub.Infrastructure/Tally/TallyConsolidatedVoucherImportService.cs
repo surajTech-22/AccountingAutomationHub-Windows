@@ -50,6 +50,285 @@ public sealed class TallyConsolidatedVoucherImportService(
     }
 
     /// <summary>
+    /// Produce REAL, manually importable Tally master and voucher envelopes,
+    /// with destination-bound ALTER actions for changed vouchers. This is a
+    /// strict read-only live preflight: it NEVER calls ImportXmlAsync, changes
+    /// source-binding states, posts masters, or reserves an ALTER/CREATE.
+    /// The original prepared CREATE XML remains the internal AAH import
+    /// authority and MUST NOT be mistaken for this manual export.
+    /// </summary>
+    public async Task<TallyConsolidatedManualImportXmlResult> PrepareManualImportXmlAsync(
+        TallyClientLink link, TallyCompanyInfo destination,
+        TallyConsolidatedPreparedXmlResult prepared,
+        CancellationToken cancellationToken = default,
+        string? accountingFinancialYear = null)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (tallyRepository is null)
+            throw new InvalidOperationException(
+                "Manual XML needs AAH's original source->destination MASTERID bindings.");
+        var financialYear = TallyBranchConsolidationImportService.RequireConfirmedDestination(
+            link, destination, accountingFinancialYear);
+        TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+            prepared.MastersXml, "original consolidated manual master source");
+        TallyConsolidatedPreparedXmlBuilder.RequireNoForeignTallyIdentity(
+            prepared.VouchersXml, "original consolidated manual voucher source");
+        var masterDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            prepared.MastersXml, "manual import original masters");
+        var voucherDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            prepared.VouchersXml, "manual import original vouchers");
+        RequireDestination(masterDoc, destination.Name);
+        RequireDestination(voucherDoc, destination.Name);
+        var masters = Messages(masterDoc).Select(x => x.Elements().Single()).ToArray();
+        var vouchers = Messages(voucherDoc).Select(x => x.Elements().Single()).ToArray();
+        if (vouchers.Length != prepared.FinalVouchers ||
+            vouchers.Length == 0 || vouchers.Any(x => !Is(x, "VOUCHER")))
+            throw new InvalidOperationException(
+                "Manual export refused: consolidated voucher count/shape changed.");
+        if (masters.Any(x => !PriorMasters.Contains(x.Name.LocalName) &&
+                             !MasterOrder.Contains(x.Name.LocalName)))
+            throw new InvalidOperationException(
+                "Manual import contains a master type outside the original Tally importer.");
+
+        // Only Tally EXPORT/read requests. Never use the cached voucher index
+        // as proof of identity, and never copy a branch-company MASTERID.
+        var open = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
+        var linked = TallyBranchConsolidationImportService.RequireUniqueLiveDestination(
+            link, destination, open, financialYear);
+        if (!int.TryParse(financialYear[..Math.Min(4, financialYear.Length)],
+                NumberStyles.None, CultureInfo.InvariantCulture, out var startYear) ||
+            startYear < 1900 || startYear > 9998)
+            throw new InvalidOperationException("Manual import financial year cannot be verified.");
+        var from = new DateTime(startYear, 4, 1);
+        var to = new DateTime(startYear + 1, 3, 31);
+        var live = await tally.ExportFullCompanySnapshotAsync(
+            linked, from, to, cancellationToken).ConfigureAwait(false);
+        if (linked.VoucherCount > 0 && live.Vouchers.Count == 0)
+            throw new InvalidOperationException(
+                "Live Tally contains vouchers but no complete full-year identity snapshot; manual XML is blocked.");
+        var available = await ReadMasterAuthorityAsync(linked, cancellationToken)
+            .ConfigureAwait(false);
+        RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
+
+        // A real manual Master XML must contain ONLY missing masters, in the
+        // same dependency order as the established automatic master-first
+        // importer. Existing names must pass the original compatibility check;
+        // otherwise a blind CREATE would incorrectly duplicate/reparent them.
+        var missingMasters = new Dictionary<string, XElement>(IgnoreCase);
+        foreach (var master in masters)
+        {
+            var name = MasterName(master);
+            var key = MasterKey(master.Name.LocalName, name);
+            if (name.Length == 0 || missingMasters.ContainsKey(key))
+                throw new InvalidOperationException(
+                    "Ambiguous or duplicate consolidated master in manual XML: " + name);
+            if (available.TryGetValue(key, out var existing))
+            {
+                RequireMaster(available, master);
+                continue;
+            }
+            missingMasters.Add(key, new XElement(master));
+        }
+        foreach (var (type, baseType) in prepared.VoucherTypeBaseByDestination)
+        {
+            if (!vouchers.Any(x => IgnoreCase.Equals(Value(x, "VOUCHERTYPENAME"), type)))
+                continue;
+            if (!available.TryGetValue(MasterKey("VOUCHERTYPE", baseType), out var baseMaster) ||
+                !long.TryParse(Value(baseMaster, "MASTERID"), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var baseMasterId) || baseMasterId <= 0)
+                throw new InvalidOperationException(
+                    "The original parent voucher type '" + baseType +
+                    "' is not a verified Tally master; no manual ALTER XML is safe.");
+            if (available.TryGetValue(MasterKey("VOUCHERTYPE", type), out var child))
+            {
+                if (!IgnoreCase.Equals(Value(child, "PARENT"), baseType) ||
+                    !long.TryParse(Value(child, "MASTERID"), NumberStyles.None,
+                        CultureInfo.InvariantCulture, out var childId) || childId <= 0)
+                    throw new InvalidOperationException(
+                        "Existing destination voucher type has the wrong parent or no MASTERID: " + type);
+            }
+            else if (!missingMasters.TryGetValue(MasterKey("VOUCHERTYPE", type), out var staged) ||
+                     !IgnoreCase.Equals(Value(staged, "PARENT"), baseType))
+                throw new InvalidOperationException(
+                    "Required branch voucher type is neither verified live nor included in the manual master XML: " + type);
+        }
+
+        var ready = new List<XElement>();
+        var proofs = new List<string>();
+        var stableAnchors = new HashSet<string>(IgnoreCase);
+        var uniqueVoucherNumbers = new HashSet<string>(IgnoreCase);
+        var claimedIds = new HashSet<string>(IgnoreCase);
+        var create = 0;
+        var alter = 0;
+        var unchanged = 0;
+        foreach (var voucher in vouchers)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Field(voucher, "ACTION").Equals("Create", StringComparison.OrdinalIgnoreCase) ||
+                voucher.DescendantsAndSelf().Any(x =>
+                    Is(x, "MASTERID") || Is(x, "GUID") || Is(x, "ALTERID") ||
+                    x.Attributes().Any(a => a.Name.LocalName is
+                        "MASTERID" or "GUID" or "ALTERID" or "TAGNAME" or "TAGVALUE")))
+                throw new InvalidOperationException(
+                    "Only original identity-free prepared vouchers can be materialized for manual Tally import.");
+            var type = Value(voucher, "VOUCHERTYPENAME");
+            var number = Value(voucher, "VOUCHERNUMBER");
+            var reference = Value(voucher, "REFERENCE");
+            if (!DateTime.TryParseExact(Value(voucher, "DATE"), "yyyyMMdd",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ||
+                date < from || date > to || type.Length == 0 || number.Length == 0 ||
+                !uniqueVoucherNumbers.Add(type + "|" + number))
+                throw new InvalidOperationException(
+                    "The prepared manual voucher has an invalid date, type or duplicate voucher number.");
+            var anchor = BuildConsolidatedSourceAnchor(
+                type, number, prepared.VoucherTypeBaseByDestination);
+            if (!stableAnchors.Add(anchor))
+                throw new InvalidOperationException(
+                    "One original consolidated source appears twice in the manual voucher XML: " + anchor);
+            var postings = ReadPostings(voucher);
+            if (postings.Count == 0)
+                throw new InvalidOperationException("Original signed DR/CR is missing: " + anchor);
+            var (desiredHash, _) = ComputePreparedContentIdentity(voucher);
+            var state = tallyRepository.GetSourceBindingVersionState(
+                link.ClientId, financialYear, link.CompanyKey, SourceEntityType, anchor);
+            if (state is not null)
+            {
+                // Pending/accepted/unverified/deleted are NOT safe offline
+                // XML actions: Tally may already have accepted a write.
+                if (!state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+                    !long.TryParse(state.MasterId, NumberStyles.None,
+                        CultureInfo.InvariantCulture, out var ownedId) || ownedId <= 0)
+                    throw new InvalidOperationException(
+                        "Consolidated source has pending/unverified Tally ownership: " + anchor +
+                        ". Reconcile with the existing AAH Tally safety gate first.");
+                var bound = live.Vouchers.Where(x =>
+                    IgnoreCase.Equals(x.MasterId, state.MasterId)).ToArray();
+                if (bound.Length != 1 || !claimedIds.Add(state.MasterId))
+                    throw new InvalidOperationException(
+                        "Manual XML cannot find one unique bound destination MASTERID for " + anchor);
+                var previous = bound[0];
+                if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
+                    FullVoucherMatches(
+                        new ExpectedVoucher(date, type, number, postings, voucher,
+                            reference, anchor, desiredHash, ""), previous, live.FullVouchers))
+                {
+                    unchanged++;
+                    proofs.Add("SKIP " + anchor + " | destination MASTERID=" +
+                        previous.MasterId + " | ALTERID=" + previous.AlterId +
+                        " | exact desired version already exists");
+                    continue;
+                }
+                if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) ||
+                    !PreviousConsolidatedVersionMatches(
+                        previous, live.FullVouchers, state))
+                    throw new InvalidOperationException(
+                        "Previous saved voucher version, destination MASTERID, ALTERID or signed DR/CR has changed: " +
+                        anchor + ". A blind manual ALTER or CREATE is forbidden.");
+
+                // EXACTLY the same bound voucher ALTER writer as automatic
+                // Export Consolidated. It sets ACTION=Alter, TAGNAME=MASTER ID,
+                // TAGVALUE=<live MASTERID>, actual live Voucher Number, and the
+                // requested parent/child VCHTYPE without recalculating DR/CR.
+                var alterXml = TallyAccountingVoucherExportService
+                    .BuildBoundConsolidatedVoucherAlterXml(
+                        destination.Name, voucher, previous.MasterId,
+                        previous.VoucherNumber);
+                var alterDoc = TallyConsolidatedXmlTextSafety.ParseDocument(
+                    alterXml, "read-only bound manual voucher ALTER");
+                var messages = Messages(alterDoc);
+                if (messages.Length != 1 || messages[0].Elements().Count() != 1)
+                    throw new InvalidOperationException(
+                        "The standard bound Tally ALTER writer did not produce exactly one voucher.");
+                var boundAlter = messages[0].Elements().Single();
+                if (!Field(boundAlter, "ACTION").Equals("Alter", StringComparison.OrdinalIgnoreCase) ||
+                    !Field(boundAlter, "TAGNAME").Equals("MASTER ID", StringComparison.OrdinalIgnoreCase) ||
+                    !IgnoreCase.Equals(Field(boundAlter, "TAGVALUE"), previous.MasterId) ||
+                    !IgnoreCase.Equals(Value(boundAlter, "VOUCHERTYPENAME"), type) ||
+                    !IgnoreCase.Equals(Value(boundAlter, "VOUCHERNUMBER"), previous.VoucherNumber) ||
+                    !SamePostings(postings, ReadPostings(boundAlter)))
+                    throw new InvalidOperationException(
+                        "The generated manual ALTER differs from the original prepared voucher: " + anchor);
+                ready.Add(new XElement(messages[0]));
+                alter++;
+                proofs.Add("ALTER " + anchor + " | destination MASTERID=" +
+                    previous.MasterId + " | last verified ALTERID=" +
+                    previous.AlterId + " | previous type=" + previous.VoucherType +
+                    " | desired type=" + type);
+                continue;
+            }
+            if (tallyRepository.HasImportedSourceFingerprint(
+                    link.ClientId, financialYear, link.CompanyKey,
+                    SourceEntityType, anchor))
+                throw new InvalidOperationException(
+                    "Manual CREATE denied: source has historical Tally import evidence without a verified MASTERID: " + anchor);
+            // A missing binding with a plausible same-document live voucher
+            // must NEVER become a second CREATE. Shared B2C references across
+            // branches are particularly ambiguous with Tally auto numbering.
+            if (live.Vouchers.Any(item =>
+                item.VoucherDate?.Date == date.Date &&
+                (IgnoreCase.Equals(item.VoucherNumber, number) ||
+                 (reference.Length > 0 && IgnoreCase.Equals(item.Reference, reference) &&
+                  (IgnoreCase.Equals(item.VoucherType, type) ||
+                   (prepared.VoucherTypeBaseByDestination.TryGetValue(type, out var baseType) &&
+                    IgnoreCase.Equals(item.VoucherType, baseType)))))))
+                throw new InvalidOperationException(
+                    "Manual CREATE denied: existing Tally voucher may own source " + anchor +
+                    ". Resolve its unique MASTERID in AAH instead of duplicating it.");
+            ready.Add(new XElement("TALLYMESSAGE", new XElement(voucher)));
+            create++;
+            proofs.Add("CREATE " + anchor + " | no existing AAH source binding or matching live Tally source");
+        }
+        // All decisions refer to one exact live Tally state. Confirm Tally
+        // didn't acquire a new MASTERID or ALTERID while we prepared the files.
+        var recheck = await tally.ExportVoucherAuthorityFreshAsync(
+            linked, from, to, cancellationToken).ConfigureAwait(false);
+        var oldIds = live.Vouchers
+            .GroupBy(v => v.MasterId, IgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
+        var newIds = recheck.Index
+            .GroupBy(v => v.MasterId, IgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
+        if (oldIds.Count != newIds.Count ||
+            oldIds.Any(kv => !newIds.TryGetValue(kv.Key, out var nextAlter) ||
+                             !IgnoreCase.Equals(kv.Value, nextAlter)))
+            throw new InvalidOperationException(
+                "The linked Tally company changed while building manual XML. Regenerate; no unsafe files were saved.");
+        var masterBuilder = new StringBuilder();
+        TallyExcelParityXmlWriter.BeginAllMastersImport(masterBuilder, destination.Name);
+        foreach (var type in PriorMasters.Concat(MasterOrder))
+        foreach (var master in missingMasters.Values.Where(m => Is(m, type)))
+            masterBuilder.AppendLine(new XElement("TALLYMESSAGE", master)
+                .ToString(SaveOptions.DisableFormatting));
+        TallyExcelParityXmlWriter.EndAllMastersImport(masterBuilder);
+        var voucherBuilder = new StringBuilder();
+        TallyExcelParityXmlWriter.BeginErp9DataImport(voucherBuilder, destination.Name, "Vouchers");
+        foreach (var message in ready)
+            voucherBuilder.AppendLine(message.ToString(SaveOptions.DisableFormatting));
+        TallyExcelParityXmlWriter.EndErp9DataImport(voucherBuilder);
+        TallyConsolidatedXmlTextSafety.ParseDocument(
+            masterBuilder.ToString(), "real manual Tally master XML");
+        TallyConsolidatedXmlTextSafety.ParseDocument(
+            voucherBuilder.ToString(), "real manual Tally voucher XML");
+        var audit = "Generated from a fresh, read-only full-FY Tally voucher and master snapshot." +
+            Environment.NewLine + "Tally company: " + destination.Name +
+            Environment.NewLine + "Financial year: " + financialYear +
+            Environment.NewLine + "Required missing masters: " + missingMasters.Count +
+            Environment.NewLine + "Ready CREATE: " + create +
+            Environment.NewLine + "Ready ALTER: " + alter +
+            Environment.NewLine + "Already identical (excluded): " + unchanged +
+            Environment.NewLine + "IMPORT MASTERS FIRST if any are listed, then VOUCHERS." +
+            Environment.NewLine + "Never import an old generated file after a Tally edit." +
+            Environment.NewLine + "Manual Tally import bypasses AAH acceptance/readback tracking: " +
+                "refresh/reconcile AAH source bindings after importing, and DO NOT import the same file twice." +
+            Environment.NewLine + string.Join(Environment.NewLine, proofs);
+        return new TallyConsolidatedManualImportXmlResult(
+            masterBuilder.ToString(), voucherBuilder.ToString(),
+            missingMasters.Count, create, alter, unchanged, audit);
+    }
+
+    /// <summary>
     /// Only reconciles old AcceptedAwaitingVerification CREATE acknowledgements.
     /// This route NEVER sends an Import/CREATE/ALTER/DELETE request. CL019 had
     /// an accepted sales voucher at destination MASTERID=337, but a same-date,
@@ -1453,3 +1732,8 @@ public sealed class TallyConsolidatedVoucherImportService(
 }
 public sealed record TallyConsolidatedVoucherImportResult(
     int ImportedVouchers, int CreatedMasters, string Status);
+
+public sealed record TallyConsolidatedManualImportXmlResult(
+    string MastersXml, string VouchersXml,
+    int MissingMasters, int ReadyCreates, int ReadyAlters,
+    int UnchangedVouchers, string Audit);
