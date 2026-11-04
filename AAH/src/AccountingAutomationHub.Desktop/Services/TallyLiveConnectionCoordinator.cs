@@ -2053,7 +2053,10 @@ public sealed class TallyLiveConnectionCoordinator :
         CancellationToken cancellationToken = default,
         int? acknowledgedVoucherCreates = null,
         string? readbackError = null,
-        int? acknowledgedVoucherAlters = null)
+        int? acknowledgedVoucherAlters = null,
+        int? manualReadyCreates = null,
+        int? manualReadyAlters = null,
+        int? manualAlreadyIdentical = null)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(destination);
@@ -2089,6 +2092,26 @@ public sealed class TallyLiveConnectionCoordinator :
             UnverifiedAfterImport = accepted - verifiedImported,
             Status = "Consolidated Tally (existing wrapper): " + operationStatus
         };
+        if (manualReadyCreates.HasValue || manualReadyAlters.HasValue ||
+            manualAlreadyIdentical.HasValue)
+        {
+            // A generated MANUAL import is not a posted Tally transaction.
+            // Show the actual ACTION=Create/Alter counts verified in the
+            // output XML, never the old hardcoded 645 Ready CREATE figure.
+            if (!manualReadyCreates.HasValue || !manualReadyAlters.HasValue ||
+                !manualAlreadyIdentical.HasValue ||
+                manualReadyCreates < 0 || manualReadyAlters < 0 ||
+                manualAlreadyIdentical < 0 ||
+                checked(manualReadyCreates.Value + manualReadyAlters.Value +
+                        manualAlreadyIdentical.Value) != preparedVouchers ||
+                accepted != 0 || verifiedImported != 0)
+                throw new InvalidOperationException(
+                    "Manual XML diagnostic counts disagree with original prepared voucher objects.");
+            result.Ready = checked(manualReadyCreates.Value + manualReadyAlters.Value);
+            result.ReadyCreates = manualReadyCreates.Value;
+            result.ReadyAlters = manualReadyAlters.Value;
+            // TallyCreated/TallyAltered remain ZERO: preview is read-only.
+        }
         if (!string.IsNullOrWhiteSpace(readbackError))
         {
             result.LiveReadErrors = 1;
