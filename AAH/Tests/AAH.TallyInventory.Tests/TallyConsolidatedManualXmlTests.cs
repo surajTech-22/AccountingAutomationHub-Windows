@@ -122,7 +122,9 @@ internal static class TallyConsolidatedManualXmlTests
               view.Contains("case ConsolidatedTallyImportViewModel:", StringComparison.Ordinal) &&
               view.Contains("QueueConsolidatedSourcePreviewWarm(client);", StringComparison.Ordinal) &&
               view.Contains("produceManualImportFiles: false, displayOnlyWarm: true", StringComparison.Ordinal) &&
-              view.Contains("if (produceManualImportFiles)\n            foreach (var filename", StringComparison.Ordinal) &&
+              System.Text.RegularExpressions.Regex.IsMatch(view,
+                  @"if\s*\(produceManualImportFiles\)\s*foreach\s*\(var filename",
+                  System.Text.RegularExpressions.RegexOptions.CultureInvariant) &&
               view.Contains("AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt", StringComparison.Ordinal) &&
               view.Contains("v602 original source-only voucher preview", StringComparison.Ordinal),
               "consolidated original Tally panels must restore missing counts without overwriting valid manual import XML");
