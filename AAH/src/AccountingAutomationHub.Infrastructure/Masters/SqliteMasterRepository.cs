@@ -538,9 +538,16 @@ public sealed class SqliteMasterRepository : IMasterRepository
                     Parent = source.Parent, Company = source.Company, Source = source.Source,
                     TallyMasterId = source.TallyMasterId, TallyGuid = source.TallyGuid, TallyAlterId = source.TallyAlterId
                 };
-                existingByKey[duplicateKey] = inserted;
+                existingByKey[duplicateKey] =
+                    existingByKey.TryGetValue(duplicateKey, out var previousNames)
+                        ? previousNames.Append(inserted).ToArray() : [inserted];
                 if (sourceTallyId.Length > 0)
-                    existingByTallyMasterId[$"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}"] = inserted;
+                {
+                    var boundKey = $"{source.Type.Trim().ToUpperInvariant()}\u001f{sourceTallyId}";
+                    existingByTallyMasterId[boundKey] =
+                        existingByTallyMasterId.TryGetValue(boundKey, out var previousIds)
+                            ? previousIds.Append(inserted).ToArray() : [inserted];
+                }
             }
         }
 
