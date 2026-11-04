@@ -97,11 +97,13 @@ internal static class TallyBranchMasterPlannerTests
                 <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
                 <TALLYMESSAGE><VOUCHER ACTION="Alter"><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
                 <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><REFERENCE>AAH-INTERBANK:TRANSFER-X</REFERENCE><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
                 </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>
                 """, Array.Empty<MasterRecord>()),
             new TallyPreparedBranchXml(Branches[1], """
                 <ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
                 <TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
+                <TALLYMESSAGE><VOUCHER ACTION="Create"><REFERENCE>AAH-INTERBANK:TRANSFER-X</REFERENCE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME></VOUCHER></TALLYMESSAGE>
                 </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>
                 """, Array.Empty<MasterRecord>())
         ]);
@@ -109,7 +111,8 @@ internal static class TallyBranchMasterPlannerTests
               xmlUsage["KA-1"].Contains("Sales") &&
               xmlUsage["KA-1"].Contains("Journal") &&
               xmlUsage["TN-1"].SequenceEqual(["Purchase"]),
-              "actual prepared XML must drive minimal unique type planning");
+              "actual prepared XML must drive minimal unique type planning; " +
+              "matched interbank source Payment/Receipt must not create unused subtypes");
         Reject(() => Build(voucherTypes: true, eligible: VoucherTypes),
             "full Tally catalog without source usage must not multiply voucher types");
         Reject(() => Build(voucherTypes: true, eligible: VoucherTypes,
