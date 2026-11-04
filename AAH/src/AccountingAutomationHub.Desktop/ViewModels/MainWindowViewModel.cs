@@ -172,6 +172,9 @@ public sealed class MainWindowViewModel :
     // XML preview for the current Client/FY. Never used for posting/replaying.
     // Prevents re-reading 349 voucher XML objects every navigation redraw.
     private string _lastConsolidatedDisplayPreviewToken = string.Empty;
+    // One source-only, read-only preview warm per original consolidated
+    // Client/FY/Tally link. Never rerun for heartbeat/navigation redraws.
+    private string _consolidatedDisplayWarmScopeKey = string.Empty;
     private string _applicationState =
         "Client Directory ready.";
     private TopClientWorkspaceChoice? _selectedTopClientChoice;
@@ -2484,8 +2487,10 @@ public sealed class MainWindowViewModel :
     /// </summary>
     private async Task<TallyConsolidatedPreparedXmlResult> GenerateConsolidatedPreparedXmlAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash,
-        bool produceManualImportFiles = true)
+        bool produceManualImportFiles = true, bool displayOnlyWarm = false)
     {
+        if (displayOnlyWarm && produceManualImportFiles)
+            throw new InvalidOperationException("Automatic preview must not generate importable XML files.");
         var current = _clientContext.CurrentClient;
         if (current is null || current.Id != parentId ||
             !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
@@ -2516,12 +2521,15 @@ public sealed class MainWindowViewModel :
         var manualDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Downloads", "AAH Consolidated Tally", safeClient + "-" + financialYear);
-        // Never leave v602's identity-free CREATE-only files under importable names.
+        // A display-only, verify or export preflight must NEVER delete the
+        // user's last generated manual XML. Only the explicit Generate XML
+        // command replaces files whose names mean they are importable.
         Directory.CreateDirectory(manualDirectory);
-        foreach (var filename in new[] { "AAH_CONSOLIDATED_MASTERS.xml",
-                     "AAH_CONSOLIDATED_VOUCHERS.xml",
-                     "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt" })
-            File.Delete(Path.Combine(manualDirectory, filename));
+        if (produceManualImportFiles)
+            foreach (var filename in new[] { "AAH_CONSOLIDATED_MASTERS.xml",
+                         "AAH_CONSOLIDATED_VOUCHERS.xml",
+                         "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt" })
+                File.Delete(Path.Combine(manualDirectory, filename));
         var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
         if (pan.Length == 0 && (parent.Gstin ?? "").Length == 15)
             pan = parent.Gstin.Substring(2, 10).ToUpperInvariant();
@@ -2693,21 +2701,26 @@ public sealed class MainWindowViewModel :
             File.WriteAllText(vouchersPath, manual.VouchersXml, System.Text.Encoding.UTF8);
             File.WriteAllText(auditPath, manual.Audit, System.Text.Encoding.UTF8);
         }
-        var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
-            parent, company, (manual is null
-                ? "Internal read-only source preview; no Tally posting. "
-                : "Real manual-import XML generated; no Tally posting. " +
-                  $"Ready CREATE={manual.ReadyCreates}; Ready ALTER={manual.ReadyAlters}; " +
-                  $"unchanged={manual.UnchangedVouchers}; missing masters={manual.MissingMasters}. ") +
-            result.Status, result.FinalVouchers, 0,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["INTERNAL-Source-Masters-DO-NOT-IMPORT.xml"] = result.MastersXml,
-                ["INTERNAL-Source-Vouchers-DO-NOT-IMPORT.xml"] = result.VouchersXml
-            },
-            manualReadyCreates: manual?.ReadyCreates,
-            manualReadyAlters: manual?.ReadyAlters,
-            manualAlreadyIdentical: manual?.UnchangedVouchers);
+        // A background tab-opening preview must only refresh the original
+        // Dashboard counts and saved source preview, not create diagnostics
+        // packs or importable XML without a user request.
+        var diagnostic = displayOnlyWarm
+            ? "Read-only saved source preview refreshed; no Tally write or diagnostic pack."
+            : await SaveConsolidatedExistingDiagnosticsAsync(
+                parent, company, (manual is null
+                    ? "Internal read-only source preview; no Tally posting. "
+                    : "Real manual-import XML generated; no Tally posting. " +
+                      $"Ready CREATE={manual.ReadyCreates}; Ready ALTER={manual.ReadyAlters}; " +
+                      $"unchanged={manual.UnchangedVouchers}; missing masters={manual.MissingMasters}. ") +
+                result.Status, result.FinalVouchers, 0,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["INTERNAL-Source-Masters-DO-NOT-IMPORT.xml"] = result.MastersXml,
+                    ["INTERNAL-Source-Vouchers-DO-NOT-IMPORT.xml"] = result.VouchersXml
+                },
+                manualReadyCreates: manual?.ReadyCreates,
+                manualReadyAlters: manual?.ReadyAlters,
+                manualAlreadyIdentical: manual?.UnchangedVouchers);
         // Original branch-prepared XML is authoritative for the numeric
         // Tally selection projection. The old parent 677-row summary is not.
         _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
