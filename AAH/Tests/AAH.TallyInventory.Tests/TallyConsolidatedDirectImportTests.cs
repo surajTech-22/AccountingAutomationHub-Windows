@@ -43,8 +43,9 @@ internal static class TallyConsolidatedDirectImportTests
         Check(prepare >= 0 && sync > prepare && call > sync &&
               export.Contains("new TallyConsolidatedPreImportAuthorityWrapper(", StringComparison.Ordinal) &&
               export.Contains("await authorityWrapper.VerifyAsync(current, link, company)", StringComparison.Ordinal) &&
+              export.Contains("consolidatedVerifiedMarkerReader: authorityWrapper.ReadVerifiedMarkerAsync", StringComparison.Ordinal) &&
               export.Contains("produceManualImportFiles: false", StringComparison.Ordinal),
-              "direct import must use normal existing coordinator delta authority after preparing source, before unchanged importer");
+              "direct import must use the consolidated wrapper's live-index-verified marker before the unchanged voucher writer");
         Check(export.Contains("if (separateTypes)", StringComparison.Ordinal) &&
               export.IndexOf("await ImportConsolidatedMastersAsync(", StringComparison.Ordinal) < prepare &&
               export.Contains("SaveConsolidatedExistingDiagnosticsAsync(", StringComparison.Ordinal) &&
@@ -60,16 +61,27 @@ internal static class TallyConsolidatedDirectImportTests
         Check(wrapper.Contains("normalCoordinator.RefreshNowAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("forceLinkedSynchronization: true", StringComparison.Ordinal) &&
               wrapper.Contains("forceFullBaseline: false", StringComparison.Ordinal) &&
-              wrapper.Contains("attempt < 2", StringComparison.Ordinal) &&
               wrapper.Contains("GetBankSyncState(", StringComparison.Ordinal) &&
               wrapper.Contains("GetVoucherChangeMarkerAsync(", StringComparison.Ordinal) &&
-              wrapper.Contains("string.Equals(live.Token, saved.LastTallyChangeToken", StringComparison.Ordinal) &&
-              wrapper.Contains("live.VoucherCount == saved.LastVoucherCount", StringComparison.Ordinal) &&
-              wrapper.Contains("RequireSameSavedLink();", StringComparison.Ordinal) &&
+              wrapper.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("GetVoucherIndexRange(", StringComparison.Ordinal) &&
+              wrapper.Contains("HasCompleteVoucherXmlAuthority(", StringComparison.Ordinal) &&
+              wrapper.Contains("RequireSameVoucherIndex(", StringComparison.Ordinal) &&
+              wrapper.Contains("liveMarker.HasReliableAlterId && liveMarker.LastAlterId > 0", StringComparison.Ordinal) &&
+              wrapper.Contains("liveMarker.VoucherCount == saved.LastVoucherCount", StringComparison.Ordinal) &&
+              wrapper.Contains("liveAlterId <= 0 || liveAlterId > synchronizedAlterId", StringComparison.Ordinal) &&
+              wrapper.Contains("observed.Add(id)", StringComparison.Ordinal) &&
+              wrapper.Contains("RequireSameSavedLink(client, confirmedLink)", StringComparison.Ordinal) &&
               !wrapper.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
               !wrapper.Contains("ImportXmlAsync(", StringComparison.Ordinal) &&
               !wrapper.Contains("ReplaceVoucherIndex(", StringComparison.Ordinal),
-              "consolidated-only wrapper must strictly verify original sync, without making snapshots or modifying source bindings");
+              "consolidated-only wrapper must reuse saved ALTERID only after fresh MASTERID/ALTERID proof, without snapshots or source-binding writes");
+        Check(importer.Contains("consolidatedVerifiedMarkerReader = null", StringComparison.Ordinal) &&
+              importer.Contains("ReadTrustedMarkerAsync(", StringComparison.Ordinal) &&
+              importer.Contains("consolidatedVerifiedMarkerReader is null", StringComparison.Ordinal) &&
+              importer.Contains("? tally.GetVoucherChangeMarkerAsync(", StringComparison.Ordinal) &&
+              importer.Contains(": consolidatedVerifiedMarkerReader(", StringComparison.Ordinal),
+              "normal consolidated manual/individual callers must keep the original live Tally marker; only direct consolidated import has a verified alternate reader");
         Check(importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               importer.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
               importer.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
