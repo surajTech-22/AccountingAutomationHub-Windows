@@ -433,8 +433,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
                                  IsTallyMaster(master) && master.TallyMasterId.Trim().Length > 0 &&
                                  master.Company.Trim().Equals(linkedTallyCompany, StringComparison.OrdinalIgnoreCase))
                 .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
-                .Where(group => group.Select(master => master.TallyMasterId.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+                .Where(group => group.Count() == 1)
                 .Select(group => group.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -630,7 +629,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
                   AND (standard.OpeningBalance IS NULL OR ABS(standard.OpeningBalance)<0.005)
                   AND UPPER(TRIM(standard.Type)) IN ('LEDGER','GROUP')
                   AND 1 = (
-                      SELECT COUNT(DISTINCT live.TallyMasterId)
+                      SELECT COUNT(*)
                       FROM Masters AS live
                       WHERE live.ClientId=standard.ClientId
                         AND live.FinancialYear=standard.FinancialYear

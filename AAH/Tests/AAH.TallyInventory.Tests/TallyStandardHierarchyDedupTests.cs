@@ -42,7 +42,7 @@ internal static class TallyStandardHierarchyDedupTests
                 setup.CommandText =
                     """
                     CREATE TABLE Clients (Id INTEGER PRIMARY KEY);
-                    INSERT INTO Clients(Id) VALUES (901),(902);
+                    INSERT INTO Clients(Id) VALUES (901),(902),(903);
                     """;
                 setup.ExecuteNonQuery();
             }
@@ -108,6 +108,34 @@ internal static class TallyStandardHierarchyDedupTests
                 "Live Tally", "351", "22222222-2222-2222-2222-222222222222-00000003")]);
             Check(repo.Get(901, fy, false).Count(row => row.Type == "Ledger" && row.Name == "Cash") == 1,
                 "Cash standard Ledger shadow not retired");
+
+            // Two independently identified Tally books can even share a
+            // company display name and numeric MASTERID. That is never one
+            // uniquely verified linked-book object. Do not hide the standard
+            // placeholder when that authority is ambiguous.
+            const string sharedName = "Coincidentally Same Tally Name";
+            repo.Upsert(903, fy,
+                [Row("Sundry Debtors", "Group", localCompany, "Standard hierarchy")]);
+            repo.Upsert(903, fy, [Row("Sundry Debtors", "Group", sharedName,
+                "Live Tally", "440", "33333333-3333-3333-3333-333333333333-00000005")]);
+            repo.Upsert(903, fy, [Row("Sundry Debtors", "Group", sharedName,
+                "Live Tally", "440", "44444444-4444-4444-4444-444444444444-00000006")]);
+            using (var sql = new SqliteConnection(cs))
+            {
+                sql.Open();
+                using var link = sql.CreateCommand();
+                link.CommandText =
+                    "INSERT INTO TallyClientLinks(ClientId,CompanyName,FinancialYear) " +
+                    "VALUES (903,'Coincidentally Same Tally Name','2025-26');";
+                link.ExecuteNonQuery();
+            }
+            repo.Upsert(903, fy,
+                [Row("Sundry Debtors", "Group", localCompany, "Standard hierarchy")]);
+            var ambiguous = repo.Get(903, fy, false).Where(row => row.Name == "Sundry Debtors").ToArray();
+            Check(ambiguous.Length == 3 &&
+                  ambiguous.Count(row => row.TallyMasterId == "440") == 2 &&
+                  ambiguous.Any(row => row.Source == "Standard hierarchy"),
+                "ambiguous equal-numeric MASTERIDs from different books were silently collapsed");
 
             // User-owned Masters, meaningful opening balances and unrelated
             // Client/FY authorities must remain intact.
