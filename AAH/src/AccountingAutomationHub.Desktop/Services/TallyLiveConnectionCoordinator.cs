@@ -363,7 +363,8 @@ public sealed class TallyLiveConnectionCoordinator :
     public async Task RefreshNowAsync(
         bool forceLinkedSynchronization,
         CancellationToken cancellationToken = default,
-        bool isFiveSecondBackgroundPulse = false)
+        bool isFiveSecondBackgroundPulse = false,
+        bool forceFullBaseline = true)
     {
         if (_disposed) return;
         cancellationToken.ThrowIfCancellationRequested();
@@ -572,7 +573,10 @@ public sealed class TallyLiveConnectionCoordinator :
                             // and clears a prior persisted synchronization error after success.
                             await SynchronizeLinkedCompanyAsync(
                                 client, linkedCompany, reason, marker,
-                                forceFullBaseline: forceLinkedSynchronization);
+                                // Normal manual Refresh keeps its original complete-FY baseline.
+                                // Consolidated pre-import alone requests the EXISTING delta/
+                                // checkpoint reconciliation without a redundant FY snapshot.
+                                forceFullBaseline: forceLinkedSynchronization && forceFullBaseline);
                         }
                         else
                         {
