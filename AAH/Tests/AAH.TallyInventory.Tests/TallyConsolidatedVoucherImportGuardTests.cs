@@ -461,6 +461,98 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         Console.WriteLine("PASS: previous bound source version + full old DRCR + " +
             "same destination MASTERID/ALTERID mandatory before changed ledger ALTER.");
 
+        // Reuse the NORMAL AAH previous-version reconciliation for legacy
+        // consolidated bindings. An earlier AAH build can serialize a
+        // representation/version differently without Tally changing its
+        // exact old voucher. A VERIFIED previously saved content hash,
+        // unique MASTERID, fresh live ALTERID, original DATE/TYPE/REF/PARTY/
+        // NARRATION and complete signed DR/CR must still agree.
+        oldBinding.State = "Verified";
+        oldBinding.VerifiedVersion = "CONSOLIDATED|OLD-SERIALIZATION|" + previousHash;
+        oldBinding.LastVerifiedAlterId = 28;
+        if (!OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy saved representation blocked unchanged verified previous Tally voucher.");
+        oldIndex.AlterId = "29";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy representation recovery ignored a changed nonzero Tally ALTERID.");
+        oldIndex.AlterId = "28";
+        oldBinding.LastVerifiedAlterId = 0; // Legacy AAH verified source with no ALTERID captured.
+        if (!OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy missing saved ALTERID blocked an exact SAVED hash and current live full DR/CR.");
+        oldBinding.VerifiedContentHash = "WRONG";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy missing ALTERID incorrectly authorized an unverified prior content hash.");
+        oldBinding.VerifiedContentHash = previousHash;
+        oldIndex.LedgerPostings = oldPostings.Select(x =>
+            new TallyLedgerPostingRecord { LedgerName = x.Name, SignedAmount = x.Amount + 1m }).ToArray();
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy previous-version reconciliation accepted altered live DR/CR.");
+        oldIndex.LedgerPostings = oldPostings.Select(x =>
+            new TallyLedgerPostingRecord { LedgerName = x.Name, SignedAmount = x.Amount }).ToArray();
+        oldBinding.VerifiedVersion = "DIFFERENT-SOURCE|" + previousHash;
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Legacy recovery crossed into an unrelated previous-version namespace.");
+
+        // CL019 BANK-56032 real import evidence: live MASTERID 354,
+        // ALTERID 377; prior Receipt with HDFC/Suspense 50,000 and exact
+        // imported content fingerprint. Separate voucher type is a DESIRED
+        // Receipt - Karnataka, not a reason to lose the old MASTERID.
+        var bankPostings = new (string Name, decimal Amount)[] {
+            ("HDFC Bank CA - 50200110437141", -50000m),
+            ("Suspense", 50000m)
+        };
+        var bankLive = new TallyVoucherIndexRecord {
+            MasterId = "354", AlterId = "377", VoucherType = "Receipt",
+            VoucherDate = new DateTime(2025, 5, 21),
+            VoucherNumber = "1", Reference = "0000000000000001",
+            PartyLedger = "", Narration = "CU1906763241MITANSH TECHNOLOGY INDIA PRI",
+            LedgerPostings = bankPostings.Select(x =>
+                new TallyLedgerPostingRecord { LedgerName = x.Name, SignedAmount = x.Amount }).ToArray()
+        };
+        var bankVoucher = new System.Xml.Linq.XElement("VOUCHER",
+            new System.Xml.Linq.XElement("DATE", "20250521"),
+            new System.Xml.Linq.XElement("VOUCHERTYPENAME", "Receipt"),
+            new System.Xml.Linq.XElement("REFERENCE", bankLive.Reference),
+            new System.Xml.Linq.XElement("PARTYLEDGERNAME", ""),
+            new System.Xml.Linq.XElement("NARRATION", bankLive.Narration),
+            bankPostings.Select(x => new System.Xml.Linq.XElement("ALLLEDGERENTRIES.LIST",
+                new System.Xml.Linq.XElement("LEDGERNAME", x.Name),
+                new System.Xml.Linq.XElement("AMOUNT",
+                    x.Amount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)))));
+        var fullBank = new[] { new TallyVoucherXmlSnapshot("354", "bank-guid", "Receipt",
+            bankLive.VoucherDate, bankVoucher.ToString(
+                System.Xml.Linq.SaveOptions.DisableFormatting)) };
+        var bankSigned = string.Join("|", bankPostings.OrderBy(x => x.Name,
+            StringComparer.OrdinalIgnoreCase).ThenBy(x => x.Amount).Select(x =>
+                x.Name + ":" + x.Amount.ToString("0.00",
+                    System.Globalization.CultureInfo.InvariantCulture)));
+        var bankHash = TallyVoucherFingerprint.BuildContentHash(
+            bankLive.VoucherDate, bankLive.VoucherType, bankLive.Reference,
+            bankLive.PartyLedger, 50000m, bankLive.Narration + "|" + bankSigned);
+        if (!bankHash.Equals("8F490BC17F450D67F6273657DC0D4048C4344AAA70F985A02F012FE27225DFC6",
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("CL019 old Receipt proof does not match imported source hash.");
+        var bankBinding = new AccountingAutomationHub.Domain.Tally.TallySourceBindingVersionState {
+            MasterId = "354", State = "Verified", VerifiedContentHash = bankHash,
+            VerifiedVersion = "CONSOLIDATED|LEGACY|" + bankHash, LastVerifiedAlterId = 377
+        };
+        if (!OldMatches(bankLive, bankBinding, fullBank))
+            throw new InvalidOperationException(
+                "CL019 BANK-56032 exact old voucher blocked by legacy saved version format.");
+        bankLive.AlterId = "378";
+        if (OldMatches(bankLive, bankBinding, fullBank))
+            throw new InvalidOperationException(
+                "CL019 Bank external Tally ALTERID change passed previous-version safety.");
+        bankLive.AlterId = "377";
+        Console.WriteLine("PASS: CL019 original Receipt + verified fingerprint and live MASTERID/ALTERID " +
+            "reuse normal previous-version reconciliation; new type requires normal bound ALTER.");
+
         // Exact Nov 3 CL019 live diagnostic: existing MASTERID 337 / ALTERID
         // 339 has the SAME Karnataka Sales B2C ref, date, signed tax/amounts,
         // but its former debtor name includes an old two-digit B2C code.
