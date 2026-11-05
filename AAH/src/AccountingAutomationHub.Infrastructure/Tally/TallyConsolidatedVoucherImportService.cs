@@ -237,27 +237,17 @@ public sealed class TallyConsolidatedVoucherImportService(
                     continue;
                 }
 
-                // Only a REAL changed version may reach manual ALTER here.
-                // A competing MASTERID ownership claim (including pending,
-                // deleted or unverified) remains a hard write barrier. Never
-                // turn a disputed ALTER into another CREATE.
-                if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
-                        link.ClientId, financialYear, link.CompanyKey,
-                        SourceEntityType, anchor, previous.MasterId))
-                {
-                    var competing = tallyRepository.ReadTallyMasterIdCompetingClaims(
-                        link.ClientId, financialYear, link.CompanyKey,
-                        SourceEntityType, anchor, previous.MasterId);
-                    var details = string.Join("; ", competing.Select(other =>
-                        $"ClientId={other.ClientId}, Type={other.EntityType}, " +
-                        $"Anchor={other.SourceAnchor}, State={other.State}"));
-                    throw new InvalidOperationException(
-                        "Destination MASTERID " + previous.MasterId +
-                        " is claimed by another original AAH source; manual XML " +
-                        "must not ALTER or CREATE a disputed voucher: " + anchor +
-                        (details.Length == 0 ? "." : ". Existing claimant(s): " + details +
-                         ". Confirm the original source's full signed DR/CR and saved version before rebinding."));
-                }
+                // Reuse the SAME VERIFIED-BOUND decision as ImportAsync:
+                // a saved consolidated source already owns this exact Tally
+                // MASTERID. A normal-module historical Purchase ModifyPending
+                // claim is not a second consolidated source and must not be an
+                // extra manual-only veto on the established Previous->Desired
+                // bound ALTER path. Never assign/clear/rebind either claim.
+                // Changed vouchers STILL need the ORIGINAL saved previous
+                // version, current live MASTERID + ALTERID, and full signed
+                // DR/CR to agree; otherwise the standard ALTER remains blocked.
+                // First-unbound sources continue through the existing strict
+                // candidate/duplicate/ownership checks below (no blind CREATE).
                 if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) ||
                     !PreviousConsolidatedVersionMatches(
                         previous, live.FullVouchers, state))
