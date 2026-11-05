@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using Aah.UpdateHost;
 
 namespace Aah.UpdateHost.Tests;
@@ -808,6 +809,103 @@ internal static class EntryPoint
         Console.WriteLine("PASS: rollback refuses unexpected externally modified application bytes.");
     }
 
+    private static void TestSafePreJournalPowerShellWatchdog(string root)
+    {
+        var source = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (source is not null &&
+               !File.Exists(Path.Combine(source.FullName, "ci", "legacy", "TransactionalPublish.ps1")))
+            source = source.Parent;
+        Assert(source is not null, "Original transactional installer source is unavailable.");
+        var script = File.ReadAllText(Path.Combine(
+            source!.FullName, "ci", "legacy", "TransactionalPublish.ps1"));
+        var hostSource = File.ReadAllText(Path.Combine(
+            source.FullName, "AAH", "src", "AAH.UpdateHost", "Program.cs"));
+        var stage = script.IndexOf("Write-AAHTransactionProgress (\"STAGING FILE", StringComparison.Ordinal);
+        var commitGate = script.IndexOf("$commitGate = [Threading.Mutex]::new(", StringComparison.Ordinal);
+        var journal = script.IndexOf("$journal = [pscustomobject]@{ Schema=1;", StringComparison.Ordinal);
+        var installedMove = script.IndexOf("[IO.File]::Move($target, $old)", StringComparison.Ordinal);
+        Assert(stage >= 0 && commitGate > stage && journal > commitGate &&
+               installedMove > journal &&
+               script.Contains("if ($recoveryOwned) { $recoveryGate.ReleaseMutex() }", StringComparison.Ordinal) &&
+               script.Contains("if ($commitOwned) { $commitGate.ReleaseMutex() }", StringComparison.Ordinal) &&
+               script.Contains(Program.TransactionMutationGateName, StringComparison.Ordinal),
+            "A stalled file must be logged and the original journal/recovery and installed-file renames must be protected by one cross-process gate.");
+        Assert(Program.OriginalPowerShellPreJournalDeadline > TimeSpan.FromMinutes(5) &&
+               Program.OriginalPowerShellPreJournalDeadline <= TimeSpan.FromMinutes(10) &&
+               hostSource.Contains("TryCancelStalledPreJournalInstaller(installer, installDirectory)", StringComparison.Ordinal) &&
+               hostSource.Contains("await WaitForOriginalInstallerOrAbortSafePreJournalStageAsync(", StringComparison.Ordinal) &&
+               hostSource.Contains("child.Kill(entireProcessTree: true)", StringComparison.Ordinal) &&
+               !script.Contains("Stop-Process -Name AccountingAutomationHub", StringComparison.Ordinal),
+            "Host must bound pre-journal child waits, never kill AAH/Tally or interrupt a file-replacement transaction.");
+
+        var isolated = Path.Combine(root, "PreJournalWatchdog");
+        Directory.CreateDirectory(isolated);
+        var journalDir = Path.Combine(isolated, ".aah-swap-test");
+        Directory.CreateDirectory(journalDir);
+        using var child = Process.Start(new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
+                "Start-Sleep -Seconds 45" }
+        }) ?? throw new InvalidOperationException("Couldn't start isolated test-only PowerShell sleep process.");
+        try
+        {
+            File.WriteAllText(Path.Combine(journalDir, "journal.json"), "{}");
+            Assert(!Program.TryCancelStalledPreJournalInstaller(child, isolated) && !child.HasExited,
+                "A live original transaction journal must absolutely block child cancellation.");
+            File.Delete(Path.Combine(journalDir, "journal.json"));
+
+            using var gateReady = new ManualResetEventSlim(false);
+            using var releaseGate = new ManualResetEventSlim(false);
+            var owner = new Thread(() =>
+            {
+                using var gate = new Mutex(false, Program.TransactionMutationGateName);
+                try
+                {
+                    gate.WaitOne();
+                    gateReady.Set();
+                    releaseGate.Wait(TimeSpan.FromSeconds(5));
+                }
+                finally { gate.ReleaseMutex(); }
+            });
+            owner.IsBackground = true;
+            owner.Start();
+            Assert(gateReady.Wait(TimeSpan.FromSeconds(5)),
+                "Could not acquire test-only independent PowerShell mutation gate.");
+            try
+            {
+                Assert(!Program.TryCancelStalledPreJournalInstaller(child, isolated) && !child.HasExited,
+                    "Mutation gate held by installer must block all forced cancellation.");
+            }
+            finally
+            {
+                releaseGate.Set();
+                owner.Join(TimeSpan.FromSeconds(6));
+            }
+
+            var timedOutSafely = false;
+            try
+            {
+                Program.WaitForOriginalInstallerOrAbortSafePreJournalStageAsync(
+                    child, isolated, TimeSpan.FromMilliseconds(250))
+                    .GetAwaiter().GetResult();
+            }
+            catch (TimeoutException) { timedOutSafely = true; }
+            Assert(timedOutSafely && child.HasExited,
+                "Pre-journal 7-minute production watchdog did not safely retire only its stalled PowerShell child.");
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                child.WaitForExit(5000);
+            }
+        }
+        Console.WriteLine("PASS: hung PowerShell pre-journal child is bounded; journal and commit mutex prevent interruption; AAH/Tally untouched.");
+    }
+
     internal static int Main()
     {
         var temp=Path.Combine(Path.GetTempPath(),"AAH-UpdateHost-Test-"+Guid.NewGuid().ToString("N"));
@@ -815,7 +913,8 @@ internal static class EntryPoint
         try
         {
             Test(temp);
-            Console.WriteLine("PASS: 8/8 AAH UpdateHost transactional safety scenarios.");
+            TestSafePreJournalPowerShellWatchdog(temp);
+            Console.WriteLine("PASS: 9/9 AAH UpdateHost transactional safety scenarios.");
             return 0;
         }
         finally
