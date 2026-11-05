@@ -1812,6 +1812,27 @@ public sealed class TallyBankVoucherImportService
                             var livePreviousVersion = BuildLiveBankVersion(liveBound, previousBankMid);
                             if (!livePreviousVersion.Equals(previousVersion, StringComparison.Ordinal))
                             {
+                                // Same original AAH verified Previous->Desired route: the
+                                // saved Bank identity may have been serialized with an
+                                // older Ledger-MASTERID mapping. Reconstruct the prior
+                                // live version only when the verified VOUCHER MASTERID
+                                // and its positive Tally ALTERID are identical to the
+                                // last accepted readback. A later external voucher edit
+                                // advances ALTERID and MUST fail closed as before.
+                                if (CanRebaseBoundBankPreviousVersion(
+                                        versionState, boundMasterId, liveBound))
+                                {
+                                    _tallyRepository.ConfirmSourceBindingVersion(
+                                        client.Id, client.FinancialYear, company.CompanyKey,
+                                        "Bank Voucher", sourceKey, sourceKey,
+                                        boundMasterId, liveBound.Guid.Trim(), lastHash,
+                                        livePreviousVersion, LiveAlterId(liveBound),
+                                        "Existing verified Bank voucher previous version re-serialized " +
+                                        "from unchanged live MASTERID/ALTERID before comparing new ledger allocation. " +
+                                        "No Tally XML or CREATE was sent by this reconciliation.");
+                                }
+                                else
+                                {
                                 // Fix80: when the exact bound Voucher MASTERID changed in Tally
                                 // but still proves the same physical Bank transaction and saved
                                 // previous Bank MASTERID, adopt that external treatment into AAH
@@ -1860,6 +1881,7 @@ public sealed class TallyBankVoucherImportService
                                         LiveBankVoucherMatchKind.Conflict, liveBound,
                                         $"MASTERID {boundMasterId} is bound to this AAH Bank source, but live Tally does not equal AAH's saved previous verified version. External/unverified change is protected; CREATE and ALTER are both blocked."));
                                 continue;
+                                }
                             }
                         }
                         else
@@ -2396,12 +2418,15 @@ liveBefore = await RefreshVoucherAuthorityAsync(fromDate, toDate);
                 {
                     var previousBankMid = ReadVersionField(previousVersion, "BANKMID");
                     var livePreviousVersion = BuildLiveBankVersion(target, previousBankMid);
-                    if (!livePreviousVersion.Equals(previousVersion, StringComparison.Ordinal))
+                    if (!livePreviousVersion.Equals(previousVersion, StringComparison.Ordinal) &&
+                        !CanRebaseBoundBankPreviousVersion(
+                            finalVersionState, item.ExistingTallyMasterId, target,
+                            allowStagedModify: true))
                     {
                         result.TallyErrors = 1;
                         result.UnverifiedAfterImport = ready.Count;
                         result.LineError =
-                            $"Bank Ledger/treatment ALTER was blocked because MASTERID {item.ExistingTallyMasterId} no longer matches AAH's saved previous verified version.";
+                            $"Bank Ledger/treatment ALTER was blocked because MASTERID {item.ExistingTallyMasterId} no longer matches AAH's saved previous verified version or unchanged last verified ALTERID.";
                         result.Status = BuildSummary(result, imported: false) + " " + result.LineError;
                         return result;
                     }
@@ -4110,6 +4135,27 @@ liveBefore = await RefreshVoucherAuthorityAsync(fromDate, toDate);
             .Where(name => name.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    // Reuse original Bank source binding as the previous-version authority.
+    // Only a VERIFIED previous voucher (or the same ModifyPending voucher
+    // at final pre-ALTER recheck) with a positive unchanged destination
+    // ALTERID is eligible; no silent adoption of external Tally changes.
+    internal static bool CanRebaseBoundBankPreviousVersion(
+        TallySourceBindingVersionState? saved, string expectedMasterId,
+        TallyVoucherIndexRecord live, bool allowStagedModify = false)
+    {
+        if (saved is null ||
+            !(saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+              (allowStagedModify && saved.State.Equals("ModifyPending", StringComparison.OrdinalIgnoreCase))) ||
+            saved.VerifiedVersion.Length == 0 || saved.VerifiedContentHash.Length == 0 ||
+            saved.LastVerifiedAlterId <= 0 ||
+            !saved.MasterId.Trim().Equals(expectedMasterId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !live.MasterId.Trim().Equals(expectedMasterId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var currentAlterId) ||
+            currentAlterId != saved.LastVerifiedAlterId)
+            return false;
+        return true;
+    }
 
     private static string NormalizeLiveMatchText(string? value) =>
         string.Join(' ', (value ?? string.Empty)

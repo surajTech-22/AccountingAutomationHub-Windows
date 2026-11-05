@@ -63,6 +63,7 @@ internal static class Program
         TallyCompanyMasterScopeTests.Run();
         TallyUnlinkFreshAuthorityTests.Run();
         TallyStandardHierarchyDedupTests.Run();
+        TallyBankPreviousVersionRebaseTests.Run();
         TallyGeneratedLedgerDedupTests.Run();
         GstinLatestPartyNameTests.Run();
         Console.WriteLine("PASS: GSTIN latest name reuses newest supplier/customer across existing entries.");
