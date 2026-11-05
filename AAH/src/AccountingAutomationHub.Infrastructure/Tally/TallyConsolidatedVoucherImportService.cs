@@ -17,7 +17,9 @@ public sealed class TallyConsolidatedVoucherImportService(
     Action? verifiedVoucher = null,
     SqliteTallyRepository? tallyRepository = null,
     Action? tallyAcknowledgedCreate = null,
-    Action? tallyAcknowledgedAlter = null)
+    Action? tallyAcknowledgedAlter = null,
+    Func<TallyClientLink, TallyCompanyInfo, string, CancellationToken, Task<TallyVoucherChangeMarker>>?
+        consolidatedVerifiedMarkerReader = null)
 {
     private const string SourceEntityType = "Consolidated Voucher";
     private static readonly StringComparer IgnoreCase = StringComparer.OrdinalIgnoreCase;
@@ -50,6 +52,19 @@ public sealed class TallyConsolidatedVoucherImportService(
     }
 
 
+    // Normal and individual-client readers keep their ORIGINAL live Tally
+    // change-marker semantics. Only the consolidated call-site can supply
+    // a marker independently proved against a fresh live Voucher index when
+    // the known Tally report returns unreliable zero/empty pulse values.
+    // The original strict RequireMatchingSynchronizedMarker, duplicate,
+    // CREATE/ALTER, readback and previous-version checks remain untouched.
+    private Task<TallyVoucherChangeMarker> ReadTrustedMarkerAsync(
+        TallyClientLink link, TallyCompanyInfo company, string financialYear,
+        CancellationToken cancellationToken) =>
+        consolidatedVerifiedMarkerReader is null
+            ? tally.GetVoucherChangeMarkerAsync(company, cancellationToken)
+            : consolidatedVerifiedMarkerReader(link, company, financialYear, cancellationToken);
+
     /// <summary>
     /// Reuse the exact full-year authority maintained by the existing Tally
     /// coordinator, including all saved MASTERIDs/ALTERIDs and complete XML.
@@ -69,7 +84,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                 "Normal linked-Tally FY authority has not completed its baseline. " +
                 "Refresh the existing Tally link; consolidated will not take a second snapshot.");
 
-        var marker = await tally.GetVoucherChangeMarkerAsync(destination, token).ConfigureAwait(false);
+        var marker = await ReadTrustedMarkerAsync(
+            link, destination, financialYear, token).ConfigureAwait(false);
         RequireMatchingSynchronizedMarker(link, destination, state, marker);
 
         var index = tallyRepository.GetVoucherIndexRange(link.CompanyKey, financialYear, from, to);
@@ -142,7 +158,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         TallyVoucherChangeMarker initial, CancellationToken token)
     {
         // A tiny change-marker check, not another complete FY Voucher request.
-        var marker = await tally.GetVoucherChangeMarkerAsync(destination, token).ConfigureAwait(false);
+        var marker = await ReadTrustedMarkerAsync(
+            link, destination, financialYear, token).ConfigureAwait(false);
         var state = tallyRepository?.GetBankSyncState(link.ClientId, financialYear, link.CompanyKey)
             ?? throw new InvalidOperationException("Normal Tally authority checkpoint disappeared.");
         RequireMatchingSynchronizedMarker(link, destination, state, marker);

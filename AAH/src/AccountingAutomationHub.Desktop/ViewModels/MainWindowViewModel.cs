@@ -3101,6 +3101,10 @@ public sealed class MainWindowViewModel :
         var verifiedVoucherCount = 0;
         var tallyAcknowledgedCreateCount = 0;
         var tallyAcknowledgedAlterCount = 0;
+        // Consolidated-only adapter; the normal Tally coordinator and every
+        // individual-client import still use their existing unchanged code.
+        var authorityWrapper = new TallyConsolidatedPreImportAuthorityWrapper(
+            _tallyCoordinator, _tallyHttpService, _tallyRepository);
         var importer = new TallyConsolidatedVoucherImportService(_tallyHttpService,
             (stage, requestXml, responseXml) =>
             {
@@ -3114,7 +3118,8 @@ public sealed class MainWindowViewModel :
             },
             () => verifiedVoucherCount++,
             _tallyRepository, () => tallyAcknowledgedCreateCount++,
-            () => tallyAcknowledgedAlterCount++);
+            () => tallyAcknowledgedAlterCount++,
+            consolidatedVerifiedMarkerReader: authorityWrapper.ReadVerifiedMarkerAsync);
         try
         {
             // Consolidated-only wrapper around the ORIGINAL, unchanged
@@ -3122,8 +3127,6 @@ public sealed class MainWindowViewModel :
             // to the normal individual-client refresh or voucher writer.
             // Keep this inside the established diagnostic catch so a stale
             // checkpoint records its exact live/saved marker comparison.
-            var authorityWrapper = new TallyConsolidatedPreImportAuthorityWrapper(
-                _tallyCoordinator, _tallyHttpService, _tallyRepository);
             await authorityWrapper.VerifyAsync(current, link, company);
             // Client/FY selection can change while the original normal
             // synchronization is awaiting Tally. Never import into a

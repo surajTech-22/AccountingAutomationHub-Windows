@@ -11,5 +11,8 @@
     <ProjectReference Include="../../src/AccountingAutomationHub.Domain/AccountingAutomationHub.Domain.csproj" />
     <ProjectReference Include="../../src/AccountingAutomationHub.Application/AccountingAutomationHub.Application.csproj" />
     <ProjectReference Include="../../src/AccountingAutomationHub.Infrastructure/AccountingAutomationHub.Infrastructure.csproj" />
+    <!-- Compile the REAL consolidated-only wrapper for native-index proof tests.
+         The test-only ordinary coordinator is a no-op; production is untouched. -->
+    <Compile Include="../../src/AccountingAutomationHub.Desktop/Services/TallyConsolidatedPreImportAuthorityWrapper.cs" Link="TallyConsolidatedPreImportAuthorityWrapper.cs" />
   </ItemGroup>
 </Project>
