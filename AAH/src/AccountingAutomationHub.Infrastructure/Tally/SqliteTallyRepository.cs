@@ -27,6 +27,16 @@ public sealed class SqliteTallyRepository
         }.ToString();
     }
 
+    // Explicit database target supports isolated unlink/relink regression
+    // tests without accessing or mutating a user's real AAH profile.
+    public SqliteTallyRepository(string databaseConnectionString)
+    {
+        if (string.IsNullOrWhiteSpace(databaseConnectionString))
+            throw new ArgumentException("A database connection string is required.", nameof(databaseConnectionString));
+        _connectionString = databaseConnectionString;
+        _auditConnectionString = databaseConnectionString;
+    }
+
     public void Initialize() =>
 
         SqliteSchemaInitializationGate.RunOnce(nameof(SqliteTallyRepository), _connectionString, InitializeCore);
