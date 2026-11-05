@@ -96,8 +96,8 @@ internal static class TallyConsolidatedManualXmlTests
         var method = infra[start..end];
         Check(method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               method.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
-              method.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
               method.Contains("GetSourceBindingVersionState(", StringComparison.Ordinal) &&
               method.Contains("RequireExistingDefaultCashForBankVouchers(", StringComparison.Ordinal),
               "manual XML must use current source binding and live MASTERID/ALTERID/DRCR/master authority");
@@ -141,16 +141,37 @@ internal static class TallyConsolidatedManualXmlTests
               "exact MASTERID + saved previous full DR/CR/ALTERID then bound " +
               "ALTER, not an extra cross-module ModifyPending veto.");
 
-        // Recheck must never ask Tally for a second whole-FY full voucher
-        // graph. Existing TallyHttpService already month-slices the first
-        // snapshot; final read-only safety uses bounded fresh index calls.
+        // The previous successful import's SAME MASTERID and full signed
+        // DR/CR checks remain. Only the normal coordinator collects a complete
+        // FY snapshot; Generate reuses its SQLite authority and two tiny markers.
         Check(method.Contains("var fullByMasterId = live.FullVouchers", StringComparison.Ordinal) &&
               method.Contains("fullByMasterId.TryGetValue(previous.MasterId", StringComparison.Ordinal) &&
               method.Contains("previous, boundFull, state", StringComparison.Ordinal) &&
-              method.Contains("while (month <= finalMonth)", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
+              !method.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
+              !method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
               !method.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal),
-              "Manual XML generation must index original full XML once and use bounded monthly final ALTERID rechecks.");
+              "manual XML must use normal synchronized full Voucher XML with tiny ALTERID marker");
+
+        var helperEnd = infra.IndexOf("private static void RequireMatchingSynchronizedMarker(", StringComparison.Ordinal);
+        Check(helperEnd > 0 &&
+              infra[..helperEnd].Contains("GetBankSyncState(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherIndexRange(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherXmlAuthorityByMasterIds(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("HasCompleteVoucherXmlAuthority(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherChangeMarkerAsync(", StringComparison.Ordinal),
+              "consolidated must use the original Client/FY/CompanyKey authority");
+
+        var importStart = infra.IndexOf(
+            "public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(", StringComparison.Ordinal);
+        var importEnd = infra.IndexOf("private static void RequireDestination(", importStart, StringComparison.Ordinal);
+        Check(importStart >= 0 && importEnd > importStart &&
+              !infra[importStart..importEnd].Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("createdMasters == 0", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal),
+              "consolidated Import must reuse normal FY authority and existing verified bound ALTER");
 
         // No manual action may borrow an unverified or missing source binding;
         // the established normal AAH previous-version gate is still required.
