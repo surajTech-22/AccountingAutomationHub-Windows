@@ -3117,15 +3117,14 @@ public sealed class MainWindowViewModel :
             () => tallyAcknowledgedAlterCount++);
         try
         {
-            // Use the ORIGINAL linked-Tally coordinator to catch up its
-            // Client/FY/CompanyKey MASTERID + full-XML authority before the
-            // unchanged ImportAsync live-marker and duplicate safety checks.
-            // This stays INSIDE the original import diagnostic catch so an
-            // incomplete/deferred checkpoint produces the normal full ZIP.
-            // Unlike explicit Refresh, this uses its original delta path.
-            await _tallyCoordinator.RefreshNowAsync(
-                forceLinkedSynchronization: true, forceFullBaseline: false,
-                requireConsolidatedImportAuthority: true);
+            // Consolidated-only wrapper around the ORIGINAL, unchanged
+            // linked-Tally coordinator. Never add an import-specific branch
+            // to the normal individual-client refresh or voucher writer.
+            // Keep this inside the established diagnostic catch so a stale
+            // checkpoint records its exact live/saved marker comparison.
+            var authorityWrapper = new TallyConsolidatedPreImportAuthorityWrapper(
+                _tallyCoordinator, _tallyHttpService, _tallyRepository);
+            await authorityWrapper.VerifyAsync(current, link, company);
             // Client/FY selection can change while the original normal
             // synchronization is awaiting Tally. Never import into a
             // previously selected company after the workspace has switched.
