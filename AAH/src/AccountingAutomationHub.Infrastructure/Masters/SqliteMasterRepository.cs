@@ -424,6 +424,19 @@ public sealed class SqliteMasterRepository : IMasterRepository
                 linkedTallyCompany = (link.ExecuteScalar() as string ?? string.Empty).Trim();
             }
         }
+        var uniqueLinkedTallyLedgers = linkedTallyCompany.Length == 0
+            ? new Dictionary<string, MasterRecord>(StringComparer.OrdinalIgnoreCase)
+            : allExisting
+                .Where(master => !master.IsArchived &&
+                                 master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                                 IsTallyMaster(master) && master.TallyMasterId.Trim().Length > 0 &&
+                                 master.Company.Trim().Equals(linkedTallyCompany, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
+                // One exact bound row, not just one numeric MASTERID: independently
+                // bound Tally books can share names and even numeric MASTERIDs.
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+        var bankLedgerClaims = ReadBoundBankLedgerClaims(connection, transaction, clientId, financialYear);
         var verifiedLinkedTallyMasterNames = linkedTallyCompany.Length == 0
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : allExisting
@@ -439,6 +452,21 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
         foreach (var source in incomingForUpsert)
         {
+            // AAH generates bank, mapped Cash and Purchase/Sales ledgers independently
+            // of the connected Tally company's name. When a UNIQUE bound live
+            // destination ledger already exists, do not recreate that same
+            // unbound generated ledger during normal accounting refresh.
+            // Preserve differing parent, meaningful opening balance and external
+            // bank MASTERID claims for explicit review rather than treating a
+            // changed ledger as a same-name duplicate.
+            if (IsGeneratedLocalLedgerShadow(source) &&
+                uniqueLinkedTallyLedgers.TryGetValue(MasterIdentityKey(source), out var linkedLedger) &&
+                TallyMasterIdentity.Equivalent(source.Parent, linkedLedger.Parent) &&
+                !HasConflictingBankLedgerClaim(source.Name, linkedLedger.TallyMasterId, bankLedgerClaims) &&
+                (!mergeAliases.TryGetValue(MasterIdentityKey(source), out var canonical) ||
+                 TallyMasterIdentity.Equivalent(canonical, linkedLedger.Name)))
+                continue;
+
             // Do not revive the local built-in placeholder when a unique
             // linked-book Tally Ledger/Group of the same name is already bound.
             // Original local/manual and independently bound Masters are untouched.
@@ -610,6 +638,9 @@ public sealed class SqliteMasterRepository : IMasterRepository
 
         if (linkedTallyCompany.Length > 0)
         {
+            count += RetireGeneratedLedgerShadows(
+                connection, transaction, clientId, financialYear,
+                linkedTallyCompany, mergeAliases, bankLedgerClaims, now);
             // Collapse the 28 built-in Group shadows (and Cash/P&L placeholders)
             // already stored by older versions. Keep both historical rows, but
             // archive ONLY the unused, unbound Standard hierarchy placeholder.
@@ -651,6 +682,131 @@ public sealed class SqliteMasterRepository : IMasterRepository
         transaction.Commit();
         return count;
     }
+
+    // Existing Tally-bound Ledger is authoritative for the connected Tally book;
+    // unbound module-generated AAH ledger rows can be retired only when they
+    // describe the SAME unambiguous ledger name and Group, without competing
+    // bank MASTERID claims or an approved FROM->INTO alias. This is AAH-only
+    // reconciliation and NEVER sends an XML import to Tally.
+    private static int RetireGeneratedLedgerShadows(
+        SqliteConnection connection, SqliteTransaction transaction,
+        long clientId, string financialYear, string linkedTallyCompany,
+        IReadOnlyDictionary<string, string> existingAliases,
+        IReadOnlyList<(string Name, string MasterId)> bankLedgerClaims,
+        string now)
+    {
+        var rows = new List<MasterRecord>();
+        using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText =
+                """
+                SELECT Id, ClientId, FinancialYear, Name, Parent, Type, Company,
+                       Source, OpeningBalance, IsArchived, IsUserEdited,
+                       TallyMasterId, TallyGuid, TallyAlterId, CreatedUtc, UpdatedUtc
+                FROM Masters WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                              AND IsArchived=0 AND Type='Ledger' COLLATE NOCASE;
+                """;
+            select.Parameters.AddWithValue("$ClientId", clientId);
+            select.Parameters.AddWithValue("$Fy", financialYear.Trim());
+            using var reader = select.ExecuteReader();
+            while (reader.Read()) rows.Add(Read(reader));
+        }
+
+        var uniquelyLinked = rows
+            .Where(row => IsTallyMaster(row) && row.TallyMasterId.Trim().Length > 0 &&
+                          row.Company.Trim().Equals(linkedTallyCompany, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+
+        var changed = 0;
+        foreach (var local in rows.Where(IsGeneratedLocalLedgerShadow))
+        {
+            if (!uniquelyLinked.TryGetValue(MasterIdentityKey(local), out var live))
+                continue;
+            if (!TallyMasterIdentity.Equivalent(local.Parent, live.Parent))
+                continue; // may be a pending local Group/Parent edit
+            if (HasConflictingBankLedgerClaim(local.Name, live.TallyMasterId, bankLedgerClaims))
+                continue; // an existing, different Bank Ledger MASTERID outranks name
+            if (existingAliases.TryGetValue(MasterIdentityKey(local), out var canonical) &&
+                !TallyMasterIdentity.Equivalent(canonical, live.Name))
+                continue; // keep an explicit user-approved FROM -> INTO mapping
+
+            // The source's own mapping and BankAccount records remain in place.
+            // For case/punctuation variants, use AAH's pre-existing comprehensive
+            // accounting reference retargeter before retiring the duplicate row.
+            // For an exact-name duplicate this intentionally changes no postings.
+            if (!local.Name.Trim().Equals(live.Name.Trim(), StringComparison.Ordinal))
+                changed += RewriteLedgerReferences(
+                    connection, transaction, clientId, financialYear, local.Name, live.Name);
+            SaveMergeAlias(connection, transaction, clientId, financialYear,
+                "Ledger", local.Name, live.Name);
+            using var archive = connection.CreateCommand();
+            archive.Transaction = transaction;
+            archive.CommandText =
+                """
+                UPDATE Masters
+                SET IsArchived=1, IsUserEdited=0, UpdatedUtc=$Utc
+                WHERE Id=$Id AND ClientId=$ClientId AND FinancialYear=$Fy
+                  AND IsArchived=0 AND TRIM(TallyMasterId)=''
+                  AND TRIM(TallyGuid)='' AND Source NOT LIKE '%Tally%';
+                """;
+            archive.Parameters.AddWithValue("$Id", local.PersistentId);
+            archive.Parameters.AddWithValue("$ClientId", clientId);
+            archive.Parameters.AddWithValue("$Fy", financialYear.Trim());
+            archive.Parameters.AddWithValue("$Utc", now);
+            changed += archive.ExecuteNonQuery();
+        }
+        return changed;
+    }
+
+    private static bool IsGeneratedLocalLedgerShadow(MasterRecord record)
+    {
+        if (!record.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) ||
+            record.IsArchived || record.TallyMasterId.Trim().Length > 0 ||
+            record.TallyGuid.Trim().Length > 0 ||
+            !MasterAuthority.IsLocalEditableSource(record.Source) ||
+            (record.OpeningBalance.HasValue &&
+             Math.Abs(record.OpeningBalance.Value) >= 0.005m))
+            return false;
+        // Manual/new Ledger and previous-FY entries are user-owned, not
+        // module-generated candidates. User-owned local Ledgers remain editable.
+        var source = record.Source.Trim();
+        return source.Length > 0 &&
+               !source.Equals("Manual", StringComparison.OrdinalIgnoreCase) &&
+               !source.Equals("Local / Unbound", StringComparison.OrdinalIgnoreCase) &&
+               !source.Contains("Previous", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<(string Name, string MasterId)> ReadBoundBankLedgerClaims(
+        SqliteConnection connection, SqliteTransaction transaction, long clientId, string financialYear)
+    {
+        var result = new List<(string Name, string MasterId)>();
+        if (!TableHasColumn(connection, transaction, "BankAccounts", "LedgerName") ||
+            !TableHasColumn(connection, transaction, "BankAccounts", "TallyLedgerMasterId"))
+            return result;
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText =
+            """
+            SELECT LedgerName,TallyLedgerMasterId FROM BankAccounts
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy
+              AND TRIM(COALESCE(TallyLedgerMasterId,''))<>'';
+            """;
+        cmd.Parameters.AddWithValue("$ClientId", clientId);
+        cmd.Parameters.AddWithValue("$Fy", financialYear.Trim());
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            result.Add((reader.GetString(0), reader.GetString(1)));
+        return result;
+    }
+
+    private static bool HasConflictingBankLedgerClaim(
+        string name, string intendedMasterId, IReadOnlyList<(string Name, string MasterId)> bankLedgerClaims) =>
+        bankLedgerClaims.Any(claim =>
+            TallyMasterIdentity.Equivalent(claim.Name, name) &&
+            !claim.MasterId.Trim().Equals(intendedMasterId.Trim(), StringComparison.OrdinalIgnoreCase));
 
     public void Save(MasterRecord record)
     {

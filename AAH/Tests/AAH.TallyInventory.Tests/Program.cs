@@ -63,6 +63,7 @@ internal static class Program
         TallyCompanyMasterScopeTests.Run();
         TallyUnlinkFreshAuthorityTests.Run();
         TallyStandardHierarchyDedupTests.Run();
+        TallyGeneratedLedgerDedupTests.Run();
         GstinLatestPartyNameTests.Run();
         Console.WriteLine("PASS: GSTIN latest name reuses newest supplier/customer across existing entries.");
         Run("missing recovery excludes verified, deleted and rebound identities", () =>
