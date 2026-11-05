@@ -3126,6 +3126,19 @@ public sealed class MainWindowViewModel :
             await _tallyCoordinator.RefreshNowAsync(
                 forceLinkedSynchronization: true, forceFullBaseline: false,
                 requireConsolidatedImportAuthority: true);
+            // Client/FY selection can change while the original normal
+            // synchronization is awaiting Tally. Never import into a
+            // previously selected company after the workspace has switched.
+            var afterSyncClient = _clientContext.CurrentClient;
+            var afterSyncLink = _tallyCoordinator.GetCurrentClientLink();
+            if (afterSyncClient is null || afterSyncClient.Id != parentId ||
+                !afterSyncClient.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+                afterSyncLink is null || afterSyncLink.ClientId != parentId ||
+                !afterSyncLink.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+                _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
+                _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
+                throw new InvalidOperationException(
+                    "Consolidated Client/FY or linked Tally CompanyKey changed during normal pre-import synchronization. No voucher was posted.");
             var result = await importer.ImportAsync(link, company, prepared,
                 accountingFinancialYear: financialYear);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
