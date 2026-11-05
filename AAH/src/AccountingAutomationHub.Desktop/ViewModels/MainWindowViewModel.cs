@@ -3079,14 +3079,6 @@ public sealed class MainWindowViewModel :
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash,
             produceManualImportFiles: false);
-        // Use the ORIGINAL linked-Tally coordinator to catch up its existing
-        // Client/FY/CompanyKey MASTERID + full-XML authority before the
-        // unchanged consolidated ImportAsync live-marker safety check.
-        // Unlike explicit Refresh Tally, this attempts only its normal
-        // ALTERID delta/checkpoint reconciliation, not a second full-FY snapshot.
-        await _tallyCoordinator.RefreshNowAsync(
-            forceLinkedSynchronization: true, forceFullBaseline: false,
-            requireConsolidatedImportAuthority: true);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (current is null || current.Id != parentId ||
@@ -3125,6 +3117,15 @@ public sealed class MainWindowViewModel :
             () => tallyAcknowledgedAlterCount++);
         try
         {
+            // Use the ORIGINAL linked-Tally coordinator to catch up its
+            // Client/FY/CompanyKey MASTERID + full-XML authority before the
+            // unchanged ImportAsync live-marker and duplicate safety checks.
+            // This stays INSIDE the original import diagnostic catch so an
+            // incomplete/deferred checkpoint produces the normal full ZIP.
+            // Unlike explicit Refresh, this uses its original delta path.
+            await _tallyCoordinator.RefreshNowAsync(
+                forceLinkedSynchronization: true, forceFullBaseline: false,
+                requireConsolidatedImportAuthority: true);
             var result = await importer.ImportAsync(link, company, prepared,
                 accountingFinancialYear: financialYear);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
