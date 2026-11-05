@@ -723,17 +723,14 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(firstYear + 1, 3, 31);
         if (source.Any(x => x.Date < from || x.Date > to))
             throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
-        // Reuse the existing bounded full-company/FY authority path used by
-        // the central Tally coordinator. Unlike the old consolidated one-shot
-        // collection, it checks every month's Voucher MASTERID against its full
-        // object before authorizing any destination CREATE.
+        // Reuse the verified full-FY MASTERID and complete signed Voucher XML
+        // ALREADY held by the ordinary Tally coordinator. No full-company
+        // snapshot is needed to classify the consolidated destination.
         var (before, capturedMarker) = await ReadSynchronizedVoucherAuthorityAsync(
             link, liveDestination, financialYear, from, to, cancellationToken).ConfigureAwait(false);
-        if (liveDestination.VoucherCount > 0 && before.Vouchers.Count == 0)
-            throw new InvalidOperationException(
-                "Tally reports existing saved Voucher(s) but the full-FY snapshot " +
-                "returned zero. This is NOT evidence of an empty destination. " +
-                "No consolidated CREATE is safe.");
+        // An empty verified active FY is valid even when the same Tally
+        // company has vouchers from earlier years. The synchronized FY count
+        // was already verified by ReadSynchronizedVoucherAuthorityAsync.
         // Normal Tally synchronization already owns these exact SQLite rows.
         // The consolidated wrapper must not publish another baseline.
         // Reuse Fix85's normal missing MASTERID detection. An externally
@@ -1103,7 +1100,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         foreach (var master in masters) RequireMaster(available, master);
         // The normal synchronized index remains authoritative while Masters
         // were unchanged. If this import CREATED a Master, its own ALTERID
-        // change requires the old live pre-write Voucher recheck for safety.
+        // change requires a fresh INDEX-only pre-write check. Never request
+        // another full-year graph of complete Voucher XML for this barrier.
         IReadOnlyList<TallyVoucherIndexRecord> recheckIndex;
         if (createdMasters == 0)
         {
@@ -1114,9 +1112,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         }
         else
         {
-            var freshAfterMasterWrite = await tally.ExportVoucherAuthorityFreshAsync(
+            recheckIndex = await tally.ExportVoucherIndexFreshAsync(
                 destination, from, to, cancellationToken).ConfigureAwait(false);
-            recheckIndex = freshAfterMasterWrite.Index;
         }
         var previousIds = before.Vouchers
             .ToDictionary(v => v.MasterId.Trim(), v => v.AlterId, IgnoreCase);
