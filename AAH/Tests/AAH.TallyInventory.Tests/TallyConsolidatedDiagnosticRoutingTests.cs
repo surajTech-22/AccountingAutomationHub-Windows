@@ -95,8 +95,9 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
             StringComparison.Ordinal);
         Check(autoReadyGuard > autoReadyStart && autoReadyArm > autoReadyGuard &&
               main.Contains("GenerateConsolidatedPreparedXmlAsync(", StringComparison.Ordinal) &&
-              main.Contains("TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);",
-                  StringComparison.Ordinal),
+              main.Contains("TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources)",
+                  StringComparison.Ordinal) &&
+              main.Contains("var result = await Task.Run(() =>", StringComparison.Ordinal),
             "automatic parent Tally export was not disabled or the original consolidated builder was replaced");
         Console.WriteLine("PASS: consolidated parent never generates/exports normal Live XML; source branch XML and destination import remain original.");
 
