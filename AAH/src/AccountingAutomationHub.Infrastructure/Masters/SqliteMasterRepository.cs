@@ -403,8 +403,49 @@ public sealed class SqliteMasterRepository : IMasterRepository
         var count = 0;
         var now = DateTime.UtcNow.ToString("O");
 
+        // A built-in AAH Standard hierarchy is a local placeholder, not a second
+        // Tally Master. Only a confirmed, Client/FY-linked Tally company may
+        // supersede it. The book name is an authorization boundary here: an
+        // identically named Group from a branch or another Tally book is NOT
+        // evidence to retire a local placeholder.
+        var linkedTallyCompany = string.Empty;
+        using (var linkTable = connection.CreateCommand())
+        {
+            linkTable.Transaction = transaction;
+            linkTable.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='TallyClientLinks' LIMIT 1;";
+            if (linkTable.ExecuteScalar() is not null)
+            {
+                using var link = connection.CreateCommand();
+                link.Transaction = transaction;
+                link.CommandText =
+                    "SELECT CompanyName FROM TallyClientLinks WHERE ClientId=$ClientId AND (FinancialYear=$Fy OR TRIM(FinancialYear)='') LIMIT 1;";
+                link.Parameters.AddWithValue("$ClientId", clientId);
+                link.Parameters.AddWithValue("$Fy", financialYear.Trim());
+                linkedTallyCompany = (link.ExecuteScalar() as string ?? string.Empty).Trim();
+            }
+        }
+        var verifiedLinkedTallyMasterNames = linkedTallyCompany.Length == 0
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : allExisting
+                .Where(master => !master.IsArchived &&
+                                 (master.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) ||
+                                  master.Type.Equals("Group", StringComparison.OrdinalIgnoreCase)) &&
+                                 IsTallyMaster(master) && master.TallyMasterId.Trim().Length > 0 &&
+                                 master.Company.Trim().Equals(linkedTallyCompany, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(MasterIdentityKey, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() == 1)
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var source in incomingForUpsert)
         {
+            // Do not revive the local built-in placeholder when a unique
+            // linked-book Tally Ledger/Group of the same name is already bound.
+            // Original local/manual and independently bound Masters are untouched.
+            if (source.Source.Equals("Standard hierarchy", StringComparison.OrdinalIgnoreCase) &&
+                source.TallyMasterId.Trim().Length == 0 &&
+                verifiedLinkedTallyMasterNames.Contains(MasterIdentityKey(source)))
+                continue;
             var duplicateKey = MasterIdentityKey(source);
             MasterRecord? existing = null;
             var sourceTallyId = source.TallyMasterId.Trim();
@@ -565,6 +606,46 @@ public sealed class SqliteMasterRepository : IMasterRepository
                             ? previousIds.Append(inserted).ToArray() : [inserted];
                 }
             }
+        }
+
+        if (linkedTallyCompany.Length > 0)
+        {
+            // Collapse the 28 built-in Group shadows (and Cash/P&L placeholders)
+            // already stored by older versions. Keep both historical rows, but
+            // archive ONLY the unused, unbound Standard hierarchy placeholder.
+            // Never merge, archive or change a real Tally MASTERID; never touch
+            // user edits or opening balances. A second live ID with the same
+            // display name is ambiguous and deliberately disables this cleanup.
+            using var retire = connection.CreateCommand();
+            retire.Transaction = transaction;
+            retire.CommandText =
+                """
+                UPDATE Masters AS standard
+                SET IsArchived=1, UpdatedUtc=$Now
+                WHERE standard.ClientId=$ClientId AND standard.FinancialYear=$Fy
+                  AND standard.IsArchived=0 AND standard.IsUserEdited=0
+                  AND UPPER(TRIM(standard.Source))='STANDARD HIERARCHY'
+                  AND TRIM(standard.TallyMasterId)=''
+                  AND (standard.OpeningBalance IS NULL OR ABS(standard.OpeningBalance)<0.005)
+                  AND UPPER(TRIM(standard.Type)) IN ('LEDGER','GROUP')
+                  AND 1 = (
+                      SELECT COUNT(*)
+                      FROM Masters AS live
+                      WHERE live.ClientId=standard.ClientId
+                        AND live.FinancialYear=standard.FinancialYear
+                        AND live.IsArchived=0
+                        AND live.Type=standard.Type COLLATE NOCASE
+                        AND TRIM(live.Name)=TRIM(standard.Name) COLLATE NOCASE
+                        AND live.Company=$LinkedCompany COLLATE NOCASE
+                        AND INSTR(UPPER(live.Source),'TALLY')>0
+                        AND TRIM(live.TallyMasterId)<>''
+                  );
+                """;
+            retire.Parameters.AddWithValue("$ClientId", clientId);
+            retire.Parameters.AddWithValue("$Fy", financialYear.Trim());
+            retire.Parameters.AddWithValue("$LinkedCompany", linkedTallyCompany);
+            retire.Parameters.AddWithValue("$Now", now);
+            count += retire.ExecuteNonQuery();
         }
 
         transaction.Commit();
