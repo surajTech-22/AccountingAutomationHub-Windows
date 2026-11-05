@@ -1822,18 +1822,31 @@ public sealed class TallyAccountingVoucherExportService
                             // representation first; the normal desired-version comparison below then
                             // decides IGNORE versus a genuine new AAH ALTER. This never resends merely
                             // because the stored version string was reconstructed differently.
-                            var sameVerifiedJournalAuthority = IsJournalVoucher(incoming) &&
+                            // All already-bound accounting vouchers use the SAME
+                            // original verified Previous->Desired gate as Journals.
+                            // A bank/Purchase/Sales/Cash ledger name/group change
+                            // can change the reconstructed version string even when
+                            // the actual saved destination voucher MASTERID and
+                            // ALTERID never changed. Rebase only that serialization
+                            // from the existing live voucher before comparing the
+                            // desired postings. Never rebase accepted/pending/foreign
+                            // identity or an externally advanced Tally ALTERID.
+                            var sameVerifiedBoundAuthority =
                                 versionBinding is not null &&
+                                versionBinding.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+                                versionBinding.MasterId.Trim().Equals(boundMasterId, StringComparison.OrdinalIgnoreCase) &&
+                                versionBinding.VerifiedVersion.Length > 0 &&
+                                versionBinding.VerifiedContentHash.Length > 0 &&
                                 versionBinding.LastVerifiedAlterId > 0 &&
                                 ParseAlterId(liveBound.AlterId) == versionBinding.LastVerifiedAlterId;
-                            if (sameVerifiedJournalAuthority)
+                            if (sameVerifiedBoundAuthority)
                             {
                                 _tallyRepository.ConfirmSourceBindingVersion(
                                     client.Id, client.FinancialYear, company.CompanyKey, incoming.SourceType,
                                     sourceAnchor, incoming.SourceKey, boundMasterId,
                                     boundGuid.Length > 0 ? boundGuid : liveBound.Guid,
                                     lastHash, liveVersion, ParseAlterId(liveBound.AlterId),
-                                    "Fix86 reconciled Journal PreviousVersion from unchanged same-MASTERID/same-ALTERID live authority; no Tally resend occurred.");
+                                    "Verified bound voucher PreviousVersion re-serialized from unchanged same-MASTERID/same-ALTERID live Tally authority; previous accounting identity retained and no Tally resend occurred.");
                                 verifiedVersion = liveVersion;
                             }
                             // Fix76 one-time Fix74->Fix75 compatibility migration. Fix74

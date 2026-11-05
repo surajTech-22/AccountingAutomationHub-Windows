@@ -448,6 +448,25 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         if (OldMatches(oldIndex, oldBinding))
             throw new InvalidOperationException(
                 "Incorrect previous content fingerprint authorized bound ALTER.");
+        // AAH previously saved the verified REQUEST fingerprint while Tally's
+        // full readback can serialize the same voucher differently. A saved,
+        // self-consistent previous version and identical live MASTERID/ALTERID
+        // must still enter the normal bound ALTER path, without reassigning ID.
+        var savedRequestHash = new string('A', 64);
+        oldBinding.VerifiedContentHash = savedRequestHash;
+        oldBinding.VerifiedVersion = previousVersion[..^previousHash.Length] + savedRequestHash;
+        if (!OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Verified original request fingerprint did not reconcile unchanged Tally MASTERID/ALTERID.");
+        oldIndex.AlterId = "29";
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Different live Tally ALTERID was allowed to rebase original request.");
+        oldIndex.AlterId = "28";
+        oldBinding.VerifiedVersion = previousVersion;
+        if (OldMatches(oldIndex, oldBinding))
+            throw new InvalidOperationException(
+                "Inconsistent original request hash/version falsely authorized ALTER.");
         oldBinding.VerifiedContentHash = previousHash;
         oldBinding.MasterId = "337";
         if (OldMatches(oldIndex, oldBinding))
@@ -550,6 +569,11 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             throw new InvalidOperationException(
                 "CL019 Bank external Tally ALTERID change passed previous-version safety.");
         bankLive.AlterId = "377";
+        if (TallyConsolidatedVoucherImportService.ReadVerifiedLiveConsolidatedVersion(
+                bankLive, fullBank) is not { } acceptedReadback ||
+            !acceptedReadback.Hash.Equals(bankHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Original destination full voucher DR/CR readback did not produce the prior saved fingerprint.");
         Console.WriteLine("PASS: CL019 original Receipt + verified fingerprint and live MASTERID/ALTERID " +
             "reuse normal previous-version reconciliation; new type requires normal bound ALTER.");
 
