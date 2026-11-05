@@ -3085,7 +3085,8 @@ public sealed class MainWindowViewModel :
         // Unlike explicit Refresh Tally, this attempts only its normal
         // ALTERID delta/checkpoint reconciliation, not a second full-FY snapshot.
         await _tallyCoordinator.RefreshNowAsync(
-            forceLinkedSynchronization: true, forceFullBaseline: false);
+            forceLinkedSynchronization: true, forceFullBaseline: false,
+            requireConsolidatedImportAuthority: true);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (current is null || current.Id != parentId ||
