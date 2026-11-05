@@ -101,6 +101,39 @@ internal static class TallyConsolidatedManualXmlTests
               method.Contains("GetSourceBindingVersionState(", StringComparison.Ordinal) &&
               method.Contains("RequireExistingDefaultCashForBankVouchers(", StringComparison.Ordinal),
               "manual XML must use current source binding and live MASTERID/ALTERID/DRCR/master authority");
+        // Reproduce the v603-v605 regression: the manual path checked
+        // unrelated MODIFY-PENDING ownership BEFORE discovering an exact
+        // already-verified/no-op voucher (645 original CL019 source rows).
+        // The established automatic importer has always skipped unchanged
+        // full-DRCR live vouchers first, without CREATE/ALTER.
+        var boundSectionStart = method.IndexOf("var previous = bound[0];",
+            StringComparison.Ordinal);
+        var verifiedNoop = method.IndexOf(
+            "if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&",
+            boundSectionStart, StringComparison.Ordinal);
+        var fullLiveMatch = method.IndexOf("FullVoucherMatches(",
+            verifiedNoop, StringComparison.Ordinal);
+        var skipNoop = method.IndexOf("continue;", fullLiveMatch,
+            StringComparison.Ordinal);
+        var conflictingWriteGuard = method.IndexOf(
+            "if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(",
+            boundSectionStart, StringComparison.Ordinal);
+        var previousVersionGate = method.IndexOf(
+            "PreviousConsolidatedVersionMatches(", conflictingWriteGuard,
+            StringComparison.Ordinal);
+        var boundAlter = method.IndexOf("BuildBoundConsolidatedVoucherAlterXml(",
+            previousVersionGate, StringComparison.Ordinal);
+        Check(boundSectionStart >= 0 && verifiedNoop > boundSectionStart &&
+              fullLiveMatch > verifiedNoop && skipNoop > fullLiveMatch &&
+              conflictingWriteGuard > skipNoop &&
+              previousVersionGate > conflictingWriteGuard &&
+              boundAlter > previousVersionGate &&
+              method.Contains("no XML action", StringComparison.Ordinal) &&
+              method.Contains("no claim cleared, rebound or modified", StringComparison.Ordinal),
+              "manual XML must skip ONLY verified, exact live unchanged vouchers " +
+              "before cross-module MASTERID ownership guard; changed/unsafe ALTER " +
+              "remains strictly blocked before any XML action");
+
         foreach (var forbidden in new[] {
                      "ImportWithEvidenceAsync(", "tally.ImportXmlAsync(",
                      "StageSourceBindingChange(", "ConfirmSourceBindingVersion(",

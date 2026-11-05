@@ -209,6 +209,38 @@ public sealed class TallyConsolidatedVoucherImportService(
                     throw new InvalidOperationException(
                         "Manual XML cannot find one unique bound destination MASTERID for " + anchor);
                 var previous = bound[0];
+                // This is the same decision order as the EXISTING automatic
+                // consolidated importer: first prove the source's SAVED
+                // verified content is identical to the FULL live Tally voucher.
+                // An exact existing voucher requires NO CREATE/ALTER at all.
+                // A legacy normal-client ModifyPending record can claim its
+                // MASTERID, but that must not make a read-only NO-OP fail.
+                // This does NOT release/transfer the other source's binding.
+                if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
+                    FullVoucherMatches(
+                        new ExpectedVoucher(date, type, number, postings, voucher,
+                            reference, anchor, desiredHash, ""), previous, live.FullVouchers))
+                {
+                    unchanged++;
+                    var competingUnchanged = tallyRepository.ReadTallyMasterIdCompetingClaims(
+                        link.ClientId, financialYear, link.CompanyKey,
+                        SourceEntityType, anchor, previous.MasterId);
+                    proofs.Add("SKIP " + anchor + " | destination MASTERID=" +
+                        previous.MasterId + " | ALTERID=" + previous.AlterId +
+                        " | exact saved and live full DR/CR already matches; no XML action" +
+                        (competingUnchanged.Count == 0 ? "" :
+                            " | other AAH source claim(s) remain unresolved (read-only SKIP; " +
+                            "no claim cleared, rebound or modified): " +
+                            string.Join("; ", competingUnchanged.Select(other =>
+                                $"ClientId={other.ClientId}, {other.EntityType}, " +
+                                $"{other.SourceAnchor}, {other.State}"))));
+                    continue;
+                }
+
+                // Only a REAL changed version may reach manual ALTER here.
+                // A competing MASTERID ownership claim (including pending,
+                // deleted or unverified) remains a hard write barrier. Never
+                // turn a disputed ALTER into another CREATE.
                 if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(
                         link.ClientId, financialYear, link.CompanyKey,
                         SourceEntityType, anchor, previous.MasterId))
@@ -225,17 +257,6 @@ public sealed class TallyConsolidatedVoucherImportService(
                         "must not ALTER or CREATE a disputed voucher: " + anchor +
                         (details.Length == 0 ? "." : ". Existing claimant(s): " + details +
                          ". Confirm the original source's full signed DR/CR and saved version before rebinding."));
-                }
-                if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
-                    FullVoucherMatches(
-                        new ExpectedVoucher(date, type, number, postings, voucher,
-                            reference, anchor, desiredHash, ""), previous, live.FullVouchers))
-                {
-                    unchanged++;
-                    proofs.Add("SKIP " + anchor + " | destination MASTERID=" +
-                        previous.MasterId + " | ALTERID=" + previous.AlterId +
-                        " | exact desired version already exists");
-                    continue;
                 }
                 if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) ||
                     !PreviousConsolidatedVersionMatches(
