@@ -2938,8 +2938,8 @@ public sealed class MainWindowViewModel :
             {
                 _dashboardViewModel.ReportConsolidatedSourcePreviewLoadFailure(
                     "Source preview unavailable: " + exception.Message +
-                    ". No Tally vouchers were posted. Generate Consolidated XML " +
-                    "to retry using the same original branch exporter.");
+                    ". No Tally vouchers were posted. Use Export Consolidated to Tally " +
+                    "to revalidate the same original branch exporter.");
                 ApplicationState = "Consolidated source counts not refreshed: " +
                     exception.Message;
             }
@@ -3005,7 +3005,7 @@ public sealed class MainWindowViewModel :
             // A corrupt/stale preview is never posting evidence and must
             // never break client navigation or Tally's original link.
             ApplicationState = "Last consolidated XML preview cannot be shown: " +
-                ex.Message + ". Generate Consolidated XML to refresh counts.";
+                ex.Message + ". Export Consolidated to Tally prepares and verifies current source counts.";
         }
     }
 
@@ -3079,6 +3079,13 @@ public sealed class MainWindowViewModel :
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash,
             produceManualImportFiles: false);
+        // Use the ORIGINAL linked-Tally coordinator to catch up its existing
+        // Client/FY/CompanyKey MASTERID + full-XML authority before the
+        // unchanged consolidated ImportAsync live-marker safety check.
+        // Unlike explicit Refresh Tally, this attempts only its normal
+        // ALTERID delta/checkpoint reconciliation, not a second full-FY snapshot.
+        await _tallyCoordinator.RefreshNowAsync(
+            forceLinkedSynchronization: true, forceFullBaseline: false);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (current is null || current.Id != parentId ||
