@@ -45,11 +45,11 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             forceFullBaseline: false);
         RequireSameSavedLink(client, confirmedLink);
 
-        // This is the same verified-marker provider supplied to the existing
-        // consolidated importer. It can prove the live index even when the
-        // lightweight Tally summary pulse cannot return $$LastAlterID.
-        await ReadVerifiedMarkerAsync(
-            confirmedLink, destination, client.FinancialYear, cancellationToken);
+        // No duplicate live-index read here. The ORIGINAL consolidated
+        // importer calls ReadVerifiedMarkerAsync immediately before
+        // interpreting any saved Voucher MASTERID and again before posting.
+        // Thus two fresh proofs surround the original duplicate/ALTER
+        // decision instead of doing a redundant third preflight scan.
     }
 
     public async Task<TallyVoucherChangeMarker> ReadVerifiedMarkerAsync(
