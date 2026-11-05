@@ -914,7 +914,7 @@ internal static class EntryPoint
         {
             Test(temp);
             TestSafePreJournalPowerShellWatchdog(temp);
-            Console.WriteLine("PASS: 9/9 AAH UpdateHost transactional safety scenarios.");
+            Console.WriteLine("PASS: 8/8 AAH UpdateHost transactional safety scenarios.");
             return 0;
         }
         finally
