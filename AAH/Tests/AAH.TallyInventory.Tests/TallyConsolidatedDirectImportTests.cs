@@ -21,6 +21,7 @@ internal static class TallyConsolidatedDirectImportTests
         var dashboard = Read(root!, "AccountingAutomationHub.Desktop/Views/DashboardView.xaml");
         var main = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/MainWindowViewModel.cs");
         var coordinator = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs");
+        var wrapper = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyConsolidatedPreImportAuthorityWrapper.cs");
         var importer = Read(root!, "AccountingAutomationHub.Infrastructure/Tally/TallyConsolidatedVoucherImportService.cs");
 
         Check(!dashboard.Contains("Content=\"Generate Consolidated XML\"", StringComparison.Ordinal) &&
@@ -37,10 +38,11 @@ internal static class TallyConsolidatedDirectImportTests
         Check(action >= 0, "original consolidated exporter missing");
         var export = main[action..end];
         var prepare = export.IndexOf("var prepared = await GenerateConsolidatedPreparedXmlAsync(", StringComparison.Ordinal);
-        var sync = export.IndexOf("await _tallyCoordinator.RefreshNowAsync(", StringComparison.Ordinal);
+        var sync = export.IndexOf("await authorityWrapper.VerifyAsync(", StringComparison.Ordinal);
         var call = export.IndexOf("var result = await importer.ImportAsync(", StringComparison.Ordinal);
         Check(prepare >= 0 && sync > prepare && call > sync &&
-              export.Contains("forceLinkedSynchronization: true, forceFullBaseline: false", StringComparison.Ordinal) &&
+              export.Contains("new TallyConsolidatedPreImportAuthorityWrapper(", StringComparison.Ordinal) &&
+              export.Contains("await authorityWrapper.VerifyAsync(current, link, company)", StringComparison.Ordinal) &&
               export.Contains("produceManualImportFiles: false", StringComparison.Ordinal),
               "direct import must use normal existing coordinator delta authority after preparing source, before unchanged importer");
         Check(export.Contains("if (separateTypes)", StringComparison.Ordinal) &&
@@ -51,8 +53,23 @@ internal static class TallyConsolidatedDirectImportTests
 
         Check(coordinator.Contains("bool forceFullBaseline = true)", StringComparison.Ordinal) &&
               coordinator.Contains("forceFullBaseline: forceLinkedSynchronization && forceFullBaseline", StringComparison.Ordinal) &&
-              coordinator.Contains("await SynchronizeLinkedCompanyAsync(", StringComparison.Ordinal),
-              "pre-import must reuse original normal Tally coordinator rather than a second snapshot/checker");
+              coordinator.Contains("await SynchronizeLinkedCompanyAsync(", StringComparison.Ordinal) &&
+              !coordinator.Contains("requireConsolidatedImportAuthority", StringComparison.Ordinal) &&
+              !coordinator.Contains("RequireFreshConsolidatedImportCheckpointAsync(", StringComparison.Ordinal),
+              "individual-client normal Tally coordinator must not contain consolidated-specific guards");
+        Check(wrapper.Contains("normalCoordinator.RefreshNowAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("forceLinkedSynchronization: true", StringComparison.Ordinal) &&
+              wrapper.Contains("forceFullBaseline: false", StringComparison.Ordinal) &&
+              wrapper.Contains("attempt < 2", StringComparison.Ordinal) &&
+              wrapper.Contains("GetBankSyncState(", StringComparison.Ordinal) &&
+              wrapper.Contains("GetVoucherChangeMarkerAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("string.Equals(live.Token, saved.LastTallyChangeToken", StringComparison.Ordinal) &&
+              wrapper.Contains("live.VoucherCount == saved.LastVoucherCount", StringComparison.Ordinal) &&
+              wrapper.Contains("RequireSameSavedLink();", StringComparison.Ordinal) &&
+              !wrapper.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
+              !wrapper.Contains("ImportXmlAsync(", StringComparison.Ordinal) &&
+              !wrapper.Contains("ReplaceVoucherIndex(", StringComparison.Ordinal),
+              "consolidated-only wrapper must strictly verify original sync, without making snapshots or modifying source bindings");
         Check(importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               importer.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
               importer.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&

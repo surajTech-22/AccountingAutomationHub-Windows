@@ -3079,13 +3079,6 @@ public sealed class MainWindowViewModel :
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash,
             produceManualImportFiles: false);
-        // Use the ORIGINAL linked-Tally coordinator to catch up its existing
-        // Client/FY/CompanyKey MASTERID + full-XML authority before the
-        // unchanged consolidated ImportAsync live-marker safety check.
-        // Unlike explicit Refresh Tally, this attempts only its normal
-        // ALTERID delta/checkpoint reconciliation, not a second full-FY snapshot.
-        await _tallyCoordinator.RefreshNowAsync(
-            forceLinkedSynchronization: true, forceFullBaseline: false);
         var current = _clientContext.CurrentClient;
         var link = _tallyCoordinator.GetCurrentClientLink();
         if (current is null || current.Id != parentId ||
@@ -3124,6 +3117,27 @@ public sealed class MainWindowViewModel :
             () => tallyAcknowledgedAlterCount++);
         try
         {
+            // Consolidated-only wrapper around the ORIGINAL, unchanged
+            // linked-Tally coordinator. Never add an import-specific branch
+            // to the normal individual-client refresh or voucher writer.
+            // Keep this inside the established diagnostic catch so a stale
+            // checkpoint records its exact live/saved marker comparison.
+            var authorityWrapper = new TallyConsolidatedPreImportAuthorityWrapper(
+                _tallyCoordinator, _tallyHttpService, _tallyRepository);
+            await authorityWrapper.VerifyAsync(current, link, company);
+            // Client/FY selection can change while the original normal
+            // synchronization is awaiting Tally. Never import into a
+            // previously selected company after the workspace has switched.
+            var afterSyncClient = _clientContext.CurrentClient;
+            var afterSyncLink = _tallyCoordinator.GetCurrentClientLink();
+            if (afterSyncClient is null || afterSyncClient.Id != parentId ||
+                !afterSyncClient.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
+                afterSyncLink is null || afterSyncLink.ClientId != parentId ||
+                !afterSyncLink.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+                _tallyCoordinator.IsBusy || !_tallyCoordinator.IsConnected ||
+                _isPrivateBranchActive || SelectedBranchWorkspace?.IsConsolidated != true)
+                throw new InvalidOperationException(
+                    "Consolidated Client/FY or linked Tally CompanyKey changed during normal pre-import synchronization. No voucher was posted.");
             var result = await importer.ImportAsync(link, company, prepared,
                 accountingFinancialYear: financialYear);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
