@@ -59,6 +59,16 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         ArgumentNullException.ThrowIfNull(link);
         ArgumentNullException.ThrowIfNull(destination);
         RequireSameCompany(link, destination, financialYear);
+        // The original client/company may be switched while Tally is reading
+        // an index or a previous voucher. Every authorizing read must remain
+        // tied to the same saved destination, not just the first preflight.
+        var current = normalCoordinator.GetCurrentClientLink();
+        if (current is null || current.ClientId != link.ClientId ||
+            !current.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+            (current.FinancialYear.Length > 0 &&
+             !current.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Consolidated Client/FY or destination link switched during live Voucher verification. No voucher was posted.");
 
         var saved = existingRepository.GetBankSyncState(
             link.ClientId, financialYear, link.CompanyKey);
