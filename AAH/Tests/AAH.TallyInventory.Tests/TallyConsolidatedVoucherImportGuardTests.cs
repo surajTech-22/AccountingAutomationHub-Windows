@@ -583,9 +583,13 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             throw new InvalidOperationException(
                 "CL019 Bank external Tally ALTERID change passed previous-version safety.");
         bankLive.AlterId = "377";
-        if (TallyConsolidatedVoucherImportService.ReadVerifiedLiveConsolidatedVersion(
-                bankLive, fullBank) is not { } acceptedReadback ||
-            !acceptedReadback.Hash.Equals(bankHash, StringComparison.OrdinalIgnoreCase))
+        var readVerifiedVersion = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "ReadVerifiedLiveConsolidatedVersion",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original consolidated readback helper missing.");
+        if (readVerifiedVersion.Invoke(null, new object[] { bankLive, fullBank })
+                is not ValueTuple<string, string> acceptedReadback ||
+            !acceptedReadback.Item1.Equals(bankHash, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Original destination full voucher DR/CR readback did not produce the prior saved fingerprint.");
         Console.WriteLine("PASS: CL019 original Receipt + verified fingerprint and live MASTERID/ALTERID " +
