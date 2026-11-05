@@ -457,7 +457,13 @@ internal static class Program
             ?? throw new InvalidOperationException("Original AAH manual updater could not start.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        // A stalled FileStream.Open/Read in the original PowerShell staging
+        // phase cannot reach its in-script 5-minute loop budget. The ONLY
+        // child this watchdog can stop is the PowerShell process we launched,
+        // and ONLY while we own the transaction mutation gate with no journal.
+        // A committed/rollback phase is NEVER forcibly interrupted.
+        await WaitForOriginalInstallerOrAbortSafePreJournalStageAsync(
+            process, existingInstallDir, OriginalPowerShellPreJournalDeadline);
         var output = await stdout;
         var errors = await stderr;
         if (process.ExitCode != 0)
@@ -467,6 +473,103 @@ internal static class Program
         if (!output.Contains("Application replacement verified.", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "Original AAH manual updater returned without its success marker.");
+    }
+
+    // Owned by the original embedded TransactionalPublish.ps1 only while it
+    // is recovering a journal or renaming/rolling back installed files.
+    // The hung-file watchdog may acquire it during PRE-JOURNAL STAGING only.
+    internal const string TransactionMutationGateName =
+        @"Local\AccountingAutomationHub.TransactionalPublishMutation.v1";
+    internal static readonly TimeSpan OriginalPowerShellPreJournalDeadline =
+        TimeSpan.FromMinutes(7);
+
+    internal static async Task WaitForOriginalInstallerOrAbortSafePreJournalStageAsync(
+        Process installer, string installDirectory, TimeSpan deadline)
+    {
+        ArgumentNullException.ThrowIfNull(installer);
+        if (deadline <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(deadline));
+
+        var exited = installer.WaitForExitAsync();
+        using var stopTimer = new CancellationTokenSource();
+        var timer = Task.Delay(deadline, stopTimer.Token);
+        if (await Task.WhenAny(exited, timer).ConfigureAwait(false) == exited)
+        {
+            stopTimer.Cancel();
+            await exited.ConfigureAwait(false);
+            return;
+        }
+        if (installer.HasExited)
+        {
+            stopTimer.Cancel();
+            await exited.ConfigureAwait(false);
+            return;
+        }
+
+        Log("Original AAH PowerShell installer exceeded " + deadline +
+            " without exiting. Checking mutation gate and transaction journals " +
+            "before any child-only cancellation; AAH and Tally will not be stopped.");
+        if (TryCancelStalledPreJournalInstaller(installer, installDirectory))
+        {
+            stopTimer.Cancel();
+            throw new TimeoutException(
+                "AAH PowerShell installer stalled in pre-journal file staging. " +
+                "Only the verified updater's own PowerShell child was stopped " +
+                "under the transaction mutation gate. No installed file was " +
+                "renamed; the original AAH and Tally remain untouched.");
+        }
+
+        // NEVER kill a transactional installer that may be replacing files
+        // or recovering a journal. Keeping the existing host ownership and
+        // waiting for the original installer is safer than corrupting Tally's
+        // accounting application. The original rollback semantics are intact.
+        Log("Original installer transaction gate active or journal present. " +
+            "Refusing to interrupt active replacement/rollback; awaiting " +
+            "original transactional completion.");
+        stopTimer.Cancel();
+        await exited.ConfigureAwait(false);
+    }
+
+    internal static bool TryCancelStalledPreJournalInstaller(
+        Process child, string installDirectory)
+    {
+        using var mutationGate = new Mutex(false, TransactionMutationGateName);
+        var acquired = false;
+        try
+        {
+            try { acquired = mutationGate.WaitOne(0); }
+            catch (AbandonedMutexException) { acquired = true; }
+            if (!acquired)
+            {
+                Log("Pre-journal abort refused: original transaction recovery or replacement owns mutation gate.");
+                return false;
+            }
+
+            // An interrupted previous transaction may have left a journal;
+            // it must be recovered by the ORIGINAL installer, not bypassed.
+            if (Directory.EnumerateDirectories(
+                    installDirectory, ".aah-swap-*", SearchOption.TopDirectoryOnly)
+                .Any(directory => File.Exists(Path.Combine(directory, "journal.json"))))
+            {
+                Log("Pre-journal abort refused: an original transaction journal exists; recovery remains authoritative.");
+                return false;
+            }
+            if (child.HasExited) return false;
+            Log("PRE-JOURNAL WATCHDOG: exclusive mutation gate held and NO journal " +
+                "exists; stopping only our stalled PowerShell installer PID " + child.Id + ".");
+            child.Kill(entireProcessTree: true);
+            if (!child.WaitForExit(10_000))
+                throw new TimeoutException(
+                    "The stalled installer child did not exit within 10 seconds. " +
+                    "Its state must be inspected; no AAH or Tally process was stopped.");
+            Log("PASS: stalled pre-journal installer child exited. The AAH " +
+                "application transaction was never committed or interrupted.");
+            return true;
+        }
+        finally
+        {
+            if (acquired) mutationGate.ReleaseMutex();
+        }
     }
 
     private static string Arg(string[] args, string prefix)

@@ -76,7 +76,19 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
     $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd([char]92,[char]47)
     $PublishDir = [IO.Path]::GetFullPath($PublishDir).TrimEnd([char]92,[char]47)
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDir 'AccountingAutomationHub.exe') -PathType Leaf)) { throw 'Validated publish executable is missing.' }
-    foreach ($previous in @(Get-ChildItem -LiteralPath $InstallDir -Directory -Force -Filter '.aah-swap-*')) {
+    # The UpdateHost watchdog may cancel a blocked PRE-JOURNAL hash/read.
+    # This exclusive mutation gate is held during ALL recovery and commit
+    # operations that can rename installed files. The parent can cancel its
+    # own stalled PowerShell child only while it owns this gate and no journal
+    # exists; therefore there is no race with installed-file replacement.
+    $swapMutationGateName = 'Local\AccountingAutomationHub.TransactionalPublishMutation.v1'
+    $recoveryGate = [Threading.Mutex]::new($false, $swapMutationGateName)
+    $recoveryOwned = $false
+    try {
+        try { $recoveryOwned = $recoveryGate.WaitOne([TimeSpan]::FromSeconds(30)) }
+        catch [Threading.AbandonedMutexException] { $recoveryOwned = $true }
+        if (-not $recoveryOwned) { throw 'Another verified AAH application transaction is recovering; original installed files were preserved.' }
+        foreach ($previous in @(Get-ChildItem -LiteralPath $InstallDir -Directory -Force -Filter '.aah-swap-*')) {
         if (($previous.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Invalid transaction directory.' }
         $journalPath = Join-Path $previous.FullName 'journal.json'
         if (-not (Test-Path -LiteralPath $journalPath)) {
@@ -101,10 +113,16 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
         # journal/staging immediately so a later successful update leaves no old app copy.
         try { Remove-Item -LiteralPath $previous.FullName -Recurse -Force -ErrorAction Stop } catch { }
     }
+    } finally {
+        if ($recoveryOwned) { $recoveryGate.ReleaseMutex() }
+        $recoveryGate.Dispose()
+    }
     $transaction = Join-Path $InstallDir ('.aah-swap-' + [Guid]::NewGuid().ToString('N'))
     New-Item -Path $transaction -ItemType Directory -ErrorAction Stop | Out-Null
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $stagingClock = [Diagnostics.Stopwatch]::StartNew()
+    $commitGate = $null
+    $commitOwned = $false
     try {
     $files = @(Get-ChildItem -LiteralPath $PublishDir -Recurse -File -Force | Sort-Object FullName)
     $scanned = 0
@@ -117,6 +135,11 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($PublishDir.Length).TrimStart([char]92,[char]47)
         if ($file.Extension -in @('.py','.pyc','.pyd','.db','.sqlite','.sqlite3')) { throw ('Non-application publish payload refused: ' + $relative) }
+        # Record EACH file before touching its source/target so a blocked
+        # FileStream.Open/Read or antivirus filter pinpoints the exact file.
+        # This is diagnostic only: staged hashes, journal and rollback flow
+        # are the same original Install-AAHPublish transaction.
+        Write-AAHTransactionProgress ("STAGING FILE {0}/{1}: {2}" -f ($scanned + 1), $files.Count, $relative)
         $source = Get-AAHChildPath $PublishDir $relative
         $target = Get-AAHChildPath $InstallDir $relative
         $newHash = Get-AAHFileHash $source
@@ -149,6 +172,13 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
         Write-Host 'Application replacement verified. All installed file hashes already match.'
         return
     }
+    # After PRE-JOURNAL staging, the install takes exclusive mutation
+    # ownership BEFORE writing its journal or renaming a single live file.
+    # A parent watchdog holding the same gate cannot race the commit.
+    $commitGate = [Threading.Mutex]::new($false, $swapMutationGateName)
+    try { $commitOwned = $commitGate.WaitOne([TimeSpan]::FromSeconds(30)) }
+    catch [Threading.AbandonedMutexException] { $commitOwned = $true }
+    if (-not $commitOwned) { throw 'The updater could not acquire the original transaction mutation gate. No installed file was changed.' }
     # The journal is persisted BEFORE the first installed-file rename.
     $journal = [pscustomobject]@{ Schema=1; InstallDir=$InstallDir; Entries=$entries.ToArray() }
     $journal | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $transaction 'journal.json') -Encoding UTF8
@@ -158,6 +188,10 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
         Write-AAHTransactionProgress ('STAGING FAILED before replacement: ' + $_.Exception.Message)
         if (-not (Test-Path -LiteralPath (Join-Path $transaction 'journal.json'))) {
             try { Remove-Item -LiteralPath $transaction -Recurse -Force -ErrorAction Stop } catch { }
+        }
+        if ($commitGate) {
+            if ($commitOwned) { $commitGate.ReleaseMutex(); $commitOwned = $false }
+            $commitGate.Dispose()
         }
         throw
     }
@@ -193,5 +227,10 @@ function Install-AAHPublish([string]$PublishDir, [string]$InstallDir) {
         }
         catch { throw ('Application replacement failed: ' + $failure + '. Rollback requires recovery: ' + $_.Exception.Message + '. Journal: ' + $transaction) }
         throw ('Application replacement was rolled back: ' + $failure)
+    } finally {
+        if ($commitGate) {
+            if ($commitOwned) { $commitGate.ReleaseMutex() }
+            $commitGate.Dispose()
+        }
     }
 }
