@@ -364,9 +364,21 @@ public sealed class TallyLiveConnectionCoordinator :
         bool forceLinkedSynchronization,
         CancellationToken cancellationToken = default,
         bool isFiveSecondBackgroundPulse = false,
-        bool forceFullBaseline = true)
+        bool forceFullBaseline = true,
+        bool requireConsolidatedImportAuthority = false)
     {
-        if (_disposed) return;
+        // This is NOT a second synchronization engine. It is the existing
+        // normal Client/FY linked Tally refresh, requested explicitly by
+        // consolidated Export before invoking the unchanged voucher importer.
+        if (requireConsolidatedImportAuthority &&
+            (!forceLinkedSynchronization || forceFullBaseline || isFiveSecondBackgroundPulse))
+            throw new ArgumentException("Consolidated pre-import requires the existing forced delta refresh.");
+        if (_disposed)
+        {
+            if (requireConsolidatedImportAuthority)
+                throw new InvalidOperationException("Tally coordinator closed before consolidated pre-import.");
+            return;
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         // FIX4 CORE: an intentional AAH -> Tally IMPORT is not a failed health probe.
@@ -374,6 +386,9 @@ public sealed class TallyLiveConnectionCoordinator :
         // not turn the last confirmed connection into "offline/not responding".
         if (_httpService.IsImportInProgress || _httpService.IsExportInProgress)
         {
+            if (requireConsolidatedImportAuthority)
+                throw new InvalidOperationException(
+                    "A Tally import or export is still active. Consolidated pre-import did not run; no voucher was posted.");
             IsConnected = true;
             if (_httpService.IsLocalErp9Runtime)
             {
@@ -431,6 +446,9 @@ public sealed class TallyLiveConnectionCoordinator :
                 {
                     ConnectionStatus = "Tally connected • confirming open company";
                     LastOperationStatus = "Tally returned an empty company list once; retaining the confirmed link while it is rechecked.";
+                    if (requireConsolidatedImportAuthority)
+                        throw new InvalidOperationException(
+                            "The linked Tally company was not found in a fresh live discovery. Saved links were preserved; no vouchers were posted.");
                     return;
                 }
             }
@@ -548,7 +566,8 @@ public sealed class TallyLiveConnectionCoordinator :
 
                     if (forceLinkedSynchronization || becameConnected || linkedCompanyBecameAvailable || needsBaseline || changed)
                     {
-                        var reason = forceLinkedSynchronization ? "Manual refresh" :
+                        var reason = requireConsolidatedImportAuthority ? "Pre-import linked Tally authority" :
+                            forceLinkedSynchronization ? "Manual refresh" :
                             (becameConnected || linkedCompanyBecameAvailable) ? "Tally connected" :
                             !accountingMasterAuthorityReady ? "Tally accounting Master authority incomplete" :
                             !voucherAuthorityReady ? "Tally active-FY Voucher authority incomplete" :
@@ -564,6 +583,9 @@ public sealed class TallyLiveConnectionCoordinator :
                             // that point a detected ALTERID/count mismatch is independent of
                             // ordinary local Auto Import/background queues and must be consumed.
                             LastOperationStatus = $"{reason}: initial local preparation is still completing; the next 5-second pulse will retry without advancing the Tally checkpoint.";
+                            if (requireConsolidatedImportAuthority)
+                                throw new InvalidOperationException(
+                                    "AAH's original local preparation is incomplete. Consolidated pre-import cannot reuse a stale Tally checkpoint; no voucher was posted.");
                         }
                         else if (forceLinkedSynchronization)
                         {
@@ -577,6 +599,9 @@ public sealed class TallyLiveConnectionCoordinator :
                                 // Consolidated pre-import alone requests the EXISTING delta/
                                 // checkpoint reconciliation without a redundant FY snapshot.
                                 forceFullBaseline: forceLinkedSynchronization && forceFullBaseline);
+                            if (requireConsolidatedImportAuthority)
+                                await RequireFreshConsolidatedImportCheckpointAsync(
+                                    client, linkedCompany, cancellationToken);
                         }
                         else
                         {
@@ -604,8 +629,14 @@ public sealed class TallyLiveConnectionCoordinator :
                     // closed and later opened again, its full Master authority is read
                     // again immediately instead of waiting for the five-minute stale timer.
                     _lastAvailableLinkedCompanyKey = string.Empty;
+                    if (requireConsolidatedImportAuthority)
+                        throw new InvalidOperationException(
+                            "The saved consolidated Client/FY Tally CompanyKey is not open. No other Tally company will be used or posted to.");
                 }
             }
+            else if (requireConsolidatedImportAuthority)
+                throw new InvalidOperationException(
+                    "The consolidated Client/FY is no longer selected. No Tally vouchers were posted.");
         }
         catch (OperationCanceledException) when (isFiveSecondBackgroundPulse && cancellationToken.IsCancellationRequested)
         {
@@ -619,6 +650,15 @@ public sealed class TallyLiveConnectionCoordinator :
         }
         catch (Exception exception)
         {
+            // The ordinary 5-second timer may defer and retry; a USER-initiated
+            // consolidated import must never mistake a deferred/failed normal
+            // synchronization for permission to CREATE new Tally vouchers.
+            if (requireConsolidatedImportAuthority)
+            {
+                LastOperationStatus = "Consolidated pre-import stopped before Tally posting: " +
+                    exception.Message;
+                throw;
+            }
             if (_httpService.IsImportInProgress)
             {
                 IsConnected = true;
@@ -661,6 +701,64 @@ public sealed class TallyLiveConnectionCoordinator :
             _tallyOperationGate.Release();
             Changed?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    // Only the original linked Tally coordinator can advance this checkpoint.
+    // The live voucher importer independently repeats the same strict checks
+    // immediately before the first CREATE/ALTER. Never weaken those checks
+    // based on a previously imported fingerprint or a matching voucher count.
+    private async Task RequireFreshConsolidatedImportCheckpointAsync(
+        ClientProfile client, TallyCompanyInfo company, CancellationToken token)
+    {
+        var latest = await _httpService.GetVoucherChangeMarkerAsync(company, token);
+        var state = _repository.GetBankSyncState(client.Id, client.FinancialYear, company.CompanyKey);
+
+        bool Current(TallyVoucherChangeMarker live, TallyBankSyncState? saved) =>
+            saved is not null && saved.LastFullSyncUtc != DateTime.MinValue &&
+            saved.LastAlterId > 0 && saved.LastFyVoucherCount >= 0 &&
+            live.HasReliableAlterId && live.LastAlterId > 0 &&
+            string.Equals(live.Token, saved.LastTallyChangeToken, StringComparison.Ordinal) &&
+            live.VoucherCount == saved.LastVoucherCount &&
+            (live.CompanyName.Length == 0 ||
+             live.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase)) &&
+            HasCompleteActiveFyVoucherAuthority(client, company, saved) &&
+            HasCompleteLiveAccountingMasterAuthority(client, live) &&
+            HasCompleteLiveStockMasterAuthority(client, company, live, saved);
+
+        if (!Current(latest, state) && latest.HasReliableAlterId &&
+            latest.LastAlterId > 0 && state is not null &&
+            state.LastFullSyncUtc != DateTime.MinValue)
+        {
+            // Tally may change after the first normal synchronization, for
+            // example when the coordinator applies an already pending Ledger
+            // alias. Reuse THAT SAME normal ALTERID delta/checkpoint route
+            // exactly once; never start a second manual/company snapshot.
+            await SynchronizeLinkedCompanyAsync(
+                client, company, "Pre-import changed-marker catch-up",
+                latest, forceFullBaseline: false);
+            latest = await _httpService.GetVoucherChangeMarkerAsync(company, token);
+            state = _repository.GetBankSyncState(
+                client.Id, client.FinancialYear, company.CompanyKey);
+        }
+
+        if (!Current(latest, state))
+        {
+            throw new InvalidOperationException(
+                "Consolidated import blocked before voucher posting: the existing " +
+                "normal Tally authority did not match the live change marker. " +
+                $"Live ALTERID={latest.LastAlterId}, cached ALTERID={state?.LastAlterId ?? 0}; " +
+                $"live voucher count={latest.VoucherCount}, cached voucher count={state?.LastVoucherCount ?? -1}; " +
+                $"reliable ALTERID={latest.HasReliableAlterId}; " +
+                $"marker token matches={string.Equals(latest.Token, state?.LastTallyChangeToken, StringComparison.Ordinal)}; " +
+                $"live company matches={latest.CompanyName.Length == 0 || latest.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase)}. " +
+                "The previous saved MASTERID/full Voucher XML and source bindings remain unchanged. " +
+                "Do not retry CREATE or relink Tally.");
+        }
+
+        LastOperationStatus = "Consolidated pre-import: original normal Tally " +
+            $"checkpoint verified at ALTERID {state!.LastAlterId:N0}; " +
+            $"{state.LastFyVoucherCount:N0} complete FY Voucher MASTERIDs. " +
+            "Existing bound CREATE/ALTER importer retains final live readback authority.";
     }
 
     private async Task<bool> WaitForTallyOperationAsync(CancellationToken cancellationToken = default)
