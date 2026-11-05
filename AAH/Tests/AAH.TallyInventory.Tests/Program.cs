@@ -61,6 +61,7 @@ internal static class Program
         // Supplement the fixed 26/26 inventory completion contract without
         // changing the independent regression suite's expected test count.
         TallyCompanyMasterScopeTests.Run();
+        TallyUnlinkFreshAuthorityTests.Run();
         GstinLatestPartyNameTests.Run();
         Console.WriteLine("PASS: GSTIN latest name reuses newest supplier/customer across existing entries.");
         Run("missing recovery excludes verified, deleted and rebound identities", () =>
