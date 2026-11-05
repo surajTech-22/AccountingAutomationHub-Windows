@@ -298,15 +298,28 @@ public sealed class MasterCentreViewModel : PageViewModel
         if (client is null || client.Id != snapshot.ClientId ||
             !client.FinancialYear.Equals(snapshot.FinancialYear, StringComparison.OrdinalIgnoreCase)) return;
 
+        // Branch books publish repeat authoritative Master snapshots during the
+        // normal live Tally pulse. A new cache generation is not a changed chart
+        // of accounts: if the displayed Master identity, contents and usage are
+        // identical, do not tear down the visible DataGrid/tree or reset focus,
+        // scroll and selection on every heartbeat. Ordinary clients use the
+        // same safety rule; a genuine ledger/ALTERID/usage change still repaints.
+        var incomingMasters = snapshot.Masters
+            .Where(record => !StockTypes.Contains(record.Type))
+            .Where(IncludeLinkedConsolidatedMaster)
+            .Where(record => IncludeArchived || !record.IsArchived)
+            .ToArray();
+        if (_preparedClientId == client.Id &&
+            _preparedFinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+            SameMasterPresentation(_allRecords, incomingMasters))
+            return;
+
         // Fix45: live/cache Masters refresh must never throw the operator back to
         // the Chart of Accounts root. Capture the exact selected tree scope and row
         // before replacing the prepared snapshot, then restore it against the new tree.
         var viewState = CaptureViewState();
         _allRecords.Clear(); Records.Clear(); MasterTree.Clear();
-        _allRecords.AddRange(snapshot.Masters
-            .Where(record => !StockTypes.Contains(record.Type))
-            .Where(IncludeLinkedConsolidatedMaster)
-            .Where(record => IncludeArchived || !record.IsArchived));
+        _allRecords.AddRange(incomingMasters);
         // Completion 61: usage counts are populated by the Masters cache worker.
         // Opening Ledger Master must not issue another SQLite usage scan on the UI thread.
         ApplyDuplicateReviewState();
@@ -316,6 +329,34 @@ public sealed class MasterCentreViewModel : PageViewModel
         _preparedFinancialYear = client.FinancialYear;
         StatusText = $"Ledger Master ready • {_allRecords.Count:N0} master(s) prepared in background.";
         NotifyCounts();
+    }
+
+    private static bool SameMasterPresentation(
+        IReadOnlyCollection<MasterRecord> displayed, IReadOnlyCollection<MasterRecord> incoming)
+    {
+        if (displayed.Count != incoming.Count) return false;
+        var old = displayed.OrderBy(record => record.PersistentId).ToArray();
+        var next = incoming.OrderBy(record => record.PersistentId).ToArray();
+        for (var index = 0; index < old.Length; index++)
+        {
+            var a = old[index];
+            var b = next[index];
+            if (a.PersistentId != b.PersistentId ||
+                !string.Equals(a.Name, b.Name, StringComparison.Ordinal) ||
+                !string.Equals(a.Type, b.Type, StringComparison.Ordinal) ||
+                !string.Equals(a.Parent, b.Parent, StringComparison.Ordinal) ||
+                !string.Equals(a.Company, b.Company, StringComparison.Ordinal) ||
+                !string.Equals(a.Source, b.Source, StringComparison.Ordinal) ||
+                !string.Equals(a.TallyMasterId, b.TallyMasterId, StringComparison.Ordinal) ||
+                !string.Equals(a.TallyGuid, b.TallyGuid, StringComparison.Ordinal) ||
+                a.TallyAlterId != b.TallyAlterId ||
+                a.OpeningBalance != b.OpeningBalance ||
+                a.IsArchived != b.IsArchived ||
+                a.IsUserEdited != b.IsUserEdited ||
+                a.UsageCount != b.UsageCount)
+                return false;
+        }
+        return true;
     }
 
     public void Refresh()

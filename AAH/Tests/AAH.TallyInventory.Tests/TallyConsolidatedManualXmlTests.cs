@@ -111,11 +111,15 @@ internal static class TallyConsolidatedManualXmlTests
         // an obsolete normal Purchase Voucher binding says ModifyPending.
         var boundSectionStart = method.IndexOf("var previous = bound[0];",
             StringComparison.Ordinal);
+        // The saved PREVIOUS request fingerprint can be different from the
+        // exact live destination readback even for an already-correct voucher.
+        // A no-op is always based on full live Tally content, not an identical
+        // old request hash; changed desired content remains ALTER-gated below.
         var verifiedNoop = method.IndexOf(
-            "if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&",
-            boundSectionStart, StringComparison.Ordinal);
-        var fullLiveMatch = method.IndexOf("FullVoucherMatches(",
-            verifiedNoop, StringComparison.Ordinal);
+            "if (FullVoucherMatches(",
+            Math.Max(0, boundSectionStart), StringComparison.Ordinal);
+        var fullLiveMatch = verifiedNoop < 0 ? -1 : method.IndexOf(
+            "FullVoucherMatches(", verifiedNoop, StringComparison.Ordinal);
         var skipNoop = method.IndexOf("continue;", fullLiveMatch,
             StringComparison.Ordinal);
         var previousVersionGate = method.IndexOf(

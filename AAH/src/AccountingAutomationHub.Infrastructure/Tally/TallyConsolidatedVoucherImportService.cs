@@ -216,8 +216,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // A legacy normal-client ModifyPending record can claim its
                 // MASTERID, but that must not make a read-only NO-OP fail.
                 // This does NOT release/transfer the other source's binding.
-                if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) &&
-                    FullVoucherMatches(
+                if (FullVoucherMatches(
                         new ExpectedVoucher(date, type, number, postings, voucher,
                             reference, anchor, desiredHash, ""), previous, live.FullVouchers))
                 {
@@ -464,11 +463,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                     ". Exact destination MASTERID and DR/CR readback still differ. " +
                     "No voucher was resent, changed or deleted.");
             var confirmed = matches[0];
+            var confirmedVersion = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 expected.SourceAnchor, expected.SourceAnchor,
                 confirmed.MasterId, confirmed.Guid,
-                expected.ContentHash, expected.DesiredVersion,
+                confirmedVersion.Hash, confirmedVersion.Version,
                 long.TryParse(confirmed.AlterId, NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var liveAlterId) ? liveAlterId : 0,
                 "Read-only recovery of Tally-accepted CREATE; full destination " +
@@ -692,9 +692,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                         " lost its unique destination MASTERID " + state.MasterId +
                         ". Existing restore/rebind safety is required; no CREATE.");
                 var liveBound = bound[0];
-                if (state.VerifiedContentHash.Length > 0 &&
-                    IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash) &&
-                    FullVoucherMatches(planned, liveBound, before.FullVouchers))
+                if (FullVoucherMatches(planned, liveBound, before.FullVouchers))
                 {
                     skipped.Add(planned.SourceAnchor);
                     continue; // Same saved source AND exact live destination.
@@ -1148,11 +1146,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                         "AcceptedAwaitingVerification prevents a second ALTER/CREATE.");
 
                 var confirmedAlter = verifiedAlter[0];
+                var alterReadbackVersion = RequireVerifiedLiveConsolidatedVersion(confirmedAlter, afterAlter.Full);
                 tallyRepository.ConfirmSourceBindingVersion(
                     link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                     expected.SourceAnchor, expected.SourceAnchor,
                     confirmedAlter.MasterId, confirmedAlter.Guid,
-                    expected.ContentHash, expected.DesiredVersion,
+                    alterReadbackVersion.Hash, alterReadbackVersion.Version,
                     long.TryParse(confirmedAlter.AlterId, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var newAlterId)
                             ? newAlterId : 0L,
@@ -1266,12 +1265,13 @@ public sealed class TallyConsolidatedVoucherImportService(
                     "DR/CR could not be proven. The existing " +
                     "AcceptedAwaitingVerification state prevents resend.");
             var confirmed = verified[0];
+            var confirmedVersion = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
 
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 expected.SourceAnchor, expected.SourceAnchor,
                 confirmed.MasterId, confirmed.Guid,
-                expected.ContentHash, expected.DesiredVersion,
+                confirmedVersion.Hash, confirmedVersion.Version,
                 long.TryParse(confirmed.AlterId, NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var verifiedAlterId)
                     ? verifiedAlterId : 0L,
@@ -1433,41 +1433,9 @@ public sealed class TallyConsolidatedVoucherImportService(
              currentAlterId != previous.LastVerifiedAlterId) ||
             live.VoucherDate is not DateTime originalDate)
             return false;
-        var full = fullAuthority.Where(item =>
-            IgnoreCase.Equals(item.MasterId, live.MasterId)).ToArray();
-        if (full.Length != 1) return false;
-        var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
-            full[0].OriginalXml, "original previous voucher version")
-            .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
-        if (voucher is null) return false;
-        var postings = ReadPostings(voucher);
-        // The full XML and index must agree on both signed sides before
-        // comparing to the previous snapshot. This is never a ledger
-        // relabeling/amount recalculation.
-        if (postings.Count == 0 || live.LedgerPostings.Count != postings.Count ||
-            !SamePostings(postings, live.LedgerPostings.Select(p =>
-                (p.LedgerName, p.SignedAmount)).ToArray()))
-            return false;
-        var originalParty = Value(voucher, "PARTYLEDGERNAME");
-        var originalReference = Value(voucher, "REFERENCE");
-        var originalType = Value(voucher, "VOUCHERTYPENAME");
-        if (!IgnoreCase.Equals(originalType, live.VoucherType) ||
-            !IgnoreCase.Equals(originalReference, live.Reference) ||
-            !IgnoreCase.Equals(originalParty, live.PartyLedger))
-            return false;
-        var exactPostings = string.Join("|", postings
-            .OrderBy(entry => entry.Name, IgnoreCase).ThenBy(entry => entry.Amount)
-            .Select(entry => entry.Name + ":" +
-                entry.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
-        var verifiedHash = TallyVoucherFingerprint.BuildContentHash(
-            originalDate.Date, originalType, originalReference, originalParty,
-            postings.Where(entry => entry.Amount < 0)
-                .Sum(entry => Math.Abs(entry.Amount)),
-            Value(voucher, "NARRATION") + "|" + exactPostings);
-        var verifiedVersion =
-            "CONSOLIDATED|" + originalDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
-            "|" + originalType + "|" + originalReference + "|" +
-            exactPostings + "|" + verifiedHash;
+        var verified = ReadVerifiedLiveConsolidatedVersion(live, fullAuthority);
+        if (verified is null) return false;
+        var (verifiedHash, verifiedVersion) = verified.Value;
         // The NORMAL AAH exporter reconciles legacy stored-version
         // representation differences against the unchanged live MASTERID,
         // verified ALTERID and the real previous voucher content. Reuse that
@@ -1477,12 +1445,129 @@ public sealed class TallyConsolidatedVoucherImportService(
         // A missing legacy ALTERID is never guessed: currentAlterId must be
         // positive and the previously SAVED content hash must match the full
         // live previous version before any bound ALTER may be prepared.
-        return IgnoreCase.Equals(previous.VerifiedContentHash, verifiedHash) &&
-            (string.Equals(previous.VerifiedVersion, verifiedVersion,
-                 StringComparison.Ordinal) ||
-             previous.VerifiedVersion.Length == 0 ||
-             previous.VerifiedVersion.StartsWith("CONSOLIDATED|",
-                 StringComparison.Ordinal));
+        if (IgnoreCase.Equals(previous.VerifiedContentHash, verifiedHash))
+            return string.Equals(previous.VerifiedVersion, verifiedVersion,
+                       StringComparison.Ordinal) ||
+                   previous.VerifiedVersion.Length == 0 ||
+                   previous.VerifiedVersion.StartsWith("CONSOLIDATED|",
+                       StringComparison.Ordinal);
+
+        // The original AAH verified *request* fingerprint may differ from a
+        // fingerprint reconstructed from Tally's complete persisted readback.
+        // This must not prevent a legitimate new ledger allocation or voucher
+        // type from using the original bound ALTER route. Match the already
+        // saved previous request to its own durable serialized version, and
+        // require the PREVIOUS positive verified ALTERID to equal fresh Tally.
+        // An external Tally ALTERID change, unknown legacy identity or absent
+        // verified history must never become an unconditional rebind or CREATE.
+        return previous.LastVerifiedAlterId > 0 &&
+               previous.LastVerifiedAlterId == currentAlterId &&
+               SavedConsolidatedVersionProvesOwnFingerprint(
+                   previous.VerifiedVersion, previous.VerifiedContentHash,
+                   originalDate, live.VoucherType, live.Reference, verifiedVersion);
+    }
+
+    internal static bool SavedConsolidatedVersionProvesOwnFingerprint(
+        string savedVersion, string savedHash, DateTime date,
+        string previousType, string previousReference, string readbackVersion)
+    {
+        if (savedHash.Trim().Length != 64 ||
+            !savedHash.All(Uri.IsHexDigit) ||
+            !savedVersion.StartsWith("CONSOLIDATED|", StringComparison.Ordinal))
+            return false;
+        var parts = savedVersion.Split('|');
+        if (parts.Length < 3 ||
+            !parts[^1].Equals(savedHash, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Legacy versions were stamped by earlier verified readbacks before
+        // the full signed-posting version serializer was introduced.
+        if (parts.Length == 3)
+            return parts[1] is "LEGACY" or "OLD-SERIALIZATION";
+        return parts.Length >= 6 &&
+               parts[1].Equals(date.ToString("yyyyMMdd", CultureInfo.InvariantCulture), StringComparison.Ordinal) &&
+               parts[2].Equals(previousType, StringComparison.OrdinalIgnoreCase) &&
+               parts[3].Equals(previousReference, StringComparison.OrdinalIgnoreCase) &&
+               SavedConsolidatedSignedAmountsMatchReadback(savedVersion, readbackVersion);
+    }
+
+    // Source/ledger MASTER renaming can change the display name of an
+    // existing voucher's posting WITHOUT changing that voucher's ALTERID.
+    // For older request-fingerprint bindings, require the saved PREVIOUS
+    // positive/negative posting amounts and occurrence count to match the
+    // actual signed Tally readback, even if ledger display names changed.
+    // Never use desired postings as evidence of the previous saved state.
+    internal static bool SavedConsolidatedSignedAmountsMatchReadback(
+        string savedVersion, string readbackVersion)
+    {
+        static decimal[]? Amounts(string version)
+        {
+            var parts = version.Split('|');
+            if (parts.Length < 6) return null;
+            var values = new List<decimal>();
+            for (var index = 4; index < parts.Length - 1; index++)
+            {
+                var posting = parts[index];
+                var separator = posting.LastIndexOf(':');
+                if (separator < 1 || separator >= posting.Length - 1 ||
+                    !decimal.TryParse(posting[(separator + 1)..],
+                        NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                        CultureInfo.InvariantCulture, out var amount))
+                    return null;
+                values.Add(amount);
+            }
+            return values.Count == 0 ? null : values.OrderBy(x => x).ToArray();
+        }
+        var before = Amounts(savedVersion);
+        var live = Amounts(readbackVersion);
+        return before is not null && live is not null && before.SequenceEqual(live);
+    }
+
+    // This one full live Tally voucher reconstruction supplies BOTH the old
+    // PREVIOUS->DESIRED check and the version persisted after a verified
+    // CREATE/ALTER readback. It never recalculates the prepared DR/CR.
+    internal static (string Hash, string Version)? ReadVerifiedLiveConsolidatedVersion(
+        TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
+    {
+        if (live.VoucherDate is not DateTime date) return null;
+        var full = fullAuthority.Where(item =>
+            IgnoreCase.Equals(item.MasterId, live.MasterId)).ToArray();
+        if (full.Length != 1) return null;
+        var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
+            full[0].OriginalXml, "verified full destination voucher readback")
+            .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
+        if (voucher is null) return null;
+        var postings = ReadPostings(voucher);
+        if (postings.Count == 0 || live.LedgerPostings.Count != postings.Count ||
+            !SamePostings(postings, live.LedgerPostings.Select(p =>
+                (p.LedgerName, p.SignedAmount)).ToArray()))
+            return null;
+        var party = Value(voucher, "PARTYLEDGERNAME");
+        var reference = Value(voucher, "REFERENCE");
+        var type = Value(voucher, "VOUCHERTYPENAME");
+        if (!IgnoreCase.Equals(type, live.VoucherType) ||
+            !IgnoreCase.Equals(reference, live.Reference) ||
+            !IgnoreCase.Equals(party, live.PartyLedger))
+            return null;
+        var signed = string.Join("|", postings
+            .OrderBy(entry => entry.Name, IgnoreCase).ThenBy(entry => entry.Amount)
+            .Select(entry => entry.Name + ":" +
+                entry.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
+        var hash = TallyVoucherFingerprint.BuildContentHash(
+            date.Date, type, reference, party,
+            postings.Where(entry => entry.Amount < 0).Sum(entry => Math.Abs(entry.Amount)),
+            Value(voucher, "NARRATION") + "|" + signed);
+        return (hash, "CONSOLIDATED|" +
+            date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+            "|" + type + "|" + reference + "|" + signed + "|" + hash);
+    }
+
+    private static (string Hash, string Version) RequireVerifiedLiveConsolidatedVersion(
+        TallyVoucherIndexRecord live, IReadOnlyList<TallyVoucherXmlSnapshot> full)
+    {
+        return ReadVerifiedLiveConsolidatedVersion(live, full) ??
+            throw new InvalidOperationException(
+                "The accepted destination voucher has no uniquely verified full signed DR/CR readback; previous version was not saved.");
     }
 
     // Exact voucher matching reuses the established ordinary Tally
