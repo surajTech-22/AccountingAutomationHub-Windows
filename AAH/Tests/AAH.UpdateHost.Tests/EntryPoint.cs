@@ -823,7 +823,7 @@ internal static class EntryPoint
         var stage = script.IndexOf("Write-AAHTransactionProgress (\"STAGING FILE", StringComparison.Ordinal);
         var commitGate = script.IndexOf("$commitGate = [Threading.Mutex]::new(", StringComparison.Ordinal);
         var journal = script.IndexOf("$journal = [pscustomobject]@{ Schema=1;", StringComparison.Ordinal);
-        var installedMove = script.IndexOf("[IO.File]::Move($target, $old)", StringComparison.Ordinal);
+        var installedMove = script.LastIndexOf("[IO.File]::Move($target, $old)", StringComparison.Ordinal);
         Assert(stage >= 0 && commitGate > stage && journal > commitGate &&
                installedMove > journal &&
                script.Contains("if ($recoveryOwned) { $recoveryGate.ReleaseMutex() }", StringComparison.Ordinal) &&
