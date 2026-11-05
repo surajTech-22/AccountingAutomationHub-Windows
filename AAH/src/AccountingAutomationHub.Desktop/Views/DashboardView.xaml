@@ -905,13 +905,10 @@
                                                     <Button Content="Import / Verify Branch Masters" Command="{Binding ImportBranchMastersCommand}"
                                                             ToolTip="This separate action may CREATE missing branch groups, voucher types or cash ledgers in Tally. It never creates vouchers."
                                                             Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"/>
-                                                    <Button Content="Generate Consolidated XML" Command="{Binding PrepareConsolidatedXmlCommand}"
-                                                            ToolTip="READ-ONLY: only reads from Tally and generates local XML files. Never sends a Tally master or voucher CREATE, ALTER or DELETE."
-                                                            Style="{StaticResource DashboardSecondaryButtonStyle}" Margin="0,0,8,6"/>
                                                     <Button Content="Export Consolidated to Tally" Command="{Binding ImportConsolidatedVouchersCommand}"
                                                             Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,6"/>
                                                 </WrapPanel>
-                                                <TextBlock Text="Generate XML is READ-ONLY. Import / Verify Branch Masters is a separate Tally master-writing action."
+                                                <TextBlock Text="Export Consolidated to Tally prepares and verifies the current branch XML internally. Import / Verify Branch Masters is a separate master-only action."
                                                            FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,4"/>
                                                 <TextBlock Text="{Binding MasterImportStatus}" FontSize="10" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>

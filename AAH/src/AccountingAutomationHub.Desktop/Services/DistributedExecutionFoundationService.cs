@@ -692,54 +692,119 @@ public sealed record ClientTallyLinkRecord
 /// <summary>Persisted local Tally launch metadata for a confirmed Client/FY link.</summary>
 public sealed class TallyLinkFoundationService
 {
-    private readonly object _gate = new();
+    // Every client shares ONE JSON profile file. Different services (the
+    // launcher, coordinator and private Tally session) must never read a
+    // partially written profile or overwrite another client's saved binding.
+    private static readonly object ProfileGate = new();
+    private const string ProfileMutexName = @"Local\AccountingAutomationHub.TallyLaunchProfiles.v1";
     private readonly string _path = Path.Combine(ApplicationDataPaths.RootFolder, "DistributedSync", "TallyLinks.json");
+
     public ClientTallyLinkRecord? Get(long clientId)
     {
-        lock (_gate) return ReadAll().FirstOrDefault(x => x.ClientId == clientId);
+        lock (ProfileGate) return ReadAll().FirstOrDefault(x => x.ClientId == clientId);
     }
+
     public void Save(ClientTallyLinkRecord record)
     {
-        lock (_gate)
+        if (record.ClientId <= 0)
+            throw new InvalidOperationException("A ClientId is required for a Tally launcher profile.");
+        WithExclusiveProfileWrite(() =>
         {
-            var all = ReadAll().Where(x => x.ClientId != record.ClientId).Append(record).OrderBy(x => x.ClientId).ToArray();
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            File.WriteAllText(_path, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-        }
+            var all = ReadAll().Where(x => x.ClientId != record.ClientId)
+                .Append(record).OrderBy(x => x.ClientId).ToArray();
+            SaveAllAtomically(all);
+        });
     }
-    /// <summary>
-    /// Retire only one client's old Tally executable/folder/link identity.
-    /// This is local launch metadata, not a Tally company deletion. Never
-    /// rewrite a damaged profile as an empty array during explicit unlink.
+
+    /// <summary>Only explicit unlink removes one client's optional launcher
+    /// metadata. Other clients' profiles and their confirmed Tally links stay.
     /// </summary>
     public void Remove(long clientId)
     {
         if (clientId <= 0) return;
-        lock (_gate)
+        WithExclusiveProfileWrite(() =>
         {
             if (!File.Exists(_path)) return;
-            var all = JsonSerializer.Deserialize<List<ClientTallyLinkRecord>>(File.ReadAllText(_path))
-                ?? throw new InvalidDataException("Saved Tally launcher profiles could not be read safely.");
+            var all = ReadAll();
             if (!all.Any(record => record.ClientId == clientId)) return;
-            var remaining = all.Where(record => record.ClientId != clientId).ToArray();
-            var temporary = _path + ".unlink.tmp";
+            SaveAllAtomically(all.Where(record => record.ClientId != clientId).ToArray());
+        });
+    }
+
+    private static void WithExclusiveProfileWrite(Action write)
+    {
+        lock (ProfileGate)
+        {
+            // A second AAH process can also be open during an upgrade. The
+            // named synchronous mutex protects read-modify-write ACROSS
+            // processes; the per-process gate protects all service instances.
+            using var ownership = new Mutex(false, ProfileMutexName);
+            var acquired = false;
             try
             {
-                File.WriteAllText(temporary,
-                    JsonSerializer.Serialize(remaining, new JsonSerializerOptions { WriteIndented = true }),
-                    new UTF8Encoding(false));
-                File.Move(temporary, _path, overwrite: true);
+                try { acquired = ownership.WaitOne(TimeSpan.FromSeconds(15)); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired)
+                    throw new IOException("Another AAH process is saving Tally launcher profiles. Existing profiles were not changed.");
+                write();
             }
             finally
             {
-                if (File.Exists(temporary)) File.Delete(temporary);
+                if (acquired) ownership.ReleaseMutex();
             }
+        }
+    }
+
+    private void SaveAllAtomically(IReadOnlyList<ClientTallyLinkRecord> records)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var temporary = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(records,
+                new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            // A read will see the complete old or complete new JSON. On
+            // replacement Windows also retains a verified prior generation.
+            if (File.Exists(_path))
+                File.Replace(temporary, _path, _path + ".bak", ignoreMetadataErrors: true);
+            else
+                File.Move(temporary, _path);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
     private IReadOnlyList<ClientTallyLinkRecord> ReadAll()
     {
-        try { return File.Exists(_path) ? JsonSerializer.Deserialize<List<ClientTallyLinkRecord>>(File.ReadAllText(_path)) ?? [] : []; } catch { return []; }
+        var backup = _path + ".bak";
+        if (!File.Exists(_path))
+            return File.Exists(backup) ? ReadValidatedProfiles(backup) : [];
+
+        try { return ReadValidatedProfiles(_path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                   System.Text.Json.JsonException or InvalidDataException)
+        {
+            // Never turn a partially written or malformed shared file into
+            // an empty list and erase all other client bindings at next Save.
+            // An older valid backup is preferable to silently discarding
+            // every previously verified link.
+            if (File.Exists(backup)) return ReadValidatedProfiles(backup);
+            throw new InvalidDataException(
+                "Saved Tally launcher profiles could not be read; preserving existing file. " +
+                "No Client/FY links have been reset.", ex);
+        }
+    }
+
+    private static IReadOnlyList<ClientTallyLinkRecord> ReadValidatedProfiles(string path)
+    {
+        var records = JsonSerializer.Deserialize<List<ClientTallyLinkRecord>>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("Tally launcher profile file is empty or invalid.");
+        if (records.Any(x => x is null || x.ClientId <= 0) ||
+            records.GroupBy(x => x.ClientId).Any(g => g.Count() != 1))
+            throw new InvalidDataException("Tally launcher profile file has invalid or duplicate ClientIds.");
+        return records;
     }
 }
 

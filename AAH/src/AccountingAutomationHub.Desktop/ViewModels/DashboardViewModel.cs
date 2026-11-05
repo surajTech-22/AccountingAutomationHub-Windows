@@ -288,7 +288,7 @@ public sealed class DashboardViewModel :
             // Import. Its default messages can predate the Client/FY link and
             // incorrectly tell a linked client to reopen or relink Tally.
             TallyExportStatus =
-                "Use Generate Consolidated XML and Export Consolidated to Tally below. " +
+                "Use Export Consolidated to Tally below. " +
                 "Normal Export Selected is disabled for the consolidated parent.";
             if (_clientContext.CurrentClient is not null &&
                 _tallyCoordinator.GetCurrentClientLink() is not null)
@@ -307,7 +307,7 @@ public sealed class DashboardViewModel :
             // bleed into single-GSTIN or private-branch export.
             if (_clientContext.CurrentClient is { } normalClient)
                 InitializeTallyExportPeriods(normalClient, force: true);
-            if (TallyExportStatus.StartsWith("Use Generate Consolidated XML", StringComparison.Ordinal))
+            if (TallyExportStatus.StartsWith("Use Export Consolidated to Tally", StringComparison.Ordinal))
                 TallyExportStatus = "Select the branch's source periods and use the normal Tally export.";
         }
         RefreshTallySection();
@@ -2779,7 +2779,7 @@ public sealed class DashboardViewModel :
                 TallyStatisticsStatus = "Linked company available. Click Refresh to request Tally Statistics.";
             if (TallyExportStatus.StartsWith("Open a client", StringComparison.OrdinalIgnoreCase))
                 TallyExportStatus =
-                    "Use Generate Consolidated XML and Export Consolidated to Tally; " +
+                    "Use Export Consolidated to Tally; " +
                     "normal parent Export Selected is disabled.";
         }
 
