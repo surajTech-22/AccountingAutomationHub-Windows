@@ -55,6 +55,75 @@ internal static class TallyConsolidatedManualXmlTests
                 .SequenceEqual(voucher.Descendants("AMOUNT").Select(x => x.Value)),
               "unselecting separate voucher types must use same-MASTERID reverse ALTER, not CREATE");
 
+
+        // Marker-only freshness is deliberately strict. Saved full XML can
+        // authorize an ALTER only while the live company, count and ALTERID
+        // marker still match the original normal Tally checkpoint.
+        var markerGuard = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "RequireMatchingSynchronizedMarker",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Check(markerGuard is not null, "cached-authority marker safety gate is missing");
+        var linked = new AccountingAutomationHub.Domain.Tally.TallyClientLink
+        {
+            ClientId = 42, CompanyKey = "TALLY-42", CompanyName = "Combined Books"
+        };
+        var destination = new AccountingAutomationHub.Domain.Tally.TallyCompanyInfo
+        {
+            CompanyKey = "TALLY-42", Name = "Combined Books"
+        };
+        var synced = new AccountingAutomationHub.Domain.Tally.TallyBankSyncState
+        {
+            ClientId = 42, CompanyKey = "TALLY-42", FinancialYear = "2025-26",
+            LastVoucherCount = 8, LastFyVoucherCount = 3, LastAlterId = 124,
+            LastTallyChangeToken = "TALLY-42|8|marker|124",
+            LastFullSyncUtc = DateTime.UtcNow
+        };
+        var unchangedMarker = new AccountingAutomationHub.Domain.Tally.TallyVoucherChangeMarker
+        {
+            CompanyName = "Combined Books", VoucherCount = 8,
+            LastAlterId = 124, HasReliableAlterId = true,
+            Token = synced.LastTallyChangeToken
+        };
+        markerGuard!.Invoke(null, new object[] { linked, destination, synced, unchangedMarker });
+        static bool RejectedByGuard(
+            System.Reflection.MethodInfo gate,
+            AccountingAutomationHub.Domain.Tally.TallyClientLink link,
+            AccountingAutomationHub.Domain.Tally.TallyCompanyInfo company,
+            AccountingAutomationHub.Domain.Tally.TallyBankSyncState sync,
+            AccountingAutomationHub.Domain.Tally.TallyVoucherChangeMarker change)
+        {
+            try { gate.Invoke(null, new object[] { link, company, sync, change }); }
+            catch (System.Reflection.TargetInvocationException ex)
+                when (ex.InnerException is InvalidOperationException) { return true; }
+            return false;
+        }
+        Check(RejectedByGuard(markerGuard, linked, destination, synced,
+            new AccountingAutomationHub.Domain.Tally.TallyVoucherChangeMarker
+            {
+                CompanyName = "Combined Books", VoucherCount = 8,
+                LastAlterId = 125, HasReliableAlterId = true, Token = "TALLY-42|8|marker|125"
+            }), "a changed live Tally ALTERID must block cached consolidated ALTER");
+        Check(RejectedByGuard(markerGuard, linked, destination, synced,
+            new AccountingAutomationHub.Domain.Tally.TallyVoucherChangeMarker
+            {
+                CompanyName = "Other Company", VoucherCount = 8,
+                LastAlterId = 124, HasReliableAlterId = true, Token = synced.LastTallyChangeToken
+            }), "a foreign connected company must not authorize cached XML");
+        Check(RejectedByGuard(markerGuard, linked, destination, synced,
+            new AccountingAutomationHub.Domain.Tally.TallyVoucherChangeMarker
+            {
+                CompanyName = "Combined Books", VoucherCount = 8,
+                LastAlterId = 124, HasReliableAlterId = false, Token = synced.LastTallyChangeToken
+            }), "an unreliable ALTERID must fail closed instead of guessing");
+        Check(RejectedByGuard(markerGuard, linked, destination,
+            new AccountingAutomationHub.Domain.Tally.TallyBankSyncState
+            {
+                ClientId = 99, CompanyKey = synced.CompanyKey,
+                LastTallyChangeToken = synced.LastTallyChangeToken,
+                LastVoucherCount = 8
+            }, unchangedMarker),
+            "a checkpoint from a different client must be rejected");
+
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(
                    root.FullName, "AAH", "src", "AccountingAutomationHub.Desktop",
@@ -96,8 +165,8 @@ internal static class TallyConsolidatedManualXmlTests
         var method = infra[start..end];
         Check(method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               method.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
-              method.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
               method.Contains("GetSourceBindingVersionState(", StringComparison.Ordinal) &&
               method.Contains("RequireExistingDefaultCashForBankVouchers(", StringComparison.Ordinal),
               "manual XML must use current source binding and live MASTERID/ALTERID/DRCR/master authority");
@@ -141,16 +210,37 @@ internal static class TallyConsolidatedManualXmlTests
               "exact MASTERID + saved previous full DR/CR/ALTERID then bound " +
               "ALTER, not an extra cross-module ModifyPending veto.");
 
-        // Recheck must never ask Tally for a second whole-FY full voucher
-        // graph. Existing TallyHttpService already month-slices the first
-        // snapshot; final read-only safety uses bounded fresh index calls.
+        // The previous successful import's SAME MASTERID and full signed
+        // DR/CR checks remain. Only the normal coordinator collects a complete
+        // FY snapshot; Generate reuses its SQLite authority and two tiny markers.
         Check(method.Contains("var fullByMasterId = live.FullVouchers", StringComparison.Ordinal) &&
               method.Contains("fullByMasterId.TryGetValue(previous.MasterId", StringComparison.Ordinal) &&
               method.Contains("previous, boundFull, state", StringComparison.Ordinal) &&
-              method.Contains("while (month <= finalMonth)", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
+              !method.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
+              !method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
               !method.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal),
-              "Manual XML generation must index original full XML once and use bounded monthly final ALTERID rechecks.");
+              "manual XML must use normal synchronized full Voucher XML with tiny ALTERID marker");
+
+        var helperEnd = infra.IndexOf("private static void RequireMatchingSynchronizedMarker(", StringComparison.Ordinal);
+        Check(helperEnd > 0 &&
+              infra[..helperEnd].Contains("GetBankSyncState(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherIndexRange(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherXmlAuthorityByMasterIds(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("HasCompleteVoucherXmlAuthority(", StringComparison.Ordinal) &&
+              infra[..helperEnd].Contains("GetVoucherChangeMarkerAsync(", StringComparison.Ordinal),
+              "consolidated must use the original Client/FY/CompanyKey authority");
+
+        var importStart = infra.IndexOf(
+            "public async Task<TallyConsolidatedVoucherImportResult> ImportAsync(", StringComparison.Ordinal);
+        var importEnd = infra.IndexOf("private static void RequireDestination(", importStart, StringComparison.Ordinal);
+        Check(importStart >= 0 && importEnd > importStart &&
+              !infra[importStart..importEnd].Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("createdMasters == 0", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
+              infra[importStart..importEnd].Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal),
+              "consolidated Import must reuse normal FY authority and existing verified bound ALTER");
 
         // No manual action may borrow an unverified or missing source binding;
         // the established normal AAH previous-version gate is still required.
@@ -158,7 +248,7 @@ internal static class TallyConsolidatedManualXmlTests
               method.Contains("bound.Length != 1 || !claimedIds.Add(state.MasterId)",
                   StringComparison.Ordinal) &&
               method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
               method.Contains("Manual CREATE denied: source has historical Tally import evidence",
                   StringComparison.Ordinal),
               "Manual XML must keep verified-bound-only ALTER, unique MASTERID, " +

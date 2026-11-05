@@ -49,6 +49,109 @@ public sealed class TallyConsolidatedVoucherImportService(
         return TallyHttpService.ParseImportResponse(response);
     }
 
+
+    /// <summary>
+    /// Reuse the exact full-year authority maintained by the existing Tally
+    /// coordinator, including all saved MASTERIDs/ALTERIDs and complete XML.
+    /// Never start a separate full-company snapshot from consolidated import.
+    /// </summary>
+    private async Task<(TallyFullCompanySnapshot Snapshot, TallyVoucherChangeMarker Marker)>
+        ReadSynchronizedVoucherAuthorityAsync(
+            TallyClientLink link, TallyCompanyInfo destination, string financialYear,
+            DateTime from, DateTime to, CancellationToken token)
+    {
+        if (tallyRepository is null)
+            throw new InvalidOperationException("Existing Tally source-binding repository is required.");
+        var state = tallyRepository.GetBankSyncState(link.ClientId, financialYear, link.CompanyKey);
+        if (state is null || state.LastFullSyncUtc == DateTime.MinValue ||
+            state.LastAlterId <= 0 || state.LastFyVoucherCount < 0)
+            throw new InvalidOperationException(
+                "Normal linked-Tally FY authority has not completed its baseline. " +
+                "Refresh the existing Tally link; consolidated will not take a second snapshot.");
+
+        var marker = await tally.GetVoucherChangeMarkerAsync(destination, token).ConfigureAwait(false);
+        RequireMatchingSynchronizedMarker(link, destination, state, marker);
+
+        var index = tallyRepository.GetVoucherIndexRange(link.CompanyKey, financialYear, from, to);
+        if (index.Count != state.LastFyVoucherCount ||
+            index.Any(v => string.IsNullOrWhiteSpace(v.MasterId)) ||
+            index.GroupBy(v => v.MasterId.Trim(), IgnoreCase).Any(g => g.Count() != 1) ||
+            !tallyRepository.HasCompleteVoucherXmlAuthority(link.CompanyKey, financialYear, index.Count))
+            throw new InvalidOperationException(
+                "Synchronized Tally Voucher index/full XML is incomplete or has duplicate MASTERIDs. " +
+                "Use the existing normal Tally refresh before CREATE or ALTER.");
+
+        var full = tallyRepository.GetVoucherXmlAuthorityByMasterIds(
+            link.CompanyKey, financialYear, index.Select(v => v.MasterId));
+        var byId = full.GroupBy(v => v.MasterId.Trim(), IgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToArray(), IgnoreCase);
+        if (full.Count != index.Count || index.Any(v =>
+                !byId.TryGetValue(v.MasterId.Trim(), out var rows) ||
+                rows.Length != 1 || string.IsNullOrWhiteSpace(rows[0].OriginalXml) ||
+                !IgnoreCase.Equals(rows[0].AlterId, v.AlterId)))
+            throw new InvalidOperationException(
+                "Synchronized full Voucher XML/ALTERID differs from the existing MASTERID index. " +
+                "Refresh the normal Tally authority; do not write from an incomplete copy.");
+
+        // A concurrent normal delta may advance the durable checkpoint while
+        // local SQLite rows are being read. Never mix two generations.
+        var after = tallyRepository.GetBankSyncState(link.ClientId, financialYear, link.CompanyKey);
+        if (after is null ||
+            !string.Equals(after.LastTallyChangeToken, state.LastTallyChangeToken, StringComparison.Ordinal) ||
+            after.LastAlterId != state.LastAlterId ||
+            after.LastFyVoucherCount != state.LastFyVoucherCount)
+            throw new InvalidOperationException(
+                "Tally synchronized authority changed during consolidated preparation. Retry after the normal refresh.");
+
+        return (new TallyFullCompanySnapshot
+        {
+            CompanyKey = link.CompanyKey,
+            FinancialYear = financialYear,
+            FromDate = from,
+            ToDate = to,
+            Vouchers = index,
+            FullVouchers = full,
+            DeclaredVoucherCount = index.Count,
+            AuthorityAlterId = state.LastAlterId,
+            CapturedUtc = state.LastIncrementalSyncUtc > state.LastFullSyncUtc
+                ? state.LastIncrementalSyncUtc : state.LastFullSyncUtc
+        }, marker);
+    }
+
+    private static void RequireMatchingSynchronizedMarker(
+        TallyClientLink link, TallyCompanyInfo destination,
+        TallyBankSyncState state, TallyVoucherChangeMarker marker)
+    {
+        if (!marker.HasReliableAlterId || marker.LastAlterId <= 0 ||
+            string.IsNullOrWhiteSpace(state.LastTallyChangeToken) ||
+            !string.Equals(marker.Token, state.LastTallyChangeToken, StringComparison.Ordinal) ||
+            marker.VoucherCount != state.LastVoucherCount ||
+            (marker.CompanyName.Length > 0 && !IgnoreCase.Equals(marker.CompanyName, destination.Name)))
+            throw new InvalidOperationException(
+                "Live Tally is newer than the synchronized Client/FY/CompanyKey authority " +
+                "(or its ALTERID is unreliable). Complete NORMAL Tally synchronization; " +
+                "no second full-company snapshot will be taken.");
+        if (!IgnoreCase.Equals(state.CompanyKey, link.CompanyKey) ||
+            state.ClientId != link.ClientId)
+            throw new InvalidOperationException(
+                "Synchronized Tally authority belongs to a different client or company.");
+    }
+
+    private async Task RequireUnchangedSynchronizedAuthorityAsync(
+        TallyClientLink link, TallyCompanyInfo destination, string financialYear,
+        TallyVoucherChangeMarker initial, CancellationToken token)
+    {
+        // A tiny change-marker check, not another complete FY Voucher request.
+        var marker = await tally.GetVoucherChangeMarkerAsync(destination, token).ConfigureAwait(false);
+        var state = tallyRepository?.GetBankSyncState(link.ClientId, financialYear, link.CompanyKey)
+            ?? throw new InvalidOperationException("Normal Tally authority checkpoint disappeared.");
+        RequireMatchingSynchronizedMarker(link, destination, state, marker);
+        if (!string.Equals(marker.Token, initial.Token, StringComparison.Ordinal) ||
+            marker.LastAlterId != initial.LastAlterId)
+            throw new InvalidOperationException(
+                "Live Tally changed during consolidated preparation. Refresh normal Tally authority and regenerate.");
+    }
+
     /// <summary>
     /// Produce REAL, manually importable Tally master and voucher envelopes,
     /// with destination-bound ALTER actions for changed vouchers. This is a
@@ -103,8 +206,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             throw new InvalidOperationException("Manual import financial year cannot be verified.");
         var from = new DateTime(startYear, 4, 1);
         var to = new DateTime(startYear + 1, 3, 31);
-        var live = await tally.ExportFullCompanySnapshotAsync(
-            linked, from, to, cancellationToken).ConfigureAwait(false);
+        var (live, capturedMarker) = await ReadSynchronizedVoucherAuthorityAsync(
+            link, linked, financialYear, from, to, cancellationToken).ConfigureAwait(false);
         // The full FY authority is already collected in bounded monthly slices.
         // Index its full signed Voucher XML ONCE by destination MASTERID so
         // verifying each prepared source does not scan all voucher XML again.
@@ -115,9 +218,9 @@ public sealed class TallyConsolidatedVoucherImportService(
             .GroupBy(item => item.MasterId.Trim(), IgnoreCase)
             .ToDictionary(group => group.Key,
                 group => (IReadOnlyList<TallyVoucherXmlSnapshot>)group.ToArray(), IgnoreCase);
-        if (linked.VoucherCount > 0 && live.Vouchers.Count == 0)
-            throw new InvalidOperationException(
-                "Live Tally contains vouchers but no complete full-year identity snapshot; manual XML is blocked.");
+        // The normal coordinator's LastFyVoucherCount proves an empty target FY.
+        // Earlier-year vouchers in the same company are not an incomplete FY
+        // snapshot and must not block legitimate first-time consolidated XML.
         var available = await ReadMasterAuthorityAsync(linked, cancellationToken)
             .ConfigureAwait(false);
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
@@ -324,47 +427,10 @@ public sealed class TallyConsolidatedVoucherImportService(
             create++;
             proofs.Add("CREATE " + anchor + " | no existing AAH source binding or matching live Tally source");
         }
-        // Recheck the ENTIRE FY MASTERID/ALTERID set before authorizing any
-        // importable XML. The source snapshot reader deliberately splits full
-        // Vouchers into month slices: a second whole-FY full Voucher export
-        // bypassed that protection and could hang or exhaust Tally memory.
-        // This recheck only needs a fresh INDEX, never another full XML graph.
-        var recheckedIndex = new List<TallyVoucherIndexRecord>(live.Vouchers.Count);
-        var month = new DateTime(from.Year, from.Month, 1);
-        var finalMonth = new DateTime(to.Year, to.Month, 1);
-        while (month <= finalMonth)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var monthFrom = month < from ? from : month;
-            var endOfMonth = month.AddMonths(1).AddDays(-1);
-            var monthTo = endOfMonth > to ? to : endOfMonth;
-            try
-            {
-                var fresh = await tally.ExportVoucherIndexFreshAsync(
-                    linked, monthFrom, monthTo, cancellationToken).ConfigureAwait(false);
-                recheckedIndex.AddRange(fresh);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                throw new InvalidOperationException(
-                    "Final read-only consolidated voucher identity check failed for " +
-                    monthFrom.ToString("yyyy-MM", CultureInfo.InvariantCulture) +
-                    ": " + exception.Message +
-                    ". No manual import XML was authorized.", exception);
-            }
-            month = month.AddMonths(1);
-        }
-        var oldIds = live.Vouchers
-            .GroupBy(v => v.MasterId, IgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
-        var newIds = recheckedIndex
-            .GroupBy(v => v.MasterId, IgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
-        if (oldIds.Count != newIds.Count ||
-            oldIds.Any(kv => !newIds.TryGetValue(kv.Key, out var nextAlter) ||
-                             !IgnoreCase.Equals(kv.Value, nextAlter)))
-            throw new InvalidOperationException(
-                "The linked Tally company changed while building manual XML. Regenerate; no unsafe files were saved.");
+        // The original normal FY authority is already held in SQLite;
+        // only its live change marker is checked again before writing files.
+        await RequireUnchangedSynchronizedAuthorityAsync(
+            link, linked, financialYear, capturedMarker, cancellationToken).ConfigureAwait(false);
         var masterBuilder = new StringBuilder();
         TallyExcelParityXmlWriter.BeginAllMastersImport(masterBuilder, destination.Name);
         foreach (var type in PriorMasters.Concat(MasterOrder))
@@ -381,7 +447,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             masterBuilder.ToString(), "real manual Tally master XML");
         TallyConsolidatedXmlTextSafety.ParseDocument(
             voucherBuilder.ToString(), "real manual Tally voucher XML");
-        var audit = "Generated from a fresh, read-only full-FY Tally voucher and master snapshot." +
+        var audit = "Generated from normal AAH synchronized full-FY Voucher authority with fresh change-marker checks." +
             Environment.NewLine + "Tally company: " + destination.Name +
             Environment.NewLine + "Financial year: " + financialYear +
             Environment.NewLine + "Required missing masters: " + missingMasters.Count +
@@ -657,21 +723,16 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(firstYear + 1, 3, 31);
         if (source.Any(x => x.Date < from || x.Date > to))
             throw new InvalidOperationException("Prepared voucher is outside the linked financial year.");
-        // Reuse the existing bounded full-company/FY authority path used by
-        // the central Tally coordinator. Unlike the old consolidated one-shot
-        // collection, it checks every month's Voucher MASTERID against its full
-        // object before authorizing any destination CREATE.
-        var before = await tally.ExportFullCompanySnapshotAsync(
-            liveDestination, from, to, cancellationToken).ConfigureAwait(false);
-        if (liveDestination.VoucherCount > 0 && before.Vouchers.Count == 0)
-            throw new InvalidOperationException(
-                "Tally reports existing saved Voucher(s) but the full-FY snapshot " +
-                "returned zero. This is NOT evidence of an empty destination. " +
-                "No consolidated CREATE is safe.");
-        tallyRepository.ReplaceVoucherIndex(
-            link.CompanyKey, financialYear, before.Vouchers);
-        tallyRepository.UpsertVoucherXmlAuthority(
-            link.CompanyKey, financialYear, before.FullVouchers);
+        // Reuse the verified full-FY MASTERID and complete signed Voucher XML
+        // ALREADY held by the ordinary Tally coordinator. No full-company
+        // snapshot is needed to classify the consolidated destination.
+        var (before, capturedMarker) = await ReadSynchronizedVoucherAuthorityAsync(
+            link, liveDestination, financialYear, from, to, cancellationToken).ConfigureAwait(false);
+        // An empty verified active FY is valid even when the same Tally
+        // company has vouchers from earlier years. The synchronized FY count
+        // was already verified by ReadSynchronizedVoucherAuthorityAsync.
+        // Normal Tally synchronization already owns these exact SQLite rows.
+        // The consolidated wrapper must not publish another baseline.
         // Reuse Fix85's normal missing MASTERID detection. An externally
         // deleted prior Voucher remains held for explicit recovery, not CREATE.
         tallyRepository.ReconcileMissingVoucherBindingAuthority(
@@ -1037,29 +1098,42 @@ public sealed class TallyConsolidatedVoucherImportService(
 
         // All masters must be live and parent-verified before the first voucher.
         foreach (var master in masters) RequireMaster(available, master);
-        // One fresh read after master-first, before voucher writes. If the
-        // source authority changed during master creation, never continue
-        // from an earlier duplicate decision.
-        var recheck = await tally.ExportVoucherAuthorityFreshAsync(
-            destination, from, to, cancellationToken).ConfigureAwait(false);
-        var originalIds = before.Vouchers.Select(v => v.MasterId)
-            .ToHashSet(IgnoreCase);
-        var currentIds = recheck.Index.Select(v => v.MasterId)
-            .ToHashSet(IgnoreCase);
-        if (!originalIds.SetEquals(currentIds))
+        // The normal synchronized index remains authoritative while Masters
+        // were unchanged. If this import CREATED a Master, its own ALTERID
+        // change requires a fresh INDEX-only pre-write check. Never request
+        // another full-year graph of complete Voucher XML for this barrier.
+        IReadOnlyList<TallyVoucherIndexRecord> recheckIndex;
+        if (createdMasters == 0)
+        {
+            await RequireUnchangedSynchronizedAuthorityAsync(
+                link, liveDestination, financialYear, capturedMarker, cancellationToken)
+                .ConfigureAwait(false);
+            recheckIndex = before.Vouchers;
+        }
+        else
+        {
+            recheckIndex = await tally.ExportVoucherIndexFreshAsync(
+                destination, from, to, cancellationToken).ConfigureAwait(false);
+        }
+        var previousIds = before.Vouchers
+            .ToDictionary(v => v.MasterId.Trim(), v => v.AlterId, IgnoreCase);
+        var currentIds = recheckIndex.GroupBy(v => v.MasterId.Trim(), IgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Single().AlterId, IgnoreCase);
+        if (previousIds.Count != currentIds.Count ||
+            previousIds.Any(kv => !currentIds.TryGetValue(kv.Key, out var newAlterId) ||
+                                  !IgnoreCase.Equals(kv.Value, newAlterId)))
             throw new InvalidOperationException(
-                "Live Tally Voucher authority changed during consolidated " +
-                "master-first verification. The import is blocked before CREATE; " +
-                "refresh the normal duplicate/version snapshot.");
+                "Live Tally Voucher MASTERID/ALTERID changed during consolidated master-first verification. " +
+                "No CREATE or ALTER is safe; refresh the normal authority.");
         // Only truly unbound original sources can be CREATE candidates.
         // An altered source already owns a durable destination MASTERID.
         var createCandidates = source.Where(v =>
             !skipped.Contains(v.SourceAnchor) &&
             !alterTargets.ContainsKey(v.SourceAnchor)).ToArray();
-        RequireNoCollision(recheck.Index, createCandidates);
+        RequireNoCollision(recheckIndex, createCandidates);
         foreach (var planned in createCandidates)
         {
-            var concurrent = recheck.Index.FirstOrDefault(live =>
+            var concurrent = recheckIndex.FirstOrDefault(live =>
                 IgnoreCase.Equals(live.VoucherType, planned.Type) &&
                 planned.Reference.Length > 0 &&
                 IgnoreCase.Equals(live.Reference, planned.Reference) &&
