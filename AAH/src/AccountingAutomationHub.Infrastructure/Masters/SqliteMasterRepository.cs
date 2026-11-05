@@ -737,7 +737,7 @@ public sealed class SqliteMasterRepository : IMasterRepository
             // For case/punctuation variants, use AAH's pre-existing comprehensive
             // accounting reference retargeter before retiring the duplicate row.
             // For an exact-name duplicate this intentionally changes no postings.
-            if (!local.Name.Trim().Equals(live.Name.Trim(), StringComparison.Ordinal))
+            if (!local.Name.Trim().Equals(live.Name.Trim(), StringComparison.OrdinalIgnoreCase))
                 changed += RewriteLedgerReferences(
                     connection, transaction, clientId, financialYear, local.Name, live.Name);
             SaveMergeAlias(connection, transaction, clientId, financialYear,
