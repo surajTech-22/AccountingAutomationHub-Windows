@@ -3216,18 +3216,35 @@ public sealed class DashboardViewModel :
     {
         UnlinkConfirmationPending = true;
         TallyActionStatus =
-            "Confirm unlink below. Existing masters, accounting data, import history and logs will be retained.";
+            "Confirm unlink below. AAH will clear this Client/FY's previous Tally " +
+            "voucher/master snapshot, saved source bindings and sync history, and " +
+            "regenerate authority on the next link. Original AAH accounting/Bank " +
+            "statements and the actual Tally company will NOT be deleted.";
     }
 
-    private void ConfirmUnlinkTally()
+    private async void ConfirmUnlinkTally()
     {
-        _tallyCoordinator.UnlinkCurrentClient();
-        UnlinkConfirmationPending = false;
-        TallyReportRows.Clear();
-        TallyStatisticsMetrics.Clear();
-        TallyReportStatus = "Tally company unlinked.";
-        TallyStatisticsStatus = "Tally company unlinked.";
-        RefreshTallySection();
+        try
+        {
+            TallyActionStatus = "Clearing the old linked Tally company's authority from AAH…";
+            await _tallyCoordinator.UnlinkCurrentClientAsync();
+            UnlinkConfirmationPending = false;
+            TallyReportRows.Clear();
+            TallyStatisticsMetrics.Clear();
+            TallyReportStatus = "Tally unlinked. Reports require a fresh relink and live Tally read.";
+            TallyStatisticsStatus = "Tally unlinked. Fresh synchronization required.";
+            TallyActionStatus = _tallyCoordinator.LastOperationStatus;
+        }
+        catch (Exception exception)
+        {
+            // A DB/file cleanup error must leave the old link and evidence
+            // intact rather than showing a falsely successful unlink.
+            TallyActionStatus = "Tally unlink failed; review and retry: " + exception.Message;
+        }
+        finally
+        {
+            RefreshTallySection();
+        }
     }
 
     private void CancelUnlinkTally()
