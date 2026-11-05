@@ -218,9 +218,9 @@ public sealed class TallyConsolidatedVoucherImportService(
             .GroupBy(item => item.MasterId.Trim(), IgnoreCase)
             .ToDictionary(group => group.Key,
                 group => (IReadOnlyList<TallyVoucherXmlSnapshot>)group.ToArray(), IgnoreCase);
-        if (linked.VoucherCount > 0 && live.Vouchers.Count == 0)
-            throw new InvalidOperationException(
-                "Live Tally contains vouchers but no complete full-year identity snapshot; manual XML is blocked.");
+        // The normal coordinator's LastFyVoucherCount proves an empty target FY.
+        // Earlier-year vouchers in the same company are not an incomplete FY
+        // snapshot and must not block legitimate first-time consolidated XML.
         var available = await ReadMasterAuthorityAsync(linked, cancellationToken)
             .ConfigureAwait(false);
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
