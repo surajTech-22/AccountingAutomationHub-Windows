@@ -41,6 +41,7 @@ internal static class TallyConsolidatedDirectImportTests
         var call = export.IndexOf("var result = await importer.ImportAsync(", StringComparison.Ordinal);
         Check(prepare >= 0 && sync > prepare && call > sync &&
               export.Contains("forceLinkedSynchronization: true, forceFullBaseline: false", StringComparison.Ordinal) &&
+              export.Contains("requireConsolidatedImportAuthority: true", StringComparison.Ordinal) &&
               export.Contains("produceManualImportFiles: false", StringComparison.Ordinal),
               "direct import must use normal existing coordinator delta authority after preparing source, before unchanged importer");
         Check(export.Contains("if (separateTypes)", StringComparison.Ordinal) &&
@@ -49,10 +50,22 @@ internal static class TallyConsolidatedDirectImportTests
               export.Contains("tallyAcknowledgedAlterCount", StringComparison.Ordinal),
               "master-first, ALTER and diagnostic flow must remain intact");
 
-        Check(coordinator.Contains("bool forceFullBaseline = true)", StringComparison.Ordinal) &&
+        Check(coordinator.Contains("bool forceFullBaseline = true,", StringComparison.Ordinal) &&
+              coordinator.Contains("bool requireConsolidatedImportAuthority = false)", StringComparison.Ordinal) &&
               coordinator.Contains("forceFullBaseline: forceLinkedSynchronization && forceFullBaseline", StringComparison.Ordinal) &&
               coordinator.Contains("await SynchronizeLinkedCompanyAsync(", StringComparison.Ordinal),
               "pre-import must reuse original normal Tally coordinator rather than a second snapshot/checker");
+        Check(coordinator.Contains("private async Task RequireFreshConsolidatedImportCheckpointAsync(", StringComparison.Ordinal) &&
+              coordinator.Contains("await SynchronizeLinkedCompanyAsync(", StringComparison.Ordinal) &&
+              coordinator.Contains("Pre-import changed-marker catch-up", StringComparison.Ordinal) &&
+              coordinator.Contains("latest.HasReliableAlterId", StringComparison.Ordinal) &&
+              coordinator.Contains("HasCompleteActiveFyVoucherAuthority(client, company, saved)", StringComparison.Ordinal) &&
+              coordinator.Contains("HasCompleteLiveAccountingMasterAuthority(client, live)", StringComparison.Ordinal) &&
+              coordinator.Contains("HasCompleteLiveStockMasterAuthority(client, company, live, saved)", StringComparison.Ordinal) &&
+              coordinator.Contains("throw new InvalidOperationException(", StringComparison.Ordinal) &&
+              coordinator.Contains("Saved links were preserved; no vouchers were posted.", StringComparison.Ordinal) &&
+              coordinator.Contains("if (requireConsolidatedImportAuthority)", StringComparison.Ordinal),
+              "explicit user import cannot be treated as a successful refresh when normal synchronization was skipped, swallowed or stale");
         Check(importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               importer.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
               importer.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
