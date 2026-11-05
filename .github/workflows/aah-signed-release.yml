@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.615)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.616)"
         required: true
-        default: "v4.0.0.615"
+        default: "v4.0.0.616"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.615: reuse the normal synchronized FY authority without duplicate snapshots; preserve bound ALTER.
+# v4.0.0.616: fix only the original Tally window launcher; preserve all Tally import and link procedures.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.615]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.616]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.615' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.616' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -290,7 +290,7 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.615: Reuse the normal linked Tally coordinator's existing Client/FY/CompanyKey full voucher XML, MASTERID index and ALTERID checkpoint for consolidated Generate XML and Import; never request another complete FY company snapshot. Read-only Generate uses lightweight live change-marker verification instead of twelve monthly index reads. Keep exact saved previous-version to desired same-MASTERID ALTER, full signed DR/CR matching, branch source ownership, master-first readback, duplicate and accepted-write protections. After creating masters, perform an index-only pre-write verification. Preserve ordinary Tally export and the earlier responsive consolidated branch XML wrapper. All Windows and full AAH regression gates must pass for this release."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.616: Repair only the original Tally application launch button: when it successfully brings an already-running Tally window to the front, report success instead of showing a failure dialog that steals focus. When a confirmed legacy Client/FY link lacks optional launcher executable binding, allow the existing manual-company-selection startup without relinking or selecting an unverified company. Preserve original strict exact-company startup and no-second-Tally-process rules. No modifications to Tally link storage, XML, Tally synchronization, consolidated voucher preparation, MASTERID/ALTERID, ledger or bank/voucher import. Windows, full AAH and Tally inventory regressions passed."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.615: Reuse the normal linked Tally coordinator's existing Client/FY/CompanyKey full voucher XML, MASTERID index and ALTERID checkpoint for consolidated Generate XML and Import; never request another complete FY company snapshot. Read-only Generate uses lightweight live change-marker verification instead of twelve monthly index reads. Keep exact saved previous-version to desired same-MASTERID ALTER, full signed DR/CR matching, branch source ownership, master-first readback, duplicate and accepted-write protections. After creating masters, perform an index-only pre-write verification. Preserve ordinary Tally export and the earlier responsive consolidated branch XML wrapper. All Windows and full AAH regression gates must pass for this release."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.616: Repair only the original Tally application launch button: when it successfully brings an already-running Tally window to the front, report success instead of showing a failure dialog that steals focus. When a confirmed legacy Client/FY link lacks optional launcher executable binding, allow the existing manual-company-selection startup without relinking or selecting an unverified company. Preserve original strict exact-company startup and no-second-Tally-process rules. No modifications to Tally link storage, XML, Tally synchronization, consolidated voucher preparation, MASTERID/ALTERID, ledger or bank/voucher import. Windows, full AAH and Tally inventory regressions passed."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
