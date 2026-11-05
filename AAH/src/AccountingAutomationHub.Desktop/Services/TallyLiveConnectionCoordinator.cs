@@ -1026,6 +1026,14 @@ public sealed class TallyLiveConnectionCoordinator :
                 // aborts the unlink before modifying durable authority.
                 DeleteLiveXmlIfPresent(client, requireDeleted: true);
                 DeleteOldConsolidatedManualXmlIfPresent(client);
+                // The last company's exact physical folder and remembered
+                // launcher profile are not valid for a fresh link. In
+                // particular, Auto Open must not start the old Tally folder.
+                AutoTallyImportPreference.SetExactCompanyKey(
+                    _clientPreferenceRepository, client.Id, client.FinancialYear, string.Empty);
+                AutoTallyImportPreference.SetExactCompanyFolder(
+                    _clientPreferenceRepository, client.Id, client.FinancialYear, string.Empty);
+                _applicationLaunchService.ForgetConfirmedLink(client.Id);
                 _repository.UnlinkClientAndResetAuthority(
                     client.Id, client.FinancialYear, link.CompanyKey);
             }
