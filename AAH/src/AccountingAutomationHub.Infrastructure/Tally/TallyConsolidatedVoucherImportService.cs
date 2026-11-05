@@ -1422,11 +1422,15 @@ public sealed class TallyConsolidatedVoucherImportService(
             !previous.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
             !IgnoreCase.Equals(previous.MasterId, live.MasterId) ||
             previous.VerifiedContentHash.Length == 0 ||
-            previous.VerifiedVersion.Length == 0 ||
-            previous.LastVerifiedAlterId <= 0 ||
             !long.TryParse(live.AlterId, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var currentAlterId) ||
-            currentAlterId != previous.LastVerifiedAlterId ||
+            currentAlterId <= 0 ||
+            // Preserve the normal AAH Previous->Desired rule: a recorded
+            // ALTERID must be identical to live. Legacy verified bindings
+            // without an ALTERID are recoverable ONLY from the exact old
+            // signed-content fingerprint below, not from the desired voucher.
+            (previous.LastVerifiedAlterId > 0 &&
+             currentAlterId != previous.LastVerifiedAlterId) ||
             live.VoucherDate is not DateTime originalDate)
             return false;
         var full = fullAuthority.Where(item =>
@@ -1464,8 +1468,21 @@ public sealed class TallyConsolidatedVoucherImportService(
             "CONSOLIDATED|" + originalDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
             "|" + originalType + "|" + originalReference + "|" +
             exactPostings + "|" + verifiedHash;
+        // The NORMAL AAH exporter reconciles legacy stored-version
+        // representation differences against the unchanged live MASTERID,
+        // verified ALTERID and the real previous voucher content. Reuse that
+        // authority here: verifiedHash covers the old date, type, reference,
+        // party, narration AND every signed DR/CR ledger line. A serialized
+        // PreviousVersion difference alone is not an accounting change.
+        // A missing legacy ALTERID is never guessed: currentAlterId must be
+        // positive and the previously SAVED content hash must match the full
+        // live previous version before any bound ALTER may be prepared.
         return IgnoreCase.Equals(previous.VerifiedContentHash, verifiedHash) &&
-            string.Equals(previous.VerifiedVersion, verifiedVersion, StringComparison.Ordinal);
+            (string.Equals(previous.VerifiedVersion, verifiedVersion,
+                 StringComparison.Ordinal) ||
+             previous.VerifiedVersion.Length == 0 ||
+             previous.VerifiedVersion.StartsWith("CONSOLIDATED|",
+                 StringComparison.Ordinal));
     }
 
     // Exact voucher matching reuses the established ordinary Tally
