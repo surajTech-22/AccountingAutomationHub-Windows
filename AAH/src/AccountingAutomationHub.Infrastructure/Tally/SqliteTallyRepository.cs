@@ -908,6 +908,26 @@ public sealed class SqliteTallyRepository
         // carried into another Tally book, even when numeric MASTERIDs repeat.
         Run("BankPendingTallyDuplicateDeletes",
             "DELETE FROM BankPendingTallyDuplicateDeletes WHERE ClientId=$ClientId AND FinancialYear=$Fy;");
+        // Clear only Tally-derived Bank transfer decisions. Original statement
+        // rows and user-confirmed interbank matches remain unchanged.
+        Run("BankTransactions",
+            """
+            UPDATE BankTransactions
+            SET RecordStatus='Active',
+                MappingStatus=CASE WHEN TRIM(LedgerName)<>'' THEN 'Mapped' ELSE 'Mapping Required' END,
+                MatchId='',MatchedTransactionId=NULL
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy
+              AND RecordStatus='Archived Tally Reconciled'
+              AND (MatchId LIKE 'TALLYBTX|%' OR MatchId LIKE 'TALLYTRF|%');
+            """);
+        Run("BankTransferMatches",
+            """
+            DELETE FROM BankTransferMatches
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy
+              AND (INSTR(UPPER(COALESCE(MatchOrigin,'')),'TALLY')>0
+                   OR TRIM(COALESCE(TallyConversionId,''))<>''
+                   OR MatchId LIKE 'TALLYTRF|%' OR MatchId LIKE 'TALLYBTX|%');
+            """);
         Run("BankAccounts",
             """
             UPDATE BankAccounts
@@ -945,6 +965,15 @@ public sealed class SqliteTallyRepository
                     Source='Manual',UpdatedUtc=$Now
                 WHERE ClientId=$ClientId AND FinancialYear=$Fy
                   AND Company=$Company COLLATE NOCASE AND IsUserEdited=1
+                  AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
+                """);
+            // Exact external aliases are imported Tally metadata, not
+            // user-maintained stock mapping rules; discard those from old
+            // book while preserving local alias/mapping decisions.
+            Run("StockItemAliases",
+                """
+                DELETE FROM StockItemAliases
+                WHERE ClientId=$ClientId AND FinancialYear=$Fy
                   AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
                 """);
             // Stock IDs used by local invoices and durable Stock Item mappings
