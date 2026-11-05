@@ -201,7 +201,15 @@ public sealed class TallyApplicationLaunchService
         if (freshLink is null || !freshLink.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
             return new TallyLaunchResult(false, "The linked Tally company changed. Refresh the Client/FY link before opening Tally.");
         link = freshLink;
-        var saved = _foundation.Get(client.Id);
+        ClientTallyLinkRecord? saved;
+        try { saved = _foundation.Get(client.Id); }
+        catch (InvalidDataException ex)
+        {
+            // Never unlink or silently recreate a damaged multi-client profile.
+            return new TallyLaunchResult(false,
+                "Saved Tally launcher profiles need recovery; existing Client/FY links were preserved. " +
+                ex.Message);
+        }
         var companyNumber = NormalizeCompanyNumber(link.CompanyNumber);
         // The old Client/FY link may predate Company Number capture. The separate
         // launcher profile can supply it only when it identifies the SAME linked company.
@@ -214,6 +222,19 @@ public sealed class TallyApplicationLaunchService
             !string.IsNullOrWhiteSpace(saved.ExecutablePath) && File.Exists(saved.ExecutablePath);
         var executable = savedExecutableMatchesLink ? Path.GetFullPath(saved!.ExecutablePath) :
             ResolveExecutablePath(null, link.CompanyName);
+        // Installed versions predating the profile store (or interrupted
+        // JSON writes) can leave the independent launcher metadata missing
+        // while the ORIGINAL TallyClientLinks + exact Client/FY company
+        // folder/key preferences are still correctly saved. Restore only
+        // from those already verified authorities, never by relinking Tally.
+        if (!savedExecutableMatchesLink && executable.Length > 0 &&
+            TryRestoreVerifiedLauncherProfile(client, link, saved, executable))
+        {
+            saved = _foundation.Get(client.Id);
+            savedExecutableMatchesLink = saved is not null &&
+                saved.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) &&
+                saved.ExecutablePath.Equals(executable, StringComparison.OrdinalIgnoreCase);
+        }
         if (companyNumber.Length == 0 &&
             TryBringTallyToFront(link.CompanyName, allowAnyTallyWindow: true))
             return new TallyLaunchResult(true,
@@ -251,6 +272,76 @@ public sealed class TallyApplicationLaunchService
             TallyPrivateCompanySessionService.AnyTallyRunning())
             return exact;
         return LaunchTallyForManualSelection(executable, link.CompanyName, exact.Message);
+    }
+
+    // Recover only the OPTIONAL launcher profile from already-persisted
+    // Client/FY + CompanyKey + numeric company folder evidence. The primary
+    // TallyClientLinks database, preferences and actual Tally company files
+    // are strictly read-only. No company is selected by name or global /LOAD.
+    private bool TryRestoreVerifiedLauncherProfile(
+        ClientProfile client, TallyClientLink link,
+        ClientTallyLinkRecord? recorded, string executable)
+    {
+        if (recorded is not null &&
+            !recorded.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (link.ClientId != client.Id ||
+            (link.FinancialYear.Length > 0 &&
+             !link.FinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase)))
+            return false;
+        try
+        {
+            var preferences = new SqliteClientPreferenceRepository();
+            preferences.Initialize();
+            var key = AutoTallyImportPreference.ExactCompanyKey(preferences, client);
+            if (key.Length == 0 ||
+                !key.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+                return false;
+            var companyFolder = TallyPrivateCompanySessionService.VerifyCompanyFolder(
+                AutoTallyImportPreference.ExactCompanyFolder(preferences, client),
+                link.CompanyNumber);
+            var product = TallyInstalledProductIdentityService.ReadExecutable(executable);
+            if (product is null ||
+                (recorded is not null && recorded.ApplicationProductFamily.Length > 0 &&
+                 !recorded.ApplicationProductFamily.Equals(product.Family, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            // If this Client/FY already has a different saved executable
+            // family, never silently switch ERP9 to Prime or vice versa.
+            _foundation.Save(new ClientTallyLinkRecord
+            {
+                ClientId = client.Id,
+                HostDeviceId = Environment.MachineName,
+                ExecutablePath = Path.GetFullPath(executable),
+                DataPath = Path.GetDirectoryName(companyFolder) ?? string.Empty,
+                CompanyName = link.CompanyName,
+                CompanyGuid = recorded?.CompanyGuid ?? string.Empty,
+                CompanyKey = link.CompanyKey,
+                CompanyNumber = link.CompanyNumber,
+                ApplicationProductFamily = product.Family,
+                ApplicationProductVersion = product.ProductVersion,
+                ApplicationFileVersion = product.FileVersion,
+                ApplicationVersionEvidence = product.Evidence,
+                ApplicationVersionConfirmedUtc = DateTime.UtcNow,
+                LastValidatedUtc = DateTime.UtcNow,
+                Validated = true,
+                BackupState = recorded?.BackupState ?? string.Empty,
+                BackupProductFamily = recorded?.BackupProductFamily ?? string.Empty,
+                BackupClassificationEvidence = recorded?.BackupClassificationEvidence ?? string.Empty
+            });
+            AutomationDiagnosticLog.Write("TALLY-LAUNCH-PROFILE",
+                "Restored missing optional Tally launcher metadata from the existing verified Client/FY company key and exact company folder; no relink, company mutation or data migration.",
+                companyFolder);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                   InvalidDataException or InvalidOperationException or
+                                   ArgumentException)
+        {
+            AutomationDiagnosticLog.Write("TALLY-LAUNCH-PROFILE",
+                "Optional launch profile recovery unavailable; saved Client/FY link left intact: " + ex.Message,
+                client.ClientCode);
+            return false;
+        }
     }
 
     private static bool AllowsManualSelectionFallback(string reason)
