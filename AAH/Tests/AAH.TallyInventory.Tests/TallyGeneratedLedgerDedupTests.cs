@@ -45,6 +45,13 @@ internal static class TallyGeneratedLedgerDedupTests
                     CREATE TABLE BankAccounts(
                         ClientId INTEGER NOT NULL,FinancialYear TEXT NOT NULL,
                         LedgerName TEXT NOT NULL,TallyLedgerMasterId TEXT NOT NULL DEFAULT '');
+                    CREATE TABLE PurchaseRecords(
+                        ClientId INTEGER NOT NULL,FinancialYear TEXT NOT NULL,
+                        PurchaseLedger TEXT NOT NULL,IsUserEdited INTEGER NOT NULL DEFAULT 0,
+                        RecordJson TEXT NOT NULL DEFAULT '');
+                    INSERT INTO PurchaseRecords
+                        (ClientId,FinancialYear,PurchaseLedger,IsUserEdited,RecordJson)
+                        VALUES (901,'2025-26','Input Cgst @9%',0,'original-import-json');
                     """;
                 cmd.ExecuteNonQuery();
             }
@@ -65,6 +72,17 @@ internal static class TallyGeneratedLedgerDedupTests
                 Live("Input CGST @9%", "Duties & Taxes", "351"),
                 Live("Output IGST @ 18%", "Duties & Taxes", "352") };
             repo.Upsert(901,Fy,tally);
+            using (var db = new SqliteConnection(cs))
+            {
+                db.Open();
+                using var query = db.CreateCommand();
+                query.CommandText = "SELECT IsUserEdited,RecordJson FROM PurchaseRecords " +
+                                    "WHERE ClientId=901 AND FinancialYear='2025-26';";
+                using var result = query.ExecuteReader();
+                Check(result.Read() && result.GetInt32(0)==0 &&
+                      result.GetString(1)=="original-import-json",
+                    "case-only GST ledger reconciliation must not rewrite original Purchase records");
+            }
             var now = repo.Get(901,Fy,true).Where(x=>x.Type=="Ledger").ToArray();
             foreach (var pair in tally)
             {
