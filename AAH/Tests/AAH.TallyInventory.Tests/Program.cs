@@ -349,6 +349,7 @@ internal static class Program
         TallyApplicationLauncherContractTests.Run();
         TallySavedLauncherProfilesTests.Run();
         TallyConsolidatedDirectImportTests.Run();
+        TallyConsolidatedNativeIndexFallbackTests.Run();
         Console.WriteLine($"PASS: {_passed}/{_passed} production Tally inventory regressions.");
     }
 }
