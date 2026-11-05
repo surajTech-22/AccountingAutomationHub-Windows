@@ -346,6 +346,7 @@ internal static class Program
         TallyConsolidatedBranchSourceTests.Run();
         TallyConsolidatedXmlTextSafetyTests.Run();
         TallyConsolidatedDiagnosticRoutingTests.Run();
+        TallyApplicationLauncherContractTests.Run();
         Console.WriteLine($"PASS: {_passed}/{_passed} production Tally inventory regressions.");
     }
 }

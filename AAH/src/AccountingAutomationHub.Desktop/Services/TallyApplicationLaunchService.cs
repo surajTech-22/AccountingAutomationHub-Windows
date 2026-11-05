@@ -183,8 +183,12 @@ public sealed class TallyApplicationLaunchService
         if (TallyPrivateCompanySessionService.AnyTallyRunning())
         {
             if (TryBringTallyToFront(link.CompanyName, allowAnyTallyWindow: true))
-                return new TallyLaunchResult(false,
-                    $"Tally is already running. Its window was brought forward, but the linked company '{link.CompanyName}' was NOT verified or selected. Open the linked company in Tally, or close that session normally to enable exact-folder startup.");
+                // The manual logo achieved its requested action: restoring an
+                // existing Tally window. Success must not trigger the shell's
+                // failure MessageBox and immediately steal focus back from Tally.
+                // No unverified company switch or second process is attempted.
+                return new TallyLaunchResult(true,
+                    $"Tally window restored. The linked company '{link.CompanyName}' was NOT automatically selected or verified; select it in the existing Tally window if another company is loaded.");
             return new TallyLaunchResult(false,
                 "Windows reports an existing Tally process, but AAH cannot find its visible main window. " +
                 "No second Tally process was started. Check Task Manager for a hidden or unresponsive " +
@@ -253,7 +257,10 @@ public sealed class TallyApplicationLaunchService
     {
         var prefixes = new[]
         {
-            "Client/FY link mismatch; Tally not started.",
+            // A legacy confirmed Client/FY link may lack only the separate
+            // *launcher* profile. In that case open the installed application
+            // for manual company selection; do not change the saved link.
+            "Verified Client/CompanyKey executable binding is unavailable; exact startup safely refused.",
             "Exact private-data-root startup was verified for TallyPrime only",
             "Exact company path has not been bound",
             "Set the exact linked company folder",
