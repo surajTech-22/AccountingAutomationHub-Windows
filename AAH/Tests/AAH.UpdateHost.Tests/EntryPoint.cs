@@ -838,6 +838,48 @@ internal static class EntryPoint
                !script.Contains("Stop-Process -Name AccountingAutomationHub", StringComparison.Ordinal),
             "Host must bound pre-journal child waits, never kill AAH/Tally or interrupt a file-replacement transaction.");
 
+        // Execute the EXACT embedded PowerShell transaction against an isolated
+        // single-file dummy installation. This catches parser/brace errors in
+        // the new mutation-gate wrapper and proves the original commit path
+        // still replaces files, verifies success and deletes swap journals.
+        var smokeBase = Path.Combine(root, "OriginalPowerShellCommitSmoke");
+        var smokeInstall = Path.Combine(smokeBase, "installed");
+        var smokePublish = Path.Combine(smokeBase, "publish");
+        Directory.CreateDirectory(smokeInstall);
+        Directory.CreateDirectory(smokePublish);
+        File.WriteAllText(Path.Combine(smokeInstall, "AccountingAutomationHub.exe"), "OLD TEST APPLICATION");
+        File.WriteAllText(Path.Combine(smokePublish, "AccountingAutomationHub.exe"), "NEW TEST APPLICATION");
+        static string ShellQuote(string value) => "'" + value.Replace("'", "''") + "'";
+        using (var smoke = Process.Start(new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; . " +
+                ShellQuote(Path.Combine(source.FullName, "ci", "legacy", "TransactionalPublish.ps1")) +
+                "; Install-AAHPublish " + ShellQuote(smokePublish) + " " + ShellQuote(smokeInstall) }
+        }) ?? throw new InvalidOperationException("Could not start isolated transactional PowerShell smoke test."))
+        {
+            var outputTask = smoke.StandardOutput.ReadToEndAsync();
+            var errorTask = smoke.StandardError.ReadToEndAsync();
+            if (!smoke.WaitForExit(15_000))
+            {
+                smoke.Kill(entireProcessTree: true);
+                throw new InvalidOperationException(
+                    "Original PowerShell transaction smoke exceeded 15 seconds on one dummy application file.");
+            }
+            Assert(smoke.ExitCode == 0 &&
+                   outputTask.GetAwaiter().GetResult().Contains(
+                       "Application replacement verified.", StringComparison.Ordinal) &&
+                   File.ReadAllText(Path.Combine(smokeInstall, "AccountingAutomationHub.exe")) ==
+                       "NEW TEST APPLICATION" &&
+                   !Directory.EnumerateDirectories(smokeInstall, ".aah-swap-*").Any(),
+                "Original transactional PowerShell failed its real isolated publish/commit with mutation lock: " +
+                errorTask.GetAwaiter().GetResult());
+        }
+
         var isolated = Path.Combine(root, "PreJournalWatchdog");
         Directory.CreateDirectory(isolated);
         var journalDir = Path.Combine(isolated, ".aah-swap-test");
