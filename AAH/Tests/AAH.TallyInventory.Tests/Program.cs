@@ -62,6 +62,7 @@ internal static class Program
         // changing the independent regression suite's expected test count.
         TallyCompanyMasterScopeTests.Run();
         TallyUnlinkFreshAuthorityTests.Run();
+        TallyStandardHierarchyDedupTests.Run();
         GstinLatestPartyNameTests.Run();
         Console.WriteLine("PASS: GSTIN latest name reuses newest supplier/customer across existing entries.");
         Run("missing recovery excludes verified, deleted and rebound identities", () =>
