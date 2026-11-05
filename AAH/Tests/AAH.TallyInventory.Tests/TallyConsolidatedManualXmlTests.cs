@@ -97,7 +97,7 @@ internal static class TallyConsolidatedManualXmlTests
         Check(method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
               method.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) &&
               method.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
               method.Contains("GetSourceBindingVersionState(", StringComparison.Ordinal) &&
               method.Contains("RequireExistingDefaultCashForBankVouchers(", StringComparison.Ordinal),
               "manual XML must use current source binding and live MASTERID/ALTERID/DRCR/master authority");
@@ -134,12 +134,23 @@ internal static class TallyConsolidatedManualXmlTests
               previousVersionGate > skipNoop && boundAlter > previousVersionGate &&
               !verifiedBoundPath.Contains("if (tallyRepository.IsTallyMasterIdClaimedByAnotherSource(",
                   StringComparison.Ordinal) &&
-              verifiedBoundPath.Contains("live.FullVouchers, state", StringComparison.Ordinal) &&
+              verifiedBoundPath.Contains("boundFull, state", StringComparison.Ordinal) &&
               method.Contains("no XML action", StringComparison.Ordinal) &&
               method.Contains("no claim cleared, rebound or modified", StringComparison.Ordinal),
               "Manual XML verified-bound flow must match original Export: " +
               "exact MASTERID + saved previous full DR/CR/ALTERID then bound " +
               "ALTER, not an extra cross-module ModifyPending veto.");
+
+        // Recheck must never ask Tally for a second whole-FY full voucher
+        // graph. Existing TallyHttpService already month-slices the first
+        // snapshot; final read-only safety uses bounded fresh index calls.
+        Check(method.Contains("var fullByMasterId = live.FullVouchers", StringComparison.Ordinal) &&
+              method.Contains("fullByMasterId.TryGetValue(previous.MasterId", StringComparison.Ordinal) &&
+              method.Contains("previous, boundFull, state", StringComparison.Ordinal) &&
+              method.Contains("while (month <= finalMonth)", StringComparison.Ordinal) &&
+              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              !method.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal),
+              "Manual XML generation must index original full XML once and use bounded monthly final ALTERID rechecks.");
 
         // No manual action may borrow an unverified or missing source binding;
         // the established normal AAH previous-version gate is still required.
@@ -147,7 +158,7 @@ internal static class TallyConsolidatedManualXmlTests
               method.Contains("bound.Length != 1 || !claimedIds.Add(state.MasterId)",
                   StringComparison.Ordinal) &&
               method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
               method.Contains("Manual CREATE denied: source has historical Tally import evidence",
                   StringComparison.Ordinal),
               "Manual XML must keep verified-bound-only ALTER, unique MASTERID, " +

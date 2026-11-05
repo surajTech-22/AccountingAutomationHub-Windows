@@ -105,6 +105,16 @@ public sealed class TallyConsolidatedVoucherImportService(
         var to = new DateTime(startYear + 1, 3, 31);
         var live = await tally.ExportFullCompanySnapshotAsync(
             linked, from, to, cancellationToken).ConfigureAwait(false);
+        // The full FY authority is already collected in bounded monthly slices.
+        // Index its full signed Voucher XML ONCE by destination MASTERID so
+        // verifying each prepared source does not scan all voucher XML again.
+        // Keep duplicate IDs as multiple rows: the existing exact-one check
+        // must still fail closed, never silently choose one.
+        var fullByMasterId = live.FullVouchers
+            .Where(item => item.MasterId.Trim().Length > 0)
+            .GroupBy(item => item.MasterId.Trim(), IgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => (IReadOnlyList<TallyVoucherXmlSnapshot>)group.ToArray(), IgnoreCase);
         if (linked.VoucherCount > 0 && live.Vouchers.Count == 0)
             throw new InvalidOperationException(
                 "Live Tally contains vouchers but no complete full-year identity snapshot; manual XML is blocked.");
@@ -209,6 +219,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                     throw new InvalidOperationException(
                         "Manual XML cannot find one unique bound destination MASTERID for " + anchor);
                 var previous = bound[0];
+                var boundFull = fullByMasterId.TryGetValue(previous.MasterId, out var savedXml)
+                    ? savedXml : Array.Empty<TallyVoucherXmlSnapshot>();
                 // This is the same decision order as the EXISTING automatic
                 // consolidated importer: first prove the source's SAVED
                 // verified content is identical to the FULL live Tally voucher.
@@ -218,7 +230,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // This does NOT release/transfer the other source's binding.
                 if (FullVoucherMatches(
                         new ExpectedVoucher(date, type, number, postings, voucher,
-                            reference, anchor, desiredHash, ""), previous, live.FullVouchers))
+                            reference, anchor, desiredHash, ""), previous, boundFull))
                 {
                     unchanged++;
                     var competingUnchanged = tallyRepository.ReadTallyMasterIdCompetingClaims(
@@ -249,7 +261,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // candidate/duplicate/ownership checks below (no blind CREATE).
                 if (IgnoreCase.Equals(state.VerifiedContentHash, desiredHash) ||
                     !PreviousConsolidatedVersionMatches(
-                        previous, live.FullVouchers, state))
+                        previous, boundFull, state))
                     throw new InvalidOperationException(
                         "Previous saved voucher version, destination MASTERID, ALTERID or signed DR/CR has changed: " +
                         anchor + ". A blind manual ALTER or CREATE is forbidden.");
@@ -312,14 +324,40 @@ public sealed class TallyConsolidatedVoucherImportService(
             create++;
             proofs.Add("CREATE " + anchor + " | no existing AAH source binding or matching live Tally source");
         }
-        // All decisions refer to one exact live Tally state. Confirm Tally
-        // didn't acquire a new MASTERID or ALTERID while we prepared the files.
-        var recheck = await tally.ExportVoucherAuthorityFreshAsync(
-            linked, from, to, cancellationToken).ConfigureAwait(false);
+        // Recheck the ENTIRE FY MASTERID/ALTERID set before authorizing any
+        // importable XML. The source snapshot reader deliberately splits full
+        // Vouchers into month slices: a second whole-FY full Voucher export
+        // bypassed that protection and could hang or exhaust Tally memory.
+        // This recheck only needs a fresh INDEX, never another full XML graph.
+        var recheckedIndex = new List<TallyVoucherIndexRecord>(live.Vouchers.Count);
+        var month = new DateTime(from.Year, from.Month, 1);
+        var finalMonth = new DateTime(to.Year, to.Month, 1);
+        while (month <= finalMonth)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var monthFrom = month < from ? from : month;
+            var endOfMonth = month.AddMonths(1).AddDays(-1);
+            var monthTo = endOfMonth > to ? to : endOfMonth;
+            try
+            {
+                var fresh = await tally.ExportVoucherIndexFreshAsync(
+                    linked, monthFrom, monthTo, cancellationToken).ConfigureAwait(false);
+                recheckedIndex.AddRange(fresh);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    "Final read-only consolidated voucher identity check failed for " +
+                    monthFrom.ToString("yyyy-MM", CultureInfo.InvariantCulture) +
+                    ": " + exception.Message +
+                    ". No manual import XML was authorized.", exception);
+            }
+            month = month.AddMonths(1);
+        }
         var oldIds = live.Vouchers
             .GroupBy(v => v.MasterId, IgnoreCase)
             .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
-        var newIds = recheck.Index
+        var newIds = recheckedIndex
             .GroupBy(v => v.MasterId, IgnoreCase)
             .ToDictionary(g => g.Key, g => g.Single().AlterId, IgnoreCase);
         if (oldIds.Count != newIds.Count ||
