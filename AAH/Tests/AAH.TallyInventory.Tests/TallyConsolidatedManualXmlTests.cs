@@ -248,7 +248,7 @@ internal static class TallyConsolidatedManualXmlTests
               method.Contains("bound.Length != 1 || !claimedIds.Add(state.MasterId)",
                   StringComparison.Ordinal) &&
               method.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
-              method.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
+              method.Contains("RequireUnchangedSynchronizedAuthorityAsync(", StringComparison.Ordinal) &&
               method.Contains("Manual CREATE denied: source has historical Tally import evidence",
                   StringComparison.Ordinal),
               "Manual XML must keep verified-bound-only ALTER, unique MASTERID, " +
