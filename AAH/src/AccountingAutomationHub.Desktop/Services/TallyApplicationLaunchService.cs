@@ -19,6 +19,8 @@ public sealed class TallyApplicationLaunchService
 {
     private readonly TallyLinkFoundationService _foundation = new();
 
+    public void ForgetConfirmedLink(long clientId) => _foundation.Remove(clientId);
+
     public void CaptureConfirmedLink(ClientProfile client, TallyCompanyInfo company, string verifiedDataRoot = "")
     {
         if (client.Id <= 0 || string.IsNullOrWhiteSpace(company.Name))

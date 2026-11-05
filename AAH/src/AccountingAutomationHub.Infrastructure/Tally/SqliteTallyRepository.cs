@@ -27,6 +27,16 @@ public sealed class SqliteTallyRepository
         }.ToString();
     }
 
+    // Explicit database target supports isolated unlink/relink regression
+    // tests without accessing or mutating a user's real AAH profile.
+    public SqliteTallyRepository(string databaseConnectionString)
+    {
+        if (string.IsNullOrWhiteSpace(databaseConnectionString))
+            throw new ArgumentException("A database connection string is required.", nameof(databaseConnectionString));
+        _connectionString = databaseConnectionString;
+        _auditConnectionString = databaseConnectionString;
+    }
+
     public void Initialize() =>
 
         SqliteSchemaInitializationGate.RunOnce(nameof(SqliteTallyRepository), _connectionString, InitializeCore);
@@ -816,15 +826,194 @@ public sealed class SqliteTallyRepository
         }
     }
 
-    public void UnlinkClient(long clientId)
+    /// <summary>
+    /// Unlink an Accounting Client/FY from exactly its confirmed Tally book and
+    /// discard the OLD book's active AAH authority. This never connects to Tally,
+    /// deletes a Tally company object, or deletes source Bank/GST/accounting rows.
+    /// A relink starts with no old full-sync marker, so the existing coordinator
+    /// must acquire a fresh Master/Voucher baseline before another write.
+    /// </summary>
+    public void UnlinkClientAndResetAuthority(long clientId, string financialYear, string expectedCompanyKey)
     {
+        if (clientId <= 0 || string.IsNullOrWhiteSpace(financialYear) ||
+            string.IsNullOrWhiteSpace(expectedCompanyKey))
+            throw new ArgumentException("Unlink requires the exact Accounting Client, FY and linked Tally company.");
+
         using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM TallyClientLinks WHERE ClientId = $ClientId;";
-        command.Parameters.AddWithValue("$ClientId", clientId);
-        command.ExecuteNonQuery();
-        // R4 R9: Accounting unlink never changes independent Audit Tally links.
+        using var transaction = connection.BeginTransaction();
+        var fy = financialYear.Trim();
+        var key = expectedCompanyKey.Trim();
+        string oldName;
+        using (var verify = connection.CreateCommand())
+        {
+            verify.Transaction = transaction;
+            verify.CommandText =
+                "SELECT CompanyKey,CompanyName FROM TallyClientLinks WHERE ClientId=$ClientId LIMIT 1;";
+            verify.Parameters.AddWithValue("$ClientId", clientId);
+            using var reader = verify.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException("This client has no confirmed Tally link to unlink.");
+            if (!reader.GetString(0).Equals(key, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The confirmed Tally link changed; unlink was cancelled.");
+            oldName = reader.GetString(1).Trim();
+        }
+        using (var other = connection.CreateCommand())
+        {
+            other.Transaction = transaction;
+            other.CommandText =
+                "SELECT COUNT(*) FROM TallyClientLinks WHERE CompanyKey=$Key AND ClientId<>$ClientId;";
+            other.Parameters.AddWithValue("$Key", key);
+            other.Parameters.AddWithValue("$ClientId", clientId);
+            if (Convert.ToInt32(other.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture) != 0)
+                throw new InvalidOperationException("Another client owns this Tally book; shared authority cannot be purged.");
+        }
+
+        // AAH installs Banking/Master/Stock storage separately. Older databases
+        // may not contain every optional table, so check each table before SQL.
+        bool TableExists(string table)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$Name LIMIT 1;";
+            command.Parameters.AddWithValue("$Name", table);
+            return command.ExecuteScalar() is not null;
+        }
+        void Run(string table, string sql)
+        {
+            if (!TableExists(table)) return;
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("$ClientId", clientId);
+            command.Parameters.AddWithValue("$Fy", fy);
+            command.Parameters.AddWithValue("$Key", key);
+            command.Parameters.AddWithValue("$Company", oldName);
+            command.Parameters.AddWithValue("$Now", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            command.ExecuteNonQuery();
+        }
+
+        // Unlink invalidates all previous vouchers' active ownership and
+        // imported fingerprints for THIS destination, not an unrelated book.
+        foreach (var table in new[] { "TallySourceBindings", "TallyObjectVersionHistory",
+                 "TallyImportFingerprints", "TallyBankSyncState", "TallyBankStatementLinks" })
+            Run(table, $"DELETE FROM {table} WHERE ClientId=$ClientId AND FinancialYear=$Fy AND CompanyKey=$Key COLLATE NOCASE;");
+        // Full live XML, voucher index and dashboard reports are company/FY
+        // caches, never AAH accounting source. Re-fetch them after relink.
+        foreach (var table in new[] { "TallyVoucherIndex", "TallyVoucherXmlAuthority", "TallyReportAuthority" })
+            Run(table, $"DELETE FROM {table} WHERE CompanyKey=$Key COLLATE NOCASE AND FinancialYear=$Fy;");
+        Run("BankTallyExportLinks",
+            "DELETE FROM BankTallyExportLinks WHERE ClientId=$ClientId AND FinancialYear=$Fy AND CompanyKey=$Key COLLATE NOCASE;");
+        // A pending duplicate delete from the detached company can NEVER be
+        // carried into another Tally book, even when numeric MASTERIDs repeat.
+        Run("BankPendingTallyDuplicateDeletes",
+            "DELETE FROM BankPendingTallyDuplicateDeletes WHERE ClientId=$ClientId AND FinancialYear=$Fy;");
+        // Clear only Tally-derived Bank transfer decisions. Original statement
+        // rows and user-confirmed interbank matches remain unchanged.
+        Run("BankTransactions",
+            """
+            UPDATE BankTransactions
+            SET RecordStatus='Active',
+                MappingStatus=CASE WHEN TRIM(LedgerName)<>'' THEN 'Mapped' ELSE 'Mapping Required' END,
+                MatchId='',MatchedTransactionId=NULL
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy
+              AND RecordStatus='Archived Tally Reconciled'
+              AND (MatchId LIKE 'TALLYBTX|%' OR MatchId LIKE 'TALLYTRF|%');
+            """);
+        Run("BankTransferMatches",
+            """
+            DELETE FROM BankTransferMatches
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy
+              AND (INSTR(UPPER(COALESCE(MatchOrigin,'')),'TALLY')>0
+                   OR TRIM(COALESCE(TallyConversionId,''))<>''
+                   OR MatchId LIKE 'TALLYTRF|%' OR MatchId LIKE 'TALLYBTX|%');
+            """);
+        Run("BankAccounts",
+            """
+            UPDATE BankAccounts
+            SET TallyLedgerMasterId='',TallyLedgerGuid='',TallyLedgerAlterId=0,
+                TallyLedgerVerifiedName=''
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy;
+            """);
+        // Existing user-approved accounting merges retain audit evidence but
+        // can no longer auto-run against the old linked company.
+        Run("PendingTallyMasterMerges",
+            """
+            UPDATE PendingTallyMasterMerges
+            SET Status='Cancelled',LastError='Cancelled by explicit Tally unlink and authority reset',
+                UpdatedUtc=$Now
+            WHERE ClientId=$ClientId AND FinancialYear=$Fy AND CompanyKey=$Key COLLATE NOCASE
+              AND Status IN ('Pending','Needs Action','Watching');
+            """);
+        // Preserve manual/local masters and user-edited records. Only rows
+        // originating from the unlinked Tally book are purged. Edited rows
+        // become local (unbound) AAH masters. The transaction fails closed if
+        // legacy duplicate names prevent an unambiguous local conversion.
+        if (oldName.Length > 0)
+        {
+            Run("Masters",
+                """
+                DELETE FROM Masters
+                WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                  AND Company=$Company COLLATE NOCASE AND IsUserEdited=0
+                  AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
+                """);
+            Run("Masters",
+                """
+                UPDATE Masters
+                SET TallyMasterId='',TallyGuid='',TallyAlterId=0,
+                    Source='Manual',UpdatedUtc=$Now
+                WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                  AND Company=$Company COLLATE NOCASE AND IsUserEdited=1
+                  AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
+                """);
+            // Exact external aliases are imported Tally metadata, not
+            // user-maintained stock mapping rules; discard those from old
+            // book while preserving local alias/mapping decisions.
+            Run("StockItemAliases",
+                """
+                DELETE FROM StockItemAliases
+                WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                  AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
+                """);
+            // Stock IDs used by local invoices and durable Stock Item mappings
+            // must survive unlink. Archive only untouched Tally-derived rows,
+            // clear old Tally identity, and let the next real Master read
+            // verify/reactivate by name and fresh destination MASTERID.
+            Run("StockItems",
+                """
+                UPDATE StockItems
+                SET TallyMasterId='',TallyGuid='',TallyAlterId=0,
+                    IsArchived=CASE WHEN IsUserEdited=0 THEN 1 ELSE IsArchived END,
+                    Source=CASE WHEN IsUserEdited=0 THEN 'Unlinked Tally' ELSE 'Manual' END,
+                    UpdatedUtc=$Now
+                WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                  AND Company=$Company COLLATE NOCASE
+                  AND (INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0
+                       OR TRIM(COALESCE(TallyMasterId,''))<>'');
+                """);
+            foreach (var table in new[] { "StockUnits", "StockSimpleMasters" })
+                Run(table, $"""
+                    UPDATE {table}
+                    SET IsArchived=CASE WHEN IsUserEdited=0 THEN 1 ELSE IsArchived END,
+                        Source=CASE WHEN IsUserEdited=0 THEN 'Unlinked Tally' ELSE 'Manual' END,
+                        UpdatedUtc=$Now
+                    WHERE ClientId=$ClientId AND FinancialYear=$Fy
+                      AND Company=$Company COLLATE NOCASE
+                      AND INSTR(UPPER(COALESCE(Source,'')),'TALLY')>0;
+                    """);
+        }
+        // Finally remove the link, atomically with all old ownership/cache
+        // invalidation. Any SQL constraint/error rolls back the whole reset.
+        Run("TallyClientLinks",
+            "DELETE FROM TallyClientLinks WHERE ClientId=$ClientId AND CompanyKey=$Key COLLATE NOCASE;");
+        transaction.Commit();
+        // Independent Audit links and all real Tally company objects untouched.
     }
+
+    [Obsolete("Use UnlinkClientAndResetAuthority to prevent stale Tally data after relink.")]
+    public void UnlinkClient(long clientId) =>
+        throw new InvalidOperationException("A Tally link must be unlinked with its verified Client/FY/company-scoped authority reset.");
 
     // Fix10: enrich only the existing confirmed link. Never re-link or reset
     // authority/history just because Tally reveals its physical company number.

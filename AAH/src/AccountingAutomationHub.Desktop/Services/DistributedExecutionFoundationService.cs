@@ -707,6 +707,36 @@ public sealed class TallyLinkFoundationService
             File.WriteAllText(_path, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         }
     }
+    /// <summary>
+    /// Retire only one client's old Tally executable/folder/link identity.
+    /// This is local launch metadata, not a Tally company deletion. Never
+    /// rewrite a damaged profile as an empty array during explicit unlink.
+    /// </summary>
+    public void Remove(long clientId)
+    {
+        if (clientId <= 0) return;
+        lock (_gate)
+        {
+            if (!File.Exists(_path)) return;
+            var all = JsonSerializer.Deserialize<List<ClientTallyLinkRecord>>(File.ReadAllText(_path))
+                ?? throw new InvalidDataException("Saved Tally launcher profiles could not be read safely.");
+            if (!all.Any(record => record.ClientId == clientId)) return;
+            var remaining = all.Where(record => record.ClientId != clientId).ToArray();
+            var temporary = _path + ".unlink.tmp";
+            try
+            {
+                File.WriteAllText(temporary,
+                    JsonSerializer.Serialize(remaining, new JsonSerializerOptions { WriteIndented = true }),
+                    new UTF8Encoding(false));
+                File.Move(temporary, _path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        }
+    }
+
     private IReadOnlyList<ClientTallyLinkRecord> ReadAll()
     {
         try { return File.Exists(_path) ? JsonSerializer.Deserialize<List<ClientTallyLinkRecord>>(File.ReadAllText(_path)) ?? [] : []; } catch { return []; }

@@ -798,6 +798,13 @@ public sealed class TallyLiveConnectionCoordinator :
             try
             {
                 if (_disposed) return;
+                // A queued pre-unlink sync may acquire the semaphore only after
+                // the old Client/FY/company authority was cleared. It must not
+                // repopulate the detached Tally book's cache.
+                var currentLink = _repository.GetLinkForClient(client.Id);
+                if (currentLink is null ||
+                    !currentLink.CompanyKey.Equals(company.CompanyKey, StringComparison.OrdinalIgnoreCase))
+                    return;
                 IsConnected = true;
                 ConnectionStatus = "Tally connected • background data sync";
                 await SynchronizeLinkedCompanyAsync(client, company, reason, marker);
@@ -989,23 +996,99 @@ public sealed class TallyLiveConnectionCoordinator :
         LastOperationStatus = "Returned to the confirmed Tally company link.";
     }
 
-    public void UnlinkCurrentClient()
+    /// <summary>
+    /// A user-requested unlink is an authority boundary, not just a link-label
+    /// change. Wait for every existing Tally operation and in-flight XML writer
+    /// before resetting the old company's cached ownership and readbacks.
+    /// </summary>
+    public async Task UnlinkCurrentClientAsync()
     {
-        var client = _clientContext.CurrentClient;
-        if (client is null)
+        var client = _clientContext.CurrentClient
+            ?? throw new InvalidOperationException("Open a client before unlinking its Tally company.");
+        await _tallyOperationGate.WaitAsync();
+        IsBusy = true;
+        try
         {
-            return;
-        }
+            if (_clientContext.CurrentClient?.Id != client.Id ||
+                !_clientContext.CurrentClient.FinancialYear.Equals(
+                    client.FinancialYear, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The active Client/FY changed before Tally unlink.");
 
-        _repository.UnlinkClient(client.Id);
-        _lastErp9CoreMasterScope = string.Empty;
-        _lastErp9CoreMasterFingerprint = string.Empty;
-        _manualSelectionPending = SelectedCompany is not null;
-        LastOperationStatus =
-            $"Tally company link removed from {client.ClientCode}. Existing accounting data and history were retained.";
-        EnrichCompanyLinks();
-        QueueLiveXmlGeneration();
-        Changed?.Invoke(this, EventArgs.Empty);
+            var link = _repository.GetLinkForClient(client.Id)
+                ?? throw new InvalidOperationException("This client no longer has a confirmed Tally link.");
+            Interlocked.Increment(ref _liveXmlGeneration);
+            _liveXmlTimer.Stop();
+            await _liveXmlGate.WaitAsync();
+            try
+            {
+                // Importable XML with embedded old destination MASTERIDs may not
+                // remain available after disconnect. A failure to retire it
+                // aborts the unlink before modifying durable authority.
+                DeleteLiveXmlIfPresent(client, requireDeleted: true);
+                DeleteOldConsolidatedManualXmlIfPresent(client);
+                // The last company's exact physical folder and remembered
+                // launcher profile are not valid for a fresh link. In
+                // particular, Auto Open must not start the old Tally folder.
+                AutoTallyImportPreference.SetExactCompanyKey(
+                    _clientPreferenceRepository, client.Id, client.FinancialYear, string.Empty);
+                AutoTallyImportPreference.SetExactCompanyFolder(
+                    _clientPreferenceRepository, client.Id, client.FinancialYear, string.Empty);
+                _applicationLaunchService.ForgetConfirmedLink(client.Id);
+                _repository.UnlinkClientAndResetAuthority(
+                    client.Id, client.FinancialYear, link.CompanyKey);
+            }
+            finally
+            {
+                _liveXmlGate.Release();
+            }
+
+            // Do not reuse a previously approved stock/master baseline or
+            // Tally change pulse on the next link, including the SAME book.
+            _erp9StockAuthorityVerifiedThisSession.Clear();
+            _lastErp9CoreMasterScope = string.Empty;
+            _lastErp9CoreMasterFingerprint = string.Empty;
+            _lastAvailableLinkedCompanyKey = string.Empty;
+            _lastLiveCompanyFolderScope = string.Empty;
+            _manualSelectionPending = SelectedCompany is not null;
+            LastLiveXmlPath = string.Empty;
+            LastLiveXmlReadyVouchers = 0;
+            LastLiveXmlNewMasters = 0;
+            LiveXmlStatus = "Tally unlinked. Previous linked-company authority cleared.";
+            LastOperationStatus =
+                $"Unlinked {link.CompanyName} from {client.ClientCode}. Old Tally snapshot, " +
+                "source bindings, imported fingerprints and Tally-derived master identities " +
+                "were cleared in AAH. Original accounting and bank statement records " +
+                "and the actual Tally company were not changed. Relink triggers a fresh baseline.";
+            EnrichCompanyLinks();
+        }
+        finally
+        {
+            IsBusy = false;
+            _tallyOperationGate.Release();
+            QueueLiveXmlGeneration();
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private static void DeleteOldConsolidatedManualXmlIfPresent(ClientProfile client)
+    {
+        var safeClient = string.Concat(client.ClientCode.Where(c =>
+            !Path.GetInvalidFileNameChars().Contains(c)));
+        var folder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads", "AAH Consolidated Tally",
+            safeClient + "-" + client.FinancialYear);
+        // Only generated files for THIS Client/FY. Never remove diagnostics,
+        // original branch books or the user's accounting records.
+        foreach (var file in new[] {
+                     "AAH_CONSOLIDATED_MASTERS.xml",
+                     "AAH_CONSOLIDATED_VOUCHERS.xml",
+                     "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt",
+                     "AAH_CONSOLIDATED_SOURCE_PREVIEW_DO_NOT_IMPORT.txt" })
+        {
+            var path = Path.Combine(folder, file);
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     public async Task<TallyMasterMergeUpdateResult> PrepareMasterMergeTargetAsync(
