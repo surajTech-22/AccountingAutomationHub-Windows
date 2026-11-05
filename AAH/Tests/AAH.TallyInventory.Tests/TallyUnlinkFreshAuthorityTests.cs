@@ -64,6 +64,11 @@ internal static class TallyUnlinkFreshAuthorityTests
                     TallyLedgerVerifiedName TEXT);
                 CREATE TABLE BankTallyExportLinks(ClientId INTEGER,FinancialYear TEXT,CompanyKey TEXT,TallyMasterId TEXT);
                 CREATE TABLE BankPendingTallyDuplicateDeletes(ClientId INTEGER,FinancialYear TEXT,KnownTallyMasterId TEXT);
+                CREATE TABLE BankTransactions(ClientId INTEGER,FinancialYear TEXT,RecordStatus TEXT,
+                    MappingStatus TEXT,LedgerName TEXT,MatchId TEXT,MatchedTransactionId INTEGER);
+                CREATE TABLE BankTransferMatches(ClientId INTEGER,FinancialYear TEXT,MatchOrigin TEXT,
+                    TallyConversionId TEXT,MatchId TEXT);
+                CREATE TABLE StockItemAliases(ClientId INTEGER,FinancialYear TEXT,Source TEXT);
                 CREATE TABLE PendingTallyMasterMerges(ClientId INTEGER,FinancialYear TEXT,CompanyKey TEXT,
                     Status TEXT,LastError TEXT,UpdatedUtc TEXT);
 
@@ -87,6 +92,16 @@ internal static class TallyUnlinkFreshAuthorityTests
                     (902,'2025-26','COMPANY-B','354');
                 INSERT INTO BankPendingTallyDuplicateDeletes VALUES
                     (901,'2025-26','354'),(902,'2025-26','354');
+                INSERT INTO BankTransactions VALUES
+                    (901,'2025-26','Archived Tally Reconciled','Mapped','HDFC Bank','TALLYTRF|OLD',NULL),
+                    (901,'2025-26','Active','Mapped','Local bank','LOCAL-USER-MATCH',25),
+                    (902,'2025-26','Archived Tally Reconciled','Mapped','Other bank','TALLYTRF|OTHER',NULL);
+                INSERT INTO BankTransferMatches VALUES
+                    (901,'2025-26','Tally Converted Bank Transaction','TALLY-OLD','TALLYTRF|OLD'),
+                    (901,'2025-26','Bank Statement','','LOCAL-USER-MATCH'),
+                    (902,'2025-26','Tally Converted Bank Transaction','TALLY-OTHER','TALLYTRF|OTHER');
+                INSERT INTO StockItemAliases VALUES
+                    (901,'2025-26','Live Tally'),(901,'2025-26','Manual'),(902,'2025-26','Live Tally');
                 INSERT INTO PendingTallyMasterMerges VALUES
                     (901,'2025-26','COMPANY-A','Watching','',''),
                     (902,'2025-26','COMPANY-B','Watching','','');
@@ -177,6 +192,19 @@ internal static class TallyUnlinkFreshAuthorityTests
                 "other client's Bank ledger changed");
             Check(Count("SELECT COUNT(*) FROM BankPendingTallyDuplicateDeletes WHERE ClientId=901")==0,
                 "pending old Tally delete retained");
+            Check(Count("SELECT COUNT(*) FROM BankTransactions WHERE ClientId=901 AND MatchId='' AND RecordStatus='Active'")==1,
+                "old Tally-reconciled bank statement was not reactivated for fresh live verification");
+            Check(Count("SELECT COUNT(*) FROM BankTransactions WHERE ClientId=901 AND MatchId='LOCAL-USER-MATCH'")==1,
+                "user-owned bank transfer was changed");
+            Check(Count("SELECT COUNT(*) FROM BankTransferMatches WHERE ClientId=901 AND MatchOrigin='Tally Converted Bank Transaction'")==0,
+                "old Tally-derived transfer match still exists");
+            Check(Count("SELECT COUNT(*) FROM BankTransferMatches WHERE ClientId=901 AND MatchOrigin='Bank Statement'")==1,
+                "local bank statement match was removed");
+            Check(Count("SELECT COUNT(*) FROM BankTransferMatches WHERE ClientId=902")==1,
+                "another book's transfer evidence was removed");
+            Check(Count("SELECT COUNT(*) FROM StockItemAliases WHERE ClientId=901 AND Source='Live Tally'")==0 &&
+                  Count("SELECT COUNT(*) FROM StockItemAliases WHERE ClientId=901 AND Source='Manual'")==1,
+                "Tally aliases were not cleared separately from user aliases");
             Check(Count("SELECT COUNT(*) FROM PendingTallyMasterMerges WHERE ClientId=901 AND Status='Cancelled'")==1,
                 "old Tally master merge can still execute");
             Check(repo.GetBankSyncState(901, "2025-26", "COMPANY-A") is null,
