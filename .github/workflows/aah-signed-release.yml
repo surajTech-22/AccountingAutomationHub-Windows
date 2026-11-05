@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.613)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.614)"
         required: true
-        default: "v4.0.0.613"
+        default: "v4.0.0.614"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.613: branch Ledger Master repaint guard and consolidated-only verified previous->desired ALTER; no individual-client changes.
+# v4.0.0.614: bounded FY index recheck and responsive consolidated Generate XML, preserving original Tally ALTER writer.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.613]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.614]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.613' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.614' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -290,7 +290,7 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.613: Fix branch-only Ledger Master repeated grid/tree refresh by suppressing identical Masters snapshot repaint while retaining real identity, ALTERID and usage changes. Repair existing bound voucher Previous->Desired ALTER eligibility for changed AAH ledger postings in individual clients, using same saved MASTERID and verified positive ALTERID instead of a Journal-only serialization rebase. Consolidated manual XML and automatic importer now share the saved previous bound voucher verification, accept only self-consistent legacy request fingerprint drift when original MASTERID and previously verified ALTERID are unchanged and full signed Tally readback matches the live index, and store the actual verified destination readback hash/version after CREATE/ALTER. The existing individual Bank Voucher importer also reconciles changed previous ledger-MASTERID serialization only when its own last verified Tally voucher MASTERID/ALTERID remain unchanged, with the same final pre-ALTER guard and no change to independent Bank Master creation. No new unbound CREATE or voucher reposting; the existing Tally ALTER XML writers and original branch DR/CR remain unchanged. Real Tally ledger master renaming remains a distinct explicit operation and is not inferred from changed transaction allocations. Tests include original CL019 bank voucher, external ALTERID conflicts, mismatched self-proof, strict full DR/CR readback, and source preservation. Release requires exact-SHA Windows and full regression gates."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.614: Fix Generate Consolidated XML hangs by replacing the second enormous full-FY detailed voucher export with bounded monthly fresh voucher INDEX rechecks, preserving full-year MASTERID/ALTERID identity and duplicate protection. Index the original complete signed voucher XML by MASTERID once instead of repeatedly scanning all snapshots for every source. Keep verified Previous->Desired ALTER gate and full signed DR/CR checks, preserve branch GST/source postings, and do not permit blind CREATE or any Tally POST during Generate. Move the original CPU-only branch XML builder and optional voucher-type analysis off the WPF UI thread, and eliminate a duplicate full Dashboard voucher/month-tile repaint during one Generate. A failed final recheck now reports its exact month. Original voucher import and bank/ledger procedures unchanged; CI must pass Windows and all-components tests at the release SHA."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.613: Fix branch-only Ledger Master repeated grid/tree refresh by suppressing identical Masters snapshot repaint while retaining real identity, ALTERID and usage changes. Repair existing bound voucher Previous->Desired ALTER eligibility for changed AAH ledger postings in individual clients, using same saved MASTERID and verified positive ALTERID instead of a Journal-only serialization rebase. Consolidated manual XML and automatic importer now share the saved previous bound voucher verification, accept only self-consistent legacy request fingerprint drift when original MASTERID and previously verified ALTERID are unchanged and full signed Tally readback matches the live index, and store the actual verified destination readback hash/version after CREATE/ALTER. The existing individual Bank Voucher importer also reconciles changed previous ledger-MASTERID serialization only when its own last verified Tally voucher MASTERID/ALTERID remain unchanged, with the same final pre-ALTER guard and no change to independent Bank Master creation. No new unbound CREATE or voucher reposting; the existing Tally ALTER XML writers and original branch DR/CR remain unchanged. Real Tally ledger master renaming remains a distinct explicit operation and is not inferred from changed transaction allocations. Tests include original CL019 bank voucher, external ALTERID conflicts, mismatched self-proof, strict full DR/CR readback, and source preservation. Release requires exact-SHA Windows and full regression gates."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.614: Fix Generate Consolidated XML hangs by replacing the second enormous full-FY detailed voucher export with bounded monthly fresh voucher INDEX rechecks, preserving full-year MASTERID/ALTERID identity and duplicate protection. Index the original complete signed voucher XML by MASTERID once instead of repeatedly scanning all snapshots for every source. Keep verified Previous->Desired ALTER gate and full signed DR/CR checks, preserve branch GST/source postings, and do not permit blind CREATE or any Tally POST during Generate. Move the original CPU-only branch XML builder and optional voucher-type analysis off the WPF UI thread, and eliminate a duplicate full Dashboard voucher/month-tile repaint during one Generate. A failed final recheck now reports its exact month. Original voucher import and bank/ledger procedures unchanged; CI must pass Windows and all-components tests at the release SHA."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or

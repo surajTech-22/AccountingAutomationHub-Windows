@@ -2624,12 +2624,17 @@ public sealed class MainWindowViewModel :
             branchSourceFingerprints,
             child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
         var usedTypes = separateTypes
-            ? TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(branchSources)
+            ? await Task.Run(() =>
+                TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(branchSources))
             : null;
         var plan = await _consolidatedMasterImporter.PreviewPlanAsync(
             link, company, identities, separateTypes, separateCash,
             accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes);
-        var result = TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources);
+        // Existing CPU-only XML consolidation can involve hundreds of branch
+        // voucher objects. Keep WPF responsive while the unchanged builder
+        // parses and assembles the original accounting (never recalculating it).
+        var result = await Task.Run(() =>
+            TallyConsolidatedPreparedXmlBuilder.Build(plan, branchSources));
 
         var destination = manualDirectory;
         var sourcePreviewPath = Path.Combine(destination,
@@ -2721,12 +2726,9 @@ public sealed class MainWindowViewModel :
                 manualReadyCreates: manual?.ReadyCreates,
                 manualReadyAlters: manual?.ReadyAlters,
                 manualAlreadyIdentical: manual?.UnchangedVouchers);
-        // Original branch-prepared XML is authoritative for the numeric
-        // Tally selection projection. The old parent 677-row summary is not.
-        _dashboardViewModel.ApplyConsolidatedPreparedVoucherDisplay(
-            parentId, financialYear, result.VouchersXml,
-            voucherTypeParents: result.VoucherTypeBaseByDestination,
-            configuredBranchNames: configured.Select(branch => branch.Name).ToArray());
+        // Already applied the original prepared voucher projection before
+        // the read-only manual materializer. Rebuilding the Dashboard month
+        // tiles AGAIN here freezes WPF for no accounting change.
         _lastConsolidatedDisplayPreviewToken = string.Empty;
         return result with
         {
