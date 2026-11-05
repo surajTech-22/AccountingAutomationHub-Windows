@@ -315,17 +315,35 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
         }
     }
 
-    private void Unlink()
+    private async void Unlink()
     {
         if (System.Windows.MessageBox.Show(
-                "Unlink this client from its Tally company? AAH accounting data and previous Tally audit history are retained.",
-                "Unlink Tally company", System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Question, System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes)
+                "Unlink this client from its Tally company?\n\n" +
+                "AAH will clear the old company's imported Tally vouchers, live Master/Stock " +
+                "authority, source bindings, readbacks, version checkpoints, and generated " +
+                "Tally import XML for this Client/FY. Relinking (even to the same company) " +
+                "will perform a fresh Tally synchronization.\n\n" +
+                "Your AAH Bank statements, GST/accounting records and original Tally " +
+                "company will NOT be deleted. Unverified old voucher ownership will " +
+                "not authorize a duplicate CREATE or blind ALTER after relink.\n\nContinue?",
+                "Unlink and clear previous Tally data",
+                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes)
             return;
-        _coordinator.UnlinkCurrentClient();
-        SyncCoordinatorPresentation(includeOperation: true);
-        RefreshLocal();
-        StatusText = "Tally company link removed for the selected client.";
+        try
+        {
+            StatusText = "Clearing the previous linked Tally company's AAH authority…";
+            await _coordinator.UnlinkCurrentClientAsync();
+            SyncCoordinatorPresentation(includeOperation: true);
+            RefreshLocal();
+            StatusText = "Previous Tally data cleared for this Client/FY. Select and confirm a Tally company to read fresh authority.";
+        }
+        catch (Exception exception)
+        {
+            SyncCoordinatorPresentation(includeOperation: true);
+            RefreshLocal();
+            StatusText = "Tally unlink was not completed: " + exception.Message;
+        }
     }
 
     private async Task ReimportSelectedAsync()
