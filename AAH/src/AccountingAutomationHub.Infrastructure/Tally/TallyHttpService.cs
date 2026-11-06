@@ -4397,7 +4397,10 @@ public sealed class TallyHttpService : IDisposable
         return raw?.Value ?? string.Empty;
     }
 
-    private static IReadOnlyList<TallyLedgerPostingRecord> ReadVoucherLedgerPostings(XElement voucher)
+    // Reuse the normal Tally object reader when consolidated materializes the
+    // already-synchronized full Voucher XML alongside its SQLite index.
+    // Parsing and signed DR/CR rules must stay identical across both modules.
+    internal static IReadOnlyList<TallyLedgerPostingRecord> ReadVoucherLedgerPostings(XElement voucher)
     {
         var result = new List<TallyLedgerPostingRecord>();
         var sequence = 0;
