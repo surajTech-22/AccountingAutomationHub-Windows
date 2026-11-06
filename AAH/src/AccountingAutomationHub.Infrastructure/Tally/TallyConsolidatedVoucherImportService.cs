@@ -680,7 +680,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                     ". Exact destination MASTERID and DR/CR readback still differ. " +
                     "No voucher was resent, changed or deleted.");
             var confirmed = matches[0];
-            var confirmedVersion = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
+            _ = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 expected.SourceAnchor, expected.SourceAnchor,
@@ -1412,7 +1412,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                         "AcceptedAwaitingVerification prevents a second ALTER/CREATE.");
 
                 var confirmedAlter = verifiedAlter[0];
-                var alterReadbackVersion = RequireVerifiedLiveConsolidatedVersion(confirmedAlter, afterAlter.Full);
+                _ = RequireVerifiedLiveConsolidatedVersion(confirmedAlter, afterAlter.Full);
                 tallyRepository.ConfirmSourceBindingVersion(
                     link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                     expected.SourceAnchor, expected.SourceAnchor,
