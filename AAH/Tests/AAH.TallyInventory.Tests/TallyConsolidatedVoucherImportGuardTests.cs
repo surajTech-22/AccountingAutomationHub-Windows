@@ -117,6 +117,143 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // Another CL019 regression: 645 normal synchronized Voucher objects
+        // had full signed XML, but the SQLite index did not persist the
+        // individual posting objects. Exercise the EXACT normal Tally reader
+        // for every row (including ERP9-compatible nonstandard entry tags).
+        // No private customer books or diagnostic data are stored in CI.
+        var oldBankDate = new DateTime(2025, 5, 31);
+        var oldBankReference = "BANK-TRANSACTION-001";
+        var oldBankNarration = "ORIGINAL PAYMENT";
+        var oldBankXml = """
+            <VOUCHER>
+              <DATE>20250531</DATE>
+              <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+              <REFERENCE>BANK-TRANSACTION-001</REFERENCE>
+              <PARTYLEDGERNAME></PARTYLEDGERNAME>
+              <NARRATION>ORIGINAL PAYMENT</NARRATION>
+              <NATIVELEDGER.LIST>
+                <LEDGERNAME>Original Supplier</LEDGERNAME>
+                <AMOUNT>-40000.00</AMOUNT><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              </NATIVELEDGER.LIST>
+              <NATIVELEDGER.LIST>
+                <LEDGERNAME>Bank Account</LEDGERNAME>
+                <AMOUNT>40000.00</AMOUNT><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              </NATIVELEDGER.LIST>
+              <NATIVELEDGER.LIST>
+                <LEDGERNAME>Ignored Zero Line</LEDGERNAME>
+                <AMOUNT>0.00</AMOUNT>
+              </NATIVELEDGER.LIST>
+            </VOUCHER>
+            """;
+        var nativeDrcr = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "ReadNormalTallySignedPostings",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Consolidated did not link the original normal Tally DR/CR reader.");
+        var oldBankNative = (IReadOnlyList<(string Name, decimal Amount)>)nativeDrcr.Invoke(null,
+            [System.Xml.Linq.XElement.Parse(oldBankXml)])!;
+        if (oldBankNative.Count != 2 ||
+            oldBankNative[0] != ("Original Supplier", -40000m) ||
+            oldBankNative[1] != ("Bank Account", 40000m))
+            throw new InvalidOperationException(
+                "Original normal Tally signed DR/CR parser did not accept ERP9 Ledger wrapper or ignored zero posting.");
+        var oldBankGuid = "9cd81761-ef4a-4a10-b707-111111111111-00000167";
+        var oldBankIndex = new List<TallyVoucherIndexRecord>(645);
+        var oldBankFull = new List<TallyVoucherXmlSnapshot>(645);
+        for (var i = 1; i <= 645; i++)
+        {
+            oldBankIndex.Add(new TallyVoucherIndexRecord {
+                MasterId = i.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                AlterId = "382", Guid = oldBankGuid,
+                VoucherDate = oldBankDate, VoucherType = "Payment",
+                Reference = oldBankReference, VoucherNumber = i.ToString(),
+                PartyLedger = "", Narration = oldBankNarration,
+                DebitLedgers = "Original Supplier", CreditLedgers = "Bank Account",
+                Amount = 40000m, LedgerPostings = Array.Empty<TallyLedgerPostingRecord>()
+            });
+            oldBankFull.Add(new TallyVoucherXmlSnapshot(
+                i.ToString(), oldBankGuid, "Payment", oldBankDate, oldBankXml)
+                { AlterId = "382" });
+        }
+        var hydrateAll = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "HydrateSynchronizedVoucherPostings",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original synchronized FY full XML materializer missing.");
+        var materialized = (IReadOnlyList<TallyVoucherIndexRecord>)hydrateAll.Invoke(null,
+            [oldBankIndex, oldBankFull])!;
+        if (materialized.Count != 645 ||
+            materialized.Any(v => v.LedgerPostings.Count != 2))
+            throw new InvalidOperationException(
+                "Full 645-Voucher synchronized DR/CR batch was not populated before consolidated matching.");
+        var oldSignedBank = "Bank Account:40000.00|Original Supplier:-40000.00";
+        var oldHashBank = TallyVoucherFingerprint.BuildContentHash(
+            oldBankDate, "Payment", oldBankReference, "",
+            40000m, oldBankNarration + "|" + oldSignedBank);
+        var oldVersionBank = "CONSOLIDATED|20250531|Payment|" + oldBankReference +
+            "|" + oldSignedBank + "|" + oldHashBank;
+        var boundBank = new TallySourceBindingVersionState {
+            State = "Verified", MasterId = "359", Guid = oldBankGuid,
+            VerifiedContentHash = oldHashBank,
+            VerifiedVersion = oldVersionBank, LastVerifiedAlterId = 382
+        };
+        var knownIndex = new TallyVoucherIndexRecord {
+            MasterId = "359", AlterId = "382", Guid = oldBankGuid,
+            VoucherDate = oldBankDate, VoucherType = "Payment", VoucherNumber = "2",
+            Reference = oldBankReference, PartyLedger = "", Narration = oldBankNarration,
+            DebitLedgers = "Original Supplier", CreditLedgers = "Bank Account",
+            Amount = 40000m, LedgerPostings = materialized[0].LedgerPostings
+        };
+        var knownFull = new[] {
+            new TallyVoucherXmlSnapshot(
+                "359", oldBankGuid, "Payment", oldBankDate, oldBankXml)
+                { AlterId = "382" }
+        };
+        var oldProof = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "PreviousConsolidatedVersionMatches",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original previous-voucher proof missing.");
+        bool ProvesOld() => (bool)oldProof.Invoke(null,
+            [knownIndex, knownFull, boundBank])!;
+        if (!ProvesOld()) throw new InvalidOperationException(
+            "CL019 old full DRCR could not verify same 359/382 through the normal native Tally ledger parser.");
+        boundBank.LastVerifiedAlterId = 383;
+        if (ProvesOld()) throw new InvalidOperationException(
+            "Previous signed DRCR proof ignored a different native Tally ALTERID.");
+        boundBank.LastVerifiedAlterId = 382;
+        boundBank.Guid = "different-tally-book";
+        if (ProvesOld()) throw new InvalidOperationException(
+            "Previous signed DRCR proof accepted different destination Voucher GUID.");
+        boundBank.Guid = oldBankGuid;
+        var changedDesiredBankHash = TallyVoucherFingerprint.BuildContentHash(
+            oldBankDate, "Payment", oldBankReference, "", 40000m,
+            oldBankNarration + "|Bank Account:40000.00|Renamed Supplier:-40000.00");
+        if (changedDesiredBankHash.Equals(oldHashBank, StringComparison.OrdinalIgnoreCase) ||
+            !ProvesOld())
+            throw new InvalidOperationException(
+                "A new accounting Ledger did not retain original bound Previous->Desired ALTER authority.");
+        var sourceCode = File.ReadAllText(Path.Combine(
+            sourceRoot!.FullName, "AAH", "src",
+            "AccountingAutomationHub.Infrastructure", "Tally",
+            "TallyConsolidatedVoucherImportService.cs"));
+        if (!sourceCode.Contains("var preflightBoundConflicts = new List<string>()", StringComparison.Ordinal) ||
+            !sourceCode.Contains("preflightBoundConflicts.Add(", StringComparison.Ordinal) ||
+            !sourceCode.Contains("if (preflightBoundConflicts.Count > 0)", StringComparison.Ordinal) ||
+            !sourceCode.Contains("No Tally Voucher CREATE or ALTER was sent.", StringComparison.Ordinal) ||
+            !sourceCode.Contains("expected.ContentHash, expected.DesiredVersion,", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "645-voucher pre-write conflict audit or canonical source hash persistence missing.");
+        Console.WriteLine(
+            "PASS: original native Tally DRCR for 645 Vouchers, exact old 359/382 " +
+            "Previous->Desired proof, zero-value/wrapper tolerance, conflicting ALT/GUID block, " +
+            "all-bound pre-write classification and canonical AAH source hash persistence.");
+
+
         // CL019 2026-11-06 v621: NORMAL Tally synchronization persists the
         // index without individual LedgerPostings and stores complete XML in
         // a separate authority table. Consolidated MUST join both by exact
