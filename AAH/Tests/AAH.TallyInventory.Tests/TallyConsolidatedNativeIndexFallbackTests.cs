@@ -71,6 +71,33 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
             "changed voucher content hash with same ALTERID must be rejected");
         Check(Rejects(proof!, cached, exact, 671),
             "saved maximum ALTERID older than a live voucher must fail");
+        // Individual export reads the full native Voucher object. A slim
+        // Tally TDL index may serialize a display field differently despite
+        // the SAME native MASTERID/GUID/ALTERID. Such a representation drift
+        // must be verified against the original native source, not treated
+        // as proof that the user changed the voucher.
+        var months = typeof(TallyConsolidatedPreImportAuthorityWrapper)
+            .GetMethod("FindNativeProjectionRecheckMonths",
+                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+        Check(months is not null, "native individual-voucher projection check is missing");
+        IReadOnlyList<DateTime> RecheckMonths(IReadOnlyList<TallyVoucherIndexRecord> live) =>
+            (IReadOnlyList<DateTime>)months!.Invoke(null, [cached, live, 672L])!;
+        Check(RecheckMonths([Record("35", "670", "THIN-TDL-REPRESENTATION"),
+                             Record("36", "672", "HASH-B")]).Count == 1,
+            "same MASTERID/ALTERID projection drift should be rechecked using native full voucher");
+        Check(RecheckMonths(exact).Count == 0,
+            "identical voucher index must not trigger expensive native recheck");
+        Check(RecheckMonths([Record("35", "671", "THIN-TDL-REPRESENTATION"),
+                             Record("36", "672", "HASH-B")]).Count == 0,
+            "changed live ALTERID must NEVER receive a projection exception");
+        Check(RecheckMonths([Record("37", "670", "THIN-TDL-REPRESENTATION"),
+                             Record("36", "672", "HASH-B")]).Count == 0,
+            "changed MASTERID must NEVER receive a projection exception");
+        Check(Rejects(proof!, cached,
+                [Record("35", "670", "REAL-LIVE-POSTING-CHANGE"),
+                 Record("36", "672", "HASH-B")], 672),
+            "a different native full Voucher content hash must still fail closed");
+        Console.WriteLine("PASS: consolidated thin-index representation differences are rechecked ONLY through individual native Voucher authority; changed native content/ALTERID remains blocked.");
         Console.WriteLine("PASS: actual consolidated wrapper reuses cached ALTERID only when native live MASTERID/ALTERID and voucher identities match.");
     }
 }
