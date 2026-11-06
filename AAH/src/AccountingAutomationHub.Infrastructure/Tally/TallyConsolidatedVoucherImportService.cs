@@ -119,19 +119,115 @@ public sealed class TallyConsolidatedVoucherImportService(
             throw new InvalidOperationException(
                 "Tally synchronized authority changed during consolidated preparation. Retry after the normal refresh.");
 
+        // Tally's NORMAL FY synchronization saved the signed Voucher XML and
+        // its index in two SQLite tables. The persisted index intentionally
+        // does not serialize LedgerPostings. Rebuild those missing DR/CR rows
+        // from the SAME synchronized full XML (no new Tally request, no
+        // mutation), using the ORIGINAL normal Tally Ledger parser.
+        var completeIndex = HydrateSynchronizedVoucherPostings(index, full);
+
         return (new TallyFullCompanySnapshot
         {
             CompanyKey = link.CompanyKey,
             FinancialYear = financialYear,
             FromDate = from,
             ToDate = to,
-            Vouchers = index,
+            Vouchers = completeIndex,
             FullVouchers = full,
             DeclaredVoucherCount = index.Count,
             AuthorityAlterId = state.LastAlterId,
             CapturedUtc = state.LastIncrementalSyncUtc > state.LastFullSyncUtc
                 ? state.LastIncrementalSyncUtc : state.LastFullSyncUtc
         }, marker);
+    }
+
+    /// <summary>
+    /// Match the individual import's signed Ledger Entry object projection,
+    /// but use only complete full Voucher XML ALREADY captured by the normal
+    /// Tally synchronization. A SQLite index record has no LedgerPostings
+    /// column: without this hydration, 645 existing vouchers can all look
+    /// different even when no AAH/Tally voucher changed.
+    /// </summary>
+    internal static IReadOnlyList<TallyVoucherIndexRecord> HydrateSynchronizedVoucherPostings(
+        IReadOnlyList<TallyVoucherIndexRecord> index,
+        IReadOnlyList<TallyVoucherXmlSnapshot> full)
+    {
+        if (index.Count != full.Count)
+            throw new InvalidOperationException(
+                "Normal Tally index and synchronized full Voucher XML have different counts. No consolidated CREATE/ALTER.");
+        var byId = new Dictionary<string, TallyVoucherXmlSnapshot>(IgnoreCase);
+        foreach (var snapshot in full)
+        {
+            if (string.IsNullOrWhiteSpace(snapshot.MasterId) ||
+                !byId.TryAdd(snapshot.MasterId.Trim(), snapshot))
+                throw new InvalidOperationException(
+                    "Normal Tally full Voucher XML has missing or duplicate MASTERIDs. No consolidated CREATE/ALTER.");
+        }
+        var seen = new HashSet<string>(IgnoreCase);
+        var result = new List<TallyVoucherIndexRecord>(index.Count);
+        foreach (var saved in index)
+        {
+            var id = saved.MasterId.Trim();
+            if (id.Length == 0 || !seen.Add(id) ||
+                !byId.TryGetValue(id, out var source) ||
+                string.IsNullOrWhiteSpace(source.OriginalXml) ||
+                !IgnoreCase.Equals(source.AlterId.Trim(), saved.AlterId.Trim()) ||
+                (saved.Guid.Trim().Length > 0 && source.Guid.Trim().Length > 0 &&
+                 !IgnoreCase.Equals(source.Guid.Trim(), saved.Guid.Trim())))
+                throw new InvalidOperationException(
+                    "Normal synchronized Voucher MASTERID/ALTERID/GUID authority is incomplete for " +
+                    id + ". No consolidated CREATE/ALTER.");
+
+            var document = TallyConsolidatedXmlTextSafety.ParseDocument(
+                source.OriginalXml, "normal synchronized Voucher full DR/CR");
+            var voucher = document.Root?.DescendantsAndSelf()
+                .FirstOrDefault(element => Is(element, "VOUCHER"));
+            if (voucher is null)
+                throw new InvalidOperationException(
+                    "Normal synchronized full Voucher XML has no Voucher object for MASTERID " + id + ".");
+            var xmlMasterId = Value(voucher, "MASTERID");
+            var xmlAlterId = Value(voucher, "ALTERID");
+            if ((xmlMasterId.Length > 0 && !IgnoreCase.Equals(xmlMasterId, id)) ||
+                (xmlAlterId.Length > 0 &&
+                 !IgnoreCase.Equals(xmlAlterId, saved.AlterId.Trim())))
+                throw new InvalidOperationException(
+                    "Normal synchronized full Voucher XML contains mismatching native MASTERID/ALTERID for " +
+                    id + ". No consolidated CREATE/ALTER.");
+
+            var posts = TallyHttpService.ReadVoucherLedgerPostings(voucher);
+            if (posts.Count == 0 &&
+                (saved.DebitLedgers.Length > 0 || saved.CreditLedgers.Length > 0 ||
+                 saved.Amount != 0m))
+                throw new InvalidOperationException(
+                    "Normal synchronized full Voucher XML has missing signed DR/CR for MASTERID " +
+                    id + ". No consolidated CREATE/ALTER.");
+            saved.LedgerPostings = posts;
+            result.Add(saved);
+        }
+        return result;
+    }
+
+    // Previous->Desired rule from the original individual exporter:
+    // identity + same last verified ALTERID proves the destination has not
+    // been altered. The original saved SOURCE fingerprint must ALSO match
+    // today's prepared source before classifying it unchanged. Same
+    // MASTERID/ALTERID alone is permission to inspect old DR/CR for ALTER,
+    // never permission to ignore a newly changed AAH ledger or amount.
+    internal static bool IsVerifiedUnchangedBoundSource(
+        TallySourceBindingVersionState saved,
+        TallyVoucherIndexRecord live, string preparedSourceHash)
+    {
+        return saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+               saved.MasterId.Trim().Length > 0 &&
+               IgnoreCase.Equals(saved.MasterId.Trim(), live.MasterId.Trim()) &&
+               saved.VerifiedContentHash.Length > 0 &&
+               IgnoreCase.Equals(saved.VerifiedContentHash, preparedSourceHash) &&
+               saved.LastVerifiedAlterId > 0 &&
+               long.TryParse(live.AlterId.Trim(), NumberStyles.Integer,
+                   CultureInfo.InvariantCulture, out var actualAlter) &&
+               actualAlter == saved.LastVerifiedAlterId &&
+               (saved.Guid.Trim().Length == 0 ||
+                IgnoreCase.Equals(saved.Guid.Trim(), live.Guid.Trim()));
     }
 
     private static void RequireMatchingSynchronizedMarker(
@@ -808,11 +904,32 @@ public sealed class TallyConsolidatedVoucherImportService(
                         " lost its unique destination MASTERID " + state.MasterId +
                         ". Existing restore/rebind safety is required; no CREATE.");
                 var liveBound = bound[0];
-                if (FullVoucherMatches(planned, liveBound, before.FullVouchers))
+                // Identical to normal individual export's already-verified
+                // no-op gate: same saved SOURCE hash + bound MASTERID +
+                // positive last-verified ALTERID + native GUID. Tally's FY
+                // full signed DR/CR is available for ALL vouchers above, but
+                // this unchanged source does not need a second comparison.
+                if (IsVerifiedUnchangedBoundSource(state, liveBound, planned.ContentHash))
                 {
                     skipped.Add(planned.SourceAnchor);
-                    continue; // Same saved source AND exact live destination.
+                    continue;
                 }
+                // Legacy verified bindings without a saved ALTERID may use
+                // the original FULL previous DR/CR proof. Never bypass the
+                // previous version just because an unverified source happens
+                // to look similar to a live Voucher.
+                if (IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash) &&
+                    FullVoucherMatches(planned, liveBound, before.FullVouchers) &&
+                    PreviousConsolidatedVersionMatches(
+                        liveBound, before.FullVouchers, state))
+                {
+                    skipped.Add(planned.SourceAnchor);
+                    continue;
+                }
+                // Same MASTERID/ALTERID with a DIFFERENT desired source hash
+                // is NOT an exact duplicate. Now compare the complete
+                // previous signed DR/CR (hydrated from normal Tally sync),
+                // then let the unchanged original bound ALTER writer proceed.
                 if (state.VerifiedContentHash.Length == 0 ||
                     IgnoreCase.Equals(state.VerifiedContentHash, planned.ContentHash) ||
                     !PreviousConsolidatedVersionMatches(liveBound, before.FullVouchers, state))

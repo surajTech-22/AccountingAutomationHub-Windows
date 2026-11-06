@@ -117,6 +117,128 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // CL019 2026-11-06 v621: NORMAL Tally synchronization persists the
+        // index without individual LedgerPostings and stores complete XML in
+        // a separate authority table. Consolidated MUST join both by exact
+        // MASTERID/ALTERID before applying the ordinary strict classifier.
+        const string debitNoteGuid = "8784a1d3-991b-41fd-b05e-404565f76a87-00000005";
+        const string debitNoteFull = """
+            <VOUCHER>
+              <MASTERID>5</MASTERID><ALTERID>7</ALTERID>
+              <GUID>8784a1d3-991b-41fd-b05e-404565f76a87-00000005</GUID>
+              <DATE>20260228</DATE><VOUCHERTYPENAME>Debit Note</VOUCHERTYPENAME>
+              <VOUCHERNUMBER>3</VOUCHERNUMBER>
+              <REFERENCE>KA-C-26-1924192</REFERENCE>
+              <PARTYLEDGERNAME>Amazon Seller Services Pvt Ltd</PARTYLEDGERNAME>
+              <NARRATION>Debit Note KA-C-26-1924192</NARRATION>
+              <ALLLEDGERENTRIES.LIST>
+                <LEDGERNAME>Amazon Seller Services Pvt Ltd</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-7.08</AMOUNT>
+              </ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST>
+                <LEDGERNAME>Purchase @ 18% - Gujarat</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>6.00</AMOUNT>
+              </ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST>
+                <LEDGERNAME>Input IGST @ 18% - Gujarat</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>1.08</AMOUNT>
+              </ALLLEDGERENTRIES.LIST>
+            </VOUCHER>
+            """;
+        var debitIndex = new TallyVoucherIndexRecord
+        {
+            MasterId = "5", AlterId = "7", Guid = debitNoteGuid,
+            VoucherDate = new DateTime(2026, 2, 28),
+            VoucherType = "Debit Note", VoucherNumber = "3",
+            Reference = "KA-C-26-1924192",
+            PartyLedger = "Amazon Seller Services Pvt Ltd",
+            DebitLedgers = "Amazon Seller Services Pvt Ltd",
+            CreditLedgers = "Purchase @ 18% - Gujarat | Input IGST @ 18% - Gujarat",
+            Amount = 7.08m, Narration = "Debit Note KA-C-26-1924192",
+            ContentHash = "INDEX-ONLY-NOT-SIGNED-SOURCE-HASH",
+            LedgerPostings = Array.Empty<TallyLedgerPostingRecord>()
+        };
+        var debitXml = new TallyVoucherXmlSnapshot(
+            "5", debitNoteGuid, "Debit Note", debitIndex.VoucherDate, debitNoteFull)
+            { AlterId = "7" };
+        var hydrate = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "HydrateSynchronizedVoucherPostings",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Missing reuse of normal synchronized full Voucher DR/CR.");
+        IReadOnlyList<TallyVoucherIndexRecord> Hydrate(
+            IReadOnlyList<TallyVoucherIndexRecord> indexes,
+            IReadOnlyList<TallyVoucherXmlSnapshot> snapshots) =>
+            (IReadOnlyList<TallyVoucherIndexRecord>)hydrate.Invoke(null, [indexes, snapshots])!;
+        var hydratedDebit = Hydrate(new[] { debitIndex }, new[] { debitXml }).Single();
+        var debitPostings = new (string Name, decimal Amount)[] {
+            ("Amazon Seller Services Pvt Ltd", -7.08m),
+            ("Purchase @ 18% - Gujarat", 6.00m),
+            ("Input IGST @ 18% - Gujarat", 1.08m)
+        };
+        if (hydratedDebit.LedgerPostings.Count != 3 ||
+            !TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                hydratedDebit, debitIndex.VoucherDate!.Value, debitIndex.VoucherType,
+                debitIndex.Reference, debitIndex.Narration, debitPostings))
+            throw new InvalidOperationException(
+                "Previously accepted CL019 Debit Note MASTERID 5 was not recognized from existing synchronized full DR/CR.");
+        if (TallyAccountingVoucherExportService.VoucherStrictlyMatchesConsolidatedPrepared(
+                hydratedDebit, debitIndex.VoucherDate!.Value, debitIndex.VoucherType,
+                debitIndex.Reference, debitIndex.Narration,
+                debitPostings.Select(x => x.Name == "Input IGST @ 18% - Gujarat"
+                    ? (x.Name, 1.09m) : x).ToArray()))
+            throw new InvalidOperationException(
+                "Hydrated Tally DR/CR ignored an actual input tax posting change.");
+        var (savedSourceHash, originalSigned) =
+            TallyConsolidatedVoucherImportService.ComputePreparedContentIdentity(
+                System.Xml.Linq.XElement.Parse(debitNoteFull));
+        var originalBinding = new TallySourceBindingVersionState {
+            State = "Verified", MasterId = "5", Guid = debitNoteGuid,
+            VerifiedContentHash = savedSourceHash,
+            VerifiedVersion = "CONSOLIDATED|20260228|Debit Note|" +
+                debitIndex.Reference + "|" + originalSigned + "|" + savedSourceHash,
+            LastVerifiedAlterId = 7
+        };
+        var unchanged = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "IsVerifiedUnchangedBoundSource",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original source-hash + bound MASTERID/ALTERID no-op proof missing.");
+        bool NoOp(TallySourceBindingVersionState binding, string hash) =>
+            (bool)unchanged.Invoke(null, [binding, hydratedDebit, hash])!;
+        if (!NoOp(originalBinding, savedSourceHash))
+            throw new InvalidOperationException(
+                "Same CL019 source hash, bound MASTERID 5, ALTERID 7 and GUID was not skipped immediately.");
+        if (NoOp(originalBinding, new string('F', 64)))
+            throw new InvalidOperationException(
+                "Changed source hash was skipped using MASTERID/ALTERID without comparing previous DR/CR.");
+        originalBinding.LastVerifiedAlterId = 8;
+        if (NoOp(originalBinding, savedSourceHash))
+            throw new InvalidOperationException(
+                "Changed external ALTERID was ignored for an unchanged prepared source.");
+        originalBinding.LastVerifiedAlterId = 7;
+        originalBinding.Guid = "different-book-guid";
+        if (NoOp(originalBinding, savedSourceHash))
+            throw new InvalidOperationException(
+                "Different destination GUID was silently adopted by unchanged fast path.");
+        originalBinding.Guid = debitNoteGuid;
+        var prev = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "PreviousConsolidatedVersionMatches",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Original previous->desired DR/CR verification missing.");
+        if (!(bool)prev.Invoke(null, [hydratedDebit, new[] { debitXml }, originalBinding])!)
+            throw new InvalidOperationException(
+                "Actual previous signed DR/CR readback did not match verified CL019 Debit Note.");
+        var tamperedXml = new TallyVoucherXmlSnapshot(
+            "5", debitNoteGuid, "Debit Note", debitIndex.VoucherDate, debitNoteFull)
+            { AlterId = "8" };
+        try {
+            Hydrate(new[] { debitIndex }, new[] { tamperedXml });
+            throw new InvalidOperationException(
+                "Different synchronized ALTERID incorrectly allowed Ledger hydration.");
+        } catch (System.Reflection.TargetInvocationException ex)
+            when (ex.InnerException is InvalidOperationException) { }
+        Console.WriteLine("PASS: all synchronized Tally Vouchers hydrate exact signed DR/CR; unchanged same-source MASTERID/ALTERID skips; changed source goes to original previous DRCR gate.");
+
+
         // CL019 2026-11-03 13:42:40: the 333rd CREATE had LASTVCHID
         // 337, while earlier branch voucher 26 shared the SAME original
         // B2CS-202601-24-18-2 reference and date/type. Reference-only
