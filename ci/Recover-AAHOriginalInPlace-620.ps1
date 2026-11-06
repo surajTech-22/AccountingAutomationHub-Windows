@@ -83,22 +83,25 @@ public static class AAHRecoveryKernel {
 }
 '@
 }
-foreach ($candidate in @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
-    $_.Name -in @('AccountingAutomationHub.exe','AAH_Update.exe') -or
-    ($_.Name -in @('powershell.exe','pwsh.exe') -and
-     $_.CommandLine -match 'Install-AAHPublish')
-})) {
-    $handle = [AAHRecoveryKernel]::OpenProcess(0x00100000,$false,[uint32]$candidate.ProcessId)
-    if ($handle -eq [IntPtr]::Zero) {
-        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        Assert-AAH ($errorCode -eq 87) ('Installer PID ' + $candidate.ProcessId + ' cannot be verified (Windows error ' + $errorCode + ').')
-    } else {
-        try {
-            $waitState = [AAHRecoveryKernel]::WaitForSingleObject($handle,0)
-            Assert-AAH ($waitState -eq 0) ('AAH/installer PID ' + $candidate.ProcessId + ' is not kernel-confirmed exited. Close it normally; if stuck, restart Windows before retrying.')
-        } finally { [void][AAHRecoveryKernel]::CloseHandle($handle) }
+function Assert-NoActiveAahOrInstaller {
+    foreach ($candidate in @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+        $_.Name -in @('AccountingAutomationHub.exe','AAH_Update.exe') -or
+        ($_.Name -in @('powershell.exe','pwsh.exe') -and
+         $_.CommandLine -match 'Install-AAHPublish')
+    })) {
+        $handle = [AAHRecoveryKernel]::OpenProcess(0x00100000,$false,[uint32]$candidate.ProcessId)
+        if ($handle -eq [IntPtr]::Zero) {
+            $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            Assert-AAH ($errorCode -eq 87) ('Installer PID ' + $candidate.ProcessId + ' cannot be verified (Windows error ' + $errorCode + ').')
+        } else {
+            try {
+                $waitState = [AAHRecoveryKernel]::WaitForSingleObject($handle,0)
+                Assert-AAH ($waitState -eq 0) ('AAH/installer PID ' + $candidate.ProcessId + ' is not kernel-confirmed exited. Close it normally; if stuck, restart Windows before retrying.')
+            } finally { [void][AAHRecoveryKernel]::CloseHandle($handle) }
+        }
     }
 }
+Assert-NoActiveAahOrInstaller
 $journals = @(Get-ChildItem -LiteralPath $install -Directory -Force |
     Where-Object { $_.Name -like '.aah-swap-*' -or $_.Name -like '.aah-github-swap-*' } |
     Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'journal.json') })
@@ -185,6 +188,9 @@ try {
     Assert-AAH ((Get-Version (Join-Path $publish 'AccountingAutomationHub.exe')) -eq '4.0.0.620') 'Extracted AAH binary version is not 4.0.0.620.'
     Assert-AAH (@(Get-ChildItem -LiteralPath $install -Directory -Force |
         Where-Object { $_.Name -like '.aah-swap-*' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'journal.json')) }).Count -eq 0) 'New transaction journal found; refusing.'
+    # The original AAH may have been reopened during backup/download.
+    # Re-check the native kernel process states immediately before any file mutation.
+    Assert-NoActiveAahOrInstaller
     Write-Host 'Starting the SAME original Install-AAHPublish transactional procedure.'
     . $nativePath
     Install-AAHPublish $publish $install
