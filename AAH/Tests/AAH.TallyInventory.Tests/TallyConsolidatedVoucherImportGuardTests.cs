@@ -237,8 +237,16 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             !ProvesOld())
             throw new InvalidOperationException(
                 "A new accounting Ledger did not retain original bound Previous->Desired ALTER authority.");
+        DirectoryInfo? boundPreflightRoot = new(Environment.CurrentDirectory);
+        while (boundPreflightRoot is not null &&
+               !File.Exists(Path.Combine(boundPreflightRoot.FullName, "AAH", "src",
+                   "AccountingAutomationHub.Infrastructure", "Tally",
+                   "TallyConsolidatedVoucherImportService.cs")))
+            boundPreflightRoot = boundPreflightRoot.Parent;
+        if (boundPreflightRoot is null)
+            throw new InvalidOperationException("Original consolidated source checkout missing.");
         var sourceCode = File.ReadAllText(Path.Combine(
-            sourceRoot!.FullName, "AAH", "src",
+            boundPreflightRoot.FullName, "AAH", "src",
             "AccountingAutomationHub.Infrastructure", "Tally",
             "TallyConsolidatedVoucherImportService.cs"));
         if (!sourceCode.Contains("var preflightBoundConflicts = new List<string>()", StringComparison.Ordinal) ||
