@@ -60,7 +60,9 @@ internal static class TallyConsolidatedDirectImportTests
               "individual-client normal Tally coordinator must not contain consolidated-specific guards");
         Check(wrapper.Contains("normalCoordinator.RefreshNowAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("forceLinkedSynchronization: true", StringComparison.Ordinal) &&
-              wrapper.Contains("forceFullBaseline: false", StringComparison.Ordinal) &&
+              wrapper.Contains("forceFullBaseline: true", StringComparison.Ordinal) &&
+              wrapper.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("FindNativeProjectionRecheckMonths(", StringComparison.Ordinal) &&
               wrapper.Contains("GetBankSyncState(", StringComparison.Ordinal) &&
               wrapper.Contains("GetVoucherChangeMarkerAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("ExportVoucherIndexFreshAsync(", StringComparison.Ordinal) &&
@@ -75,7 +77,7 @@ internal static class TallyConsolidatedDirectImportTests
               !wrapper.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
               !wrapper.Contains("ImportXmlAsync(", StringComparison.Ordinal) &&
               !wrapper.Contains("ReplaceVoucherIndex(", StringComparison.Ordinal),
-              "consolidated-only wrapper must reuse saved ALTERID only after fresh MASTERID/ALTERID proof, without snapshots or source-binding writes");
+              "consolidated explicit import must use the individual full-FY baseline and native Voucher proof without independent duplicate snapshots or source-binding writes");
         Check(importer.Contains("consolidatedVerifiedMarkerReader = null", StringComparison.Ordinal) &&
               importer.Contains("ReadTrustedMarkerAsync(", StringComparison.Ordinal) &&
               importer.Contains("consolidatedVerifiedMarkerReader is null", StringComparison.Ordinal) &&

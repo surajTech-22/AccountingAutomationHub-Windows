@@ -42,7 +42,9 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         await normalCoordinator.RefreshNowAsync(
             forceLinkedSynchronization: true,
             cancellationToken: cancellationToken,
-            forceFullBaseline: false);
+            // Identical to an individual explicit Tally export: rebuild one fresh
+            // complete FY Master/Voucher authority before preparing any CREATE/ALTER.
+            forceFullBaseline: true);
         RequireSameSavedLink(client, confirmedLink);
 
         // No duplicate live-index read here. The ORIGINAL consolidated
@@ -122,7 +124,49 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
 
         var freshIndex = await existingTally.ExportVoucherIndexFreshAsync(
             destination, range.From, range.To, cancellationToken);
-        RequireSameVoucherIndex(cachedIndex, freshIndex, saved.LastAlterId);
+        try
+        {
+            RequireSameVoucherIndex(cachedIndex, freshIndex, saved.LastAlterId);
+        }
+        catch (InvalidOperationException) when (
+            FindNativeProjectionRecheckMonths(cachedIndex, freshIndex, saved.LastAlterId).Count > 0)
+        {
+            // Individual AAH import reads the ORIGINAL native Voucher object
+            // with ExportVoucherAuthorityFreshAsync. Consolidated previously
+            // compared that baseline with a separate, thinner TDL Index request.
+            // The two projections can serialize Reference/PartyLedger/Amount/
+            // Narration differently WITHOUT a Tally ALTERID change.
+            //
+            // Re-read ONLY months with same-MASTERID/same-ALTERID projection
+            // differences through the original individual-voucher native
+            // reader. Preserve every original index/full XML gate: the new
+            // native read must match ALL saved fields before any CREATE/ALTER.
+            var byId = freshIndex.ToDictionary(
+                row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
+            foreach (var month in FindNativeProjectionRecheckMonths(
+                         cachedIndex, freshIndex, saved.LastAlterId))
+            {
+                var lastDay = month.AddMonths(1).AddDays(-1);
+                if (lastDay > range.To) lastDay = range.To;
+                var native = await existingTally.ExportVoucherAuthorityFreshAsync(
+                    destination, month, lastDay, cancellationToken);
+                var expectedIds = cachedIndex
+                    .Where(row => row.VoucherDate is DateTime date &&
+                                  date.Year == month.Year && date.Month == month.Month)
+                    .Select(row => row.MasterId.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var nativeIds = native.Index.Select(row => row.MasterId.Trim()).ToArray();
+                if (nativeIds.Length != expectedIds.Count ||
+                    !expectedIds.SetEquals(nativeIds))
+                    throw new InvalidOperationException(
+                        "Original native Tally Voucher month authority differs from " +
+                        "the synchronized MASTERIDs. No consolidated CREATE/ALTER was posted.");
+                foreach (var row in native.Index)
+                    byId[row.MasterId.Trim()] = row;
+            }
+            RequireSameVoucherIndex(
+                cachedIndex, byId.Values.ToArray(), saved.LastAlterId);
+        }
 
         // Proven equivalent only for this specific native Voucher index.
         // The original consolidated importer repeats this proof at its
@@ -178,6 +222,55 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             year < 1900 || year > 9998)
             throw new InvalidOperationException("Consolidated financial year is not valid.");
         return (new DateTime(year, 4, 1), new DateTime(year + 1, 3, 31));
+    }
+
+    // Only identical live MASTERID + ALTERID + GUID can be checked again
+    // through the individual module's native full-Voucher projection. An
+    // actual identity/ALTERID change, duplicate, missing ID or unparseable
+    // value never gets a projection fallback and remains blocked.
+    internal static IReadOnlyList<DateTime> FindNativeProjectionRecheckMonths(
+        IReadOnlyList<TallyVoucherIndexRecord> cached,
+        IReadOnlyList<TallyVoucherIndexRecord> fresh,
+        long synchronizedAlterId)
+    {
+        if (cached.Count != fresh.Count ||
+            cached.Any(row => string.IsNullOrWhiteSpace(row.MasterId) ||
+                              !row.VoucherDate.HasValue))
+            return Array.Empty<DateTime>();
+        var oldById = cached.ToDictionary(
+            row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var months = new HashSet<DateTime>();
+        foreach (var live in fresh)
+        {
+            var id = live.MasterId.Trim();
+            if (id.Length == 0 || !seen.Add(id) ||
+                !oldById.TryGetValue(id, out var old) ||
+                !long.TryParse(live.AlterId.Trim(), NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var alter) ||
+                alter <= 0 || alter > synchronizedAlterId ||
+                !string.Equals(live.AlterId.Trim(), old.AlterId.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                (old.Guid.Length > 0 && live.Guid.Length > 0 &&
+                 !old.Guid.Equals(live.Guid, StringComparison.OrdinalIgnoreCase)))
+                return Array.Empty<DateTime>();
+
+            if ((old.VoucherDate.HasValue && live.VoucherDate.HasValue &&
+                 old.VoucherDate.Value.Date != live.VoucherDate.Value.Date) ||
+                (old.VoucherType.Length > 0 && live.VoucherType.Length > 0 &&
+                 !old.VoucherType.Equals(live.VoucherType, StringComparison.OrdinalIgnoreCase)) ||
+                (old.VoucherNumber.Length > 0 && live.VoucherNumber.Length > 0 &&
+                 !old.VoucherNumber.Equals(live.VoucherNumber, StringComparison.OrdinalIgnoreCase)) ||
+                (old.Reference.Length > 0 && live.Reference.Length > 0 &&
+                 !old.Reference.Equals(live.Reference, StringComparison.OrdinalIgnoreCase)) ||
+                (old.ContentHash.Length > 0 && live.ContentHash.Length > 0 &&
+                 !old.ContentHash.Equals(live.ContentHash, StringComparison.OrdinalIgnoreCase)))
+            {
+                var date = old.VoucherDate!.Value;
+                months.Add(new DateTime(date.Year, date.Month, 1));
+            }
+        }
+        return months.OrderBy(date => date).ToArray();
     }
 
     private static void RequireSameVoucherIndex(
