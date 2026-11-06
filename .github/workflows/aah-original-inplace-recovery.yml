@@ -1,0 +1,78 @@
+name: AAH Original In-Place Recovery Safety
+
+on:
+  pull_request:
+    paths:
+      - 'ci/Recover-AAHOriginalInPlace-620.ps1'
+      - 'ci/legacy/TransactionalPublish.ps1'
+      - '.github/workflows/aah-original-inplace-recovery.yml'
+  push:
+    branches:
+      - 'fix/aah-original-inplace-recovery-620'
+    paths:
+      - 'ci/Recover-AAHOriginalInPlace-620.ps1'
+      - '.github/workflows/aah-original-inplace-recovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Original native updater and rollback-data preservation
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Parse recovery script and verify its non-destructive contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($file in @('ci/Recover-AAHOriginalInPlace-620.ps1', 'ci/legacy/TransactionalPublish.ps1')) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path, [ref]$tokens, [ref]$errors) | Out-Null
+            if (@($errors).Count -ne 0) { throw ('PowerShell parse failed for ' + $file + ': ' + ($errors | Out-String)) }
+          }
+          $s=Get-Content ci/Recover-AAHOriginalInPlace-620.ps1 -Raw
+          foreach ($required in @(
+            '[switch]$Apply', 'Install-AAHPublish $publish $install',
+            'Get-GitBlobSha1', 'AAH_App-win-x64.zip',
+            'BACKUP VERIFIED:', 'Original/data backups retained at:',
+            'transaction journal', 'LocalAppData', 'RoamingAppData',
+            'ProgramData', 'Get-FileHash', 'robocopy.exe'
+          )) {
+            if (-not $s.Contains($required)) { throw ('Recovery safety control missing: ' + $required) }
+          }
+          foreach ($prohibited in @('Uninstall-App.ps1', 'AAH_Setup.exe', 'Remove-Item -LiteralPath $install', 'Remove-Item -LiteralPath $backupBase')) {
+            if ($s.Contains($prohibited)) { throw ('Unsafe recovery bypass detected: ' + $prohibited) }
+          }
+          Write-Host 'PASS: original in-place route with explicit backup and no alternate setup.'
+      - name: Exercise ORIGINAL Install-AAHPublish on disposable files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          . ./ci/legacy/TransactionalPublish.ps1
+          $root=Join-Path $env:RUNNER_TEMP ('aah-native-fixture-'+[guid]::NewGuid().ToString('N'))
+          $install=Join-Path $root 'installed'
+          $publish=Join-Path $root 'release'
+          New-Item -ItemType Directory -Force -Path $install,$publish | Out-Null
+          try {
+            Set-Content -Path (Join-Path $install 'AccountingAutomationHub.exe') -Value 'old'
+            Set-Content -Path (Join-Path $publish 'AccountingAutomationHub.exe') -Value 'new'
+            Set-Content -Path (Join-Path $install 'unchanged.dll') -Value 'identical'
+            Set-Content -Path (Join-Path $publish 'unchanged.dll') -Value 'identical'
+            Set-Content -Path (Join-Path $install 'client.sqlite') -Value 'ACCOUNTING DATA MUST REMAIN'
+            Install-AAHPublish $publish $install
+            if ((Get-Content (Join-Path $install 'AccountingAutomationHub.exe') -Raw).Trim() -ne 'new') { throw 'Original program not updated.' }
+            if ((Get-Content (Join-Path $install 'unchanged.dll') -Raw).Trim() -ne 'identical') { throw 'Identical DLL was damaged.' }
+            if ((Get-Content (Join-Path $install 'client.sqlite') -Raw).Trim() -ne 'ACCOUNTING DATA MUST REMAIN') { throw 'Accounting data was damaged.' }
+            $journal=@(Get-ChildItem -Path $install -Directory -Force | Where-Object {
+              $_.Name -like '.aah-swap-*' -and (Test-Path (Join-Path $_.FullName 'journal.json'))
+            })
+            if ($journal.Count -ne 0) { throw 'Original transaction retained a journal after verified commit.' }
+            Write-Host 'PASS: original native updater changes application files and preserves existing accounting data.'
+          } finally {
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
