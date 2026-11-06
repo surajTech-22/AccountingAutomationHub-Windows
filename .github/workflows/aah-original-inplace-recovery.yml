@@ -40,7 +40,7 @@ jobs:
             '[switch]$Apply', 'Install-AAHPublish $publish $install',
             'Get-GitBlobSha1', 'AAH_App-win-x64.zip',
             'BACKUP VERIFIED:', 'Original/data backups retained at:',
-            'Transaction journal', 'LocalAppData', 'RoamingAppData',
+            'transaction journal', 'LocalAppData', 'RoamingAppData',
             'ProgramData', 'Get-FileHash', 'robocopy.exe'
           )) {
             if (-not $s.Contains($required)) { throw ('Recovery safety control missing: ' + $required) }
