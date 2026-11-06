@@ -1725,6 +1725,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         if (previous is null ||
             !previous.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
             !IgnoreCase.Equals(previous.MasterId, live.MasterId) ||
+            (previous.Guid.Length > 0 &&
+             !IgnoreCase.Equals(previous.Guid, live.Guid)) ||
             previous.VerifiedContentHash.Length == 0 ||
             !long.TryParse(live.AlterId, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var currentAlterId) ||
