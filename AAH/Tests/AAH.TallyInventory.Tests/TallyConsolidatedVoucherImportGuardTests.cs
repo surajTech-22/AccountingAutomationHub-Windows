@@ -447,7 +447,8 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Original source-hash + bound MASTERID/ALTERID no-op proof missing.");
         bool NoOp(TallySourceBindingVersionState binding, string hash) =>
-            (bool)unchanged.Invoke(null, [binding, hydratedDebit, hash])!;
+            (bool)unchanged.Invoke(null,
+                [binding, hydratedDebit, hash, hydratedDebit.VoucherType])!;
         if (!NoOp(originalBinding, savedSourceHash))
             throw new InvalidOperationException(
                 "Same CL019 source hash, bound MASTERID 5, ALTERID 7 and GUID was not skipped immediately.");
