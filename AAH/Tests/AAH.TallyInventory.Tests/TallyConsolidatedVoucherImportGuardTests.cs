@@ -447,7 +447,8 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Original source-hash + bound MASTERID/ALTERID no-op proof missing.");
         bool NoOp(TallySourceBindingVersionState binding, string hash) =>
-            (bool)unchanged.Invoke(null, [binding, hydratedDebit, hash])!;
+            (bool)unchanged.Invoke(null,
+                [binding, hydratedDebit, hash, hydratedDebit.VoucherType])!;
         if (!NoOp(originalBinding, savedSourceHash))
             throw new InvalidOperationException(
                 "Same CL019 source hash, bound MASTERID 5, ALTERID 7 and GUID was not skipped immediately.");
@@ -673,6 +674,37 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 preparedAlterSource.Descendants("LEDGERNAME").Select(e => e.Value)))
             throw new InvalidOperationException(
                 "Separate destination voucher type did not preserve bound MASTERID and full DR/CR.");
+        // The fast unchanged-source branch must not discard a voucher
+        // whose original source fingerprint is identical but whose desired
+        // destination type changed. This guards type-only reclassification
+        // for all previously bound CL019 vouchers, not only ledger edits.
+        var typedBinding = new TallySourceBindingVersionState
+        {
+            State = "Verified", MasterId = "35",
+            Guid = "book-35", LastVerifiedAlterId = 675,
+            VerifiedContentHash = "original-purchase-hash"
+        };
+        var currentOriginal = new TallyVoucherIndexRecord
+        {
+            MasterId = "35", AlterId = "675", Guid = "book-35",
+            VoucherType = "Purchase", VoucherNumber = "19"
+        };
+        var unchangedTypeGate =
+            typeof(TallyConsolidatedVoucherImportService).GetMethod(
+                "IsVerifiedUnchangedBoundSource",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("Previous-version type skip guard is missing");
+        bool CanSkipType(string hash, string selectedType) =>
+            (bool)unchangedTypeGate.Invoke(
+                null, new object[] { typedBinding, currentOriginal, hash, selectedType })!;
+        if (!CanSkipType("original-purchase-hash", "Purchase") ||
+            CanSkipType("original-purchase-hash", "Purchase - Karnataka") ||
+            CanSkipType("new-branch-type-hash", "Purchase - Karnataka"))
+            throw new InvalidOperationException(
+                "Type-only changes incorrectly SKIP a bound Tally voucher instead " +
+                "of entering the saved previous-version same-MASTERID ALTER gate.");
+
         // Unticking the same UI option must use precisely the same bound
         // MASTERID ALTER writer in reverse, with the original parent type
         // restored and no change to Tally's current voucher number or DR/CR.

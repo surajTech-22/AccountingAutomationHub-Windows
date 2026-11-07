@@ -215,9 +215,16 @@ public sealed class TallyConsolidatedVoucherImportService(
     // never permission to ignore a newly changed AAH ledger or amount.
     internal static bool IsVerifiedUnchangedBoundSource(
         TallySourceBindingVersionState saved,
-        TallyVoucherIndexRecord live, string preparedSourceHash)
+        TallyVoucherIndexRecord live, string preparedSourceHash,
+        string? desiredVoucherType = null)
     {
-        return saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+        // Even an old legacy source binding with a previously accepted hash
+        // cannot skip a changed destination voucher type. The desired new
+        // branch subtype (or restoration to base) must use the original
+        // Previous->Desired same-MASTERID ALTER writer instead.
+        return (desiredVoucherType is null ||
+                IgnoreCase.Equals(live.VoucherType, desiredVoucherType)) &&
+               saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
                saved.MasterId.Trim().Length > 0 &&
                IgnoreCase.Equals(saved.MasterId.Trim(), live.MasterId.Trim()) &&
                saved.VerifiedContentHash.Length > 0 &&
@@ -334,7 +341,12 @@ public sealed class TallyConsolidatedVoucherImportService(
         // The normal coordinator's LastFyVoucherCount proves an empty target FY.
         // Earlier-year vouchers in the same company are not an incomplete FY
         // snapshot and must not block legitimate first-time consolidated XML.
-        var available = await ReadMasterAuthorityAsync(linked, cancellationToken)
+        var available = await ReadMasterAuthorityAsync(
+            linked, cancellationToken,
+            vouchers.Select(v => Value(v, "VOUCHERTYPENAME"))
+                .Where(prepared.VoucherTypeBaseByDestination.ContainsKey)
+                .Distinct(IgnoreCase).ToArray(),
+            allowMissingChildTypesInMasterFirstManualXml: true)
             .ConfigureAwait(false);
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
 
@@ -917,7 +929,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // positive last-verified ALTERID + native GUID. Tally's FY
                 // full signed DR/CR is available for ALL vouchers above, but
                 // this unchanged source does not need a second comparison.
-                if (IsVerifiedUnchangedBoundSource(state, liveBound, planned.ContentHash))
+                if (IsVerifiedUnchangedBoundSource(
+                        state, liveBound, planned.ContentHash, planned.Type))
                 {
                     skipped.Add(planned.SourceAnchor);
                     continue;
@@ -1192,7 +1205,11 @@ public sealed class TallyConsolidatedVoucherImportService(
                       " more. Preserve the detailed diagnostic ZIP."
                     : ""));
 
-        var available = await ReadMasterAuthorityAsync(destination, cancellationToken).ConfigureAwait(false);
+        var available = await ReadMasterAuthorityAsync(
+            destination, cancellationToken,
+            vouchers.Select(v => Value(v, "VOUCHERTYPENAME"))
+                .Where(prepared.VoucherTypeBaseByDestination.ContainsKey)
+                .Distinct(IgnoreCase).ToArray()).ConfigureAwait(false);
         // Same rule as the ORIGINAL normal Bank/Contra exporter: the built-in
         // Cash ledger remains under Cash-in-Hand when optional branch cash
         // ledgers are not selected. Cash Entry module may be empty while 21+
@@ -2118,9 +2135,33 @@ public sealed class TallyConsolidatedVoucherImportService(
     }
 
     private async Task<Dictionary<string, XElement>> ReadMasterAuthorityAsync(
-        TallyCompanyInfo destination, CancellationToken token)
+        TallyCompanyInfo destination, CancellationToken token,
+        IReadOnlyCollection<string>? requiredBranchVoucherTypes = null,
+        bool allowMissingChildTypesInMasterFirstManualXml = false)
     {
+        // This is the ORIGINAL consolidated Master reader, not a second
+        // voucher-type importer. Verify any selected branch voucher types
+        // against the same freshly read original Tally Masters BEFORE a
+        // manual XML is materialized or an existing voucher can be ALTERed.
+        if (requiredBranchVoucherTypes is { Count: > 0 })
+            tally.RequireFreshErp9MasterAuthorityForExplicitExport();
         var masterXml = await tally.ExportMastersAsync(destination, token).ConfigureAwait(false);
+        if (requiredBranchVoucherTypes is { Count: > 0 })
+        {
+            var liveTypeNames = TallyConsolidatedXmlTextSafety.ParseDocument(
+                    masterXml, "live Voucher Type numbering before consolidated import")
+                .Descendants().Where(x => Is(x, "VOUCHERTYPE"))
+                .Select(MasterName).ToHashSet(IgnoreCase);
+            foreach (var name in requiredBranchVoucherTypes)
+            {
+                if (allowMissingChildTypesInMasterFirstManualXml &&
+                    !liveTypeNames.Contains(name))
+                    continue; // Missing manual MASTER is in the identity-free
+                              // staged Masters XML, not already in Tally.
+                TallyBranchConsolidationImportService.RequireManualVoucherTypeNumbering(
+                    masterXml, name);
+            }
+        }
         var stockXml = await tally.ExportStockMastersAsync(destination, token).ConfigureAwait(false);
         var result = new Dictionary<string, XElement>(IgnoreCase);
         foreach (var raw in new[] { masterXml, stockXml })

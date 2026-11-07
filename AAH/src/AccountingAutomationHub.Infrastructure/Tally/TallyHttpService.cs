@@ -652,7 +652,7 @@ public sealed class TallyHttpService : IDisposable
         {
             BuildCollectionRequest(company.Name, "AAH Groups", "Group", "Name,Parent,MasterID,GUID,AlterID,LedgerGSTIN,GSTIN"),
             BuildCollectionRequest(company.Name, "AAH Ledgers", "Ledger", "Name,Parent,OpeningBalance,MasterID,GUID,AlterID"),
-            BuildCollectionRequest(company.Name, "AAH Voucher Types", "VoucherType", "Name,Parent,MasterID,GUID,AlterID"),
+            BuildCollectionRequest(company.Name, "AAH Voucher Types", "VoucherType", "Name,Parent,NumberingMethod,MasterID,GUID,AlterID"),
             BuildCollectionRequest(company.Name, "AAH Units", "Unit", "Name,OriginalName,IsSimpleUnit,DecimalPlaces,BaseUnits,AdditionalUnits,Conversion,Denominator,ReportingUQCName,MasterID,GUID,AlterID"),
             BuildCollectionRequest(company.Name, "AAH States", "State", "Name"),
             BuildCollectionRequest(company.Name, "AAH Currencies", "Currency", "Name"),
@@ -3173,7 +3173,7 @@ public sealed class TallyHttpService : IDisposable
 
             var supportingSlices = new (string Label, string AccountType, string ObjectType, string Collection, string Fetch, int ExpectedCount)[]
             {
-                ("VoucherTypes", "Voucher Types", "VoucherType", "AAH ERP9 Voucher Types", "Name,Parent,MasterID,GUID,AlterID", company.VoucherTypeCount),
+                ("VoucherTypes", "Voucher Types", "VoucherType", "AAH ERP9 Voucher Types", "Name,Parent,NumberingMethod,MasterID,GUID,AlterID", company.VoucherTypeCount),
                 ("Units", "Units", "Unit", "AAH ERP9 Units", "Name,OriginalName,IsSimpleUnit,DecimalPlaces,BaseUnits,AdditionalUnits,Conversion,Denominator,ReportingUQCName,MasterID,GUID,AlterID", company.UnitCount),
                 ("StockGroups", "Stock Groups", "StockGroup", "AAH ERP9 Stock Groups", "Name,Parent,MasterID,GUID,AlterID", 0),
                 ("StockCategories", "Stock Categories", "StockCategory", "AAH ERP9 Stock Categories", "Name,Parent,MasterID,GUID,AlterID", 0),
