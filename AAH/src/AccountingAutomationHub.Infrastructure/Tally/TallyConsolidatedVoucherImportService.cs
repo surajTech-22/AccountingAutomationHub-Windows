@@ -1740,12 +1740,9 @@ public sealed class TallyConsolidatedVoucherImportService(
                     var records = postedBatch.Records;
                     var response = postedBatch.Response;
                     var responseDetail = postedBatch.Details;
-                var responseRejected = response is not null &&
-                    (response.Errors > 0 || response.Exceptions > 0 ||
-                     !string.IsNullOrWhiteSpace(response.LineError));
-                var newlyWrittenIds = afterIndex
-                    .Where(item => !knownOriginalMasterIds.Contains(item.MasterId))
-                    .Select(item => item.MasterId).ToHashSet(IgnoreCase);
+                    var responseRejected = response is not null &&
+                        (response.Errors > 0 || response.Exceptions > 0 ||
+                         !string.IsNullOrWhiteSpace(response.LineError));
                 var createdHere = records.Count(record => !record.Alter);
                 foreach (var record in records)
                 {
@@ -1829,13 +1826,10 @@ public sealed class TallyConsolidatedVoucherImportService(
                                     (posting.LedgerName, posting.SignedAmount)).ToArray(),
                                 old.LedgerPostings.Select(posting =>
                                     (posting.LedgerName, posting.SignedAmount)).ToArray()));
-                    var definitelyAbsent = !record.Alter &&
-                        !afterIndex.Any(item =>
-                            newlyWrittenIds.Contains(item.MasterId) &&
-                            item.VoucherDate?.Date == expected.Date.Date &&
-                            IgnoreCase.Equals(item.VoucherType, expected.Type) &&
-                            (IgnoreCase.Equals(item.Reference, expected.Reference) ||
-                             IgnoreCase.Equals(item.VoucherNumber, expected.Number)));
+                    // The filtered readback excludes older unbound IDs; a
+                    // missing CREATE is therefore not authoritative rejection.
+                    // Preserve pending rather than incorrectly marking failed.
+                    var definitelyAbsent = false;
                     if (responseRejected &&
                         (unchangedOld || definitelyAbsent))
                     {
