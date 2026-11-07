@@ -1331,6 +1331,44 @@ public sealed class TallyConsolidatedVoucherImportService(
         // destination Cash MASTERID and parent; never CREATE/reparent a Tally
         // built-in merely because a cash withdrawal uses that ledger.
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
+
+        // The original individual master-first gate also applies when the
+        // optional branch Cash ledger is changed alongside a voucher type.
+        // A verified native prior Cash posting is NOT permission to create
+        // a guessed Cash ledger or reparent an existing one.
+        var priorDefaultCashRequired = false;
+        foreach (var planned in source.Where(item =>
+                     alterTargets.ContainsKey(item.SourceAnchor)))
+        {
+            var previous = alterTargets[planned.SourceAnchor];
+            var targets = planned.Postings
+                .Where(post => IsOwnBranchCashLedger(post.Name, planned.Number))
+                .Select(post => post.Name).Distinct(IgnoreCase);
+            foreach (var name in targets)
+            {
+                if (!available.TryGetValue(MasterKey("LEDGER", name), out var cash) ||
+                    !IgnoreCase.Equals(Value(cash, "PARENT"), "Cash-in-Hand") ||
+                    !long.TryParse(Value(cash, "MASTERID"), NumberStyles.None,
+                        CultureInfo.InvariantCulture, out var cashMasterId) ||
+                    cashMasterId <= 0)
+                    throw new InvalidOperationException(
+                        "Selected branch Cash ledger '" + name +
+                        "' is not a verified Tally Cash-in-Hand master. " +
+                        "The same-MASTERID combined voucher ALTER was not posted.");
+                if (previous.LedgerPostings.Any(line =>
+                    IgnoreCase.Equals(line.LedgerName, "Cash")))
+                    priorDefaultCashRequired = true;
+            }
+        }
+        if (priorDefaultCashRequired &&
+            (!available.TryGetValue(MasterKey("LEDGER", "Cash"), out var priorCash) ||
+             !IgnoreCase.Equals(Value(priorCash, "PARENT"), "Cash-in-Hand") ||
+             !long.TryParse(Value(priorCash, "MASTERID"), NumberStyles.None,
+                 CultureInfo.InvariantCulture, out var priorCashId) ||
+             priorCashId <= 0))
+            throw new InvalidOperationException(
+                "Prior native Cash ledger has no verified Tally Cash-in-Hand MASTERID. " +
+                "No combined voucher ALTER was posted.");
         // Separate voucher types must ALREADY exist in the linked consolidated
         // Tally company and inherit the original base type with a positive
         // destination MASTERID. The existing master importer creates and
