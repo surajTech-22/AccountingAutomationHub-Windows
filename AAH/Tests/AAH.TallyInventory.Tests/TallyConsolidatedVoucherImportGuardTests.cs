@@ -157,12 +157,12 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         };
         var normalSnapshot = new TallyVoucherXmlSnapshot(
             "359", normalGuid, "Payment", originalDate, normalFullXml) { AlterId = "382" };
-        var oldSigned = "Bank Account:40000.00|Original Supplier:-40000.00";
+        var linkedOldSigned = "Bank Account:40000.00|Original Supplier:-40000.00";
         var linkedHash = TallyVoucherFingerprint.BuildContentHash(
             originalDate, "Payment", "BANK-REFERENCE-01", "Original Supplier",
-            40000m, "Payment to original supplier|" + oldSigned);
+            40000m, "Payment to original supplier|" + linkedOldSigned);
         var linkedVersion = "CONSOLIDATED|20250531|Payment|BANK-REFERENCE-01|" +
-            oldSigned + "|" + linkedHash;
+            linkedOldSigned + "|" + linkedHash;
         var previousLinkedVersion = new TallySourceBindingVersionState
         {
             State = "Verified", MasterId = "359", Guid = normalGuid,
