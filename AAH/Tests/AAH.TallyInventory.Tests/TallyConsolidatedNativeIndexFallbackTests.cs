@@ -97,6 +97,52 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
                 [Record("35", "670", "REAL-LIVE-POSTING-CHANGE"),
                  Record("36", "672", "HASH-B")], 672),
             "a different native full Voucher content hash must still fail closed");
+        // The normal RefreshNowAsync heartbeat UI may catch and log an
+        // unsuccessful baseline rather than throw. Its OLD checkpoint is not
+        // sufficient evidence for consolidated CREATE/ALTER even if the
+        // native Tally connection remains available.
+        var prior = new TallyBankSyncState
+        {
+            LastFullSyncUtc = new DateTime(2026, 11, 7, 3, 20, 0, DateTimeKind.Utc),
+            LastAlterId = 672,
+            LastFyVoucherCount = 645,
+            LastStatus = "Manual refresh: complete FY baseline synchronized at ALTERID 672"
+        };
+        var advanced = new TallyBankSyncState
+        {
+            LastFullSyncUtc = prior.LastFullSyncUtc.AddMinutes(1),
+            LastAlterId = 800,
+            LastFyVoucherCount = 645,
+            LastStatus = "Manual refresh: complete FY baseline synchronized at ALTERID 800"
+        };
+        TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(prior, advanced);
+        bool BaselineRejected(TallyBankSyncState? after)
+        {
+            try
+            {
+                TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(prior, after);
+                return false;
+            }
+            catch (InvalidOperationException) { return true; }
+        }
+        Check(BaselineRejected(null), "missing normal sync checkpoint must block import");
+        Check(BaselineRejected(prior), "unchanged old FY baseline must block import");
+        Check(BaselineRejected(new TallyBankSyncState
+            {
+                LastFullSyncUtc = advanced.LastFullSyncUtc,
+                LastAlterId = advanced.LastAlterId,
+                LastFyVoucherCount = advanced.LastFyVoucherCount,
+                LastStatus = "Manual refresh failed; retaining previous status"
+            }), "a newer time without a complete FY baseline must block import");
+        Check(BaselineRejected(new TallyBankSyncState
+            {
+                LastFullSyncUtc = advanced.LastFullSyncUtc,
+                LastAlterId = advanced.LastAlterId,
+                LastFyVoucherCount = -1,
+                LastStatus = advanced.LastStatus
+            }), "unverified FY Voucher count must block import");
+        Console.WriteLine("PASS: consolidated rejects stale/failed normal linked-Tally baseline before interpreting saved voucher MASTERIDs.");
+
         Console.WriteLine("PASS: consolidated thin-index representation differences are rechecked ONLY through individual native Voucher authority; changed native content/ALTERID remains blocked.");
         Console.WriteLine("PASS: actual consolidated wrapper reuses cached ALTERID only when native live MASTERID/ALTERID and voucher identities match.");
     }

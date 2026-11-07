@@ -3174,7 +3174,19 @@ public sealed class MainWindowViewModel :
                 stillLinked.ClientId == parentId &&
                 stillLinked.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
             {
-                try { await _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true); }
+                try
+                {
+                    var beforeRefresh = _tallyRepository.GetBankSyncState(
+                        parentId, financialYear, link.CompanyKey);
+                    await _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true);
+                    // Individual Tally persists each successful native readback;
+                    // consolidated now does the same. The global FY checkpoint
+                    // must additionally advance only after the ORIGINAL linked
+                    // coordinator actually commits its fresh full baseline.
+                    TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(
+                        beforeRefresh, _tallyRepository.GetBankSyncState(
+                            parentId, financialYear, link.CompanyKey));
+                }
                 catch (Exception readFailure)
                 {
                     // An unsuccessful read MUST NOT undo the real accepted
