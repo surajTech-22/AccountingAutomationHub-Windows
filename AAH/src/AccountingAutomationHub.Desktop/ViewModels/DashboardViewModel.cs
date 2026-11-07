@@ -252,11 +252,79 @@ public sealed class DashboardViewModel :
     public bool IsBranchTallyReference => false;
     public bool IsConsolidatedTallyScope => _isConsolidatedTallyScope;
 
+    // The consolidated import page reuses this ORIGINAL Dashboard panel, but
+    // its module checkboxes must not inherit the parent ordinary-export
+    // preferences (or write into normal/automatic Tally export settings).
+    // All five modules start selected in each consolidated Client/FY; a user's
+    // deliberate changes are retained for that scope while it remains open.
+    private readonly Dictionary<string, (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)>
+        _consolidatedManualModuleSelections = new(StringComparer.OrdinalIgnoreCase);
+    private (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)?
+        _normalManualModuleSelectionBeforeConsolidated;
+    private string _consolidatedManualSelectionScope = string.Empty;
+
+    private (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)
+        CurrentManualModuleSelection() =>
+        (_includeBankStatement, _includePurchases, _includeSales,
+         _includeCashEntries, _includeJournals);
+
+    private void ApplyManualModuleSelection(
+        (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal) selected)
+    {
+        // Use backing fields, not the original manual-export setters:
+        // toggling the consolidated import UI must NEVER rewrite ordinary
+        // Client/FY preference or change automatic Tally sync settings.
+        _includeBankStatement = selected.Bank;
+        _includePurchases = selected.Purchase;
+        _includeSales = selected.Sales;
+        _includeCashEntries = selected.Cash;
+        _includeJournals = selected.Journal;
+        OnPropertyChanged(nameof(IncludeBankStatement));
+        OnPropertyChanged(nameof(IncludePurchases));
+        OnPropertyChanged(nameof(IncludeSales));
+        OnPropertyChanged(nameof(IncludeCashEntries));
+        OnPropertyChanged(nameof(IncludeJournals));
+    }
+
+    private void RememberConsolidatedManualModuleSelection()
+    {
+        if (_isConsolidatedTallyScope && _consolidatedManualSelectionScope.Length > 0)
+            _consolidatedManualModuleSelections[_consolidatedManualSelectionScope] =
+                CurrentManualModuleSelection();
+    }
+
     // Consolidated has its own link but cannot post parent legacy rows as
     // combined branch vouchers; a separate source-owned group XML route is required.
     public void SetConsolidatedTallyScope(bool active)
     {
-        if (_isConsolidatedTallyScope == active) return;
+        var clientForSelection = _clientContext.CurrentClient;
+        var scope = clientForSelection is null ? string.Empty
+            : clientForSelection.Id.ToString(CultureInfo.InvariantCulture) + "|" +
+              clientForSelection.FinancialYear;
+        if (_isConsolidatedTallyScope == active &&
+            (!active || _consolidatedManualSelectionScope.Equals(
+                scope, StringComparison.OrdinalIgnoreCase)))
+            return;
+        if (_isConsolidatedTallyScope)
+            RememberConsolidatedManualModuleSelection();
+        if (active)
+        {
+            if (!_isConsolidatedTallyScope)
+                _normalManualModuleSelectionBeforeConsolidated =
+                    CurrentManualModuleSelection();
+            _consolidatedManualSelectionScope = scope;
+            ApplyManualModuleSelection(
+                scope.Length > 0 &&
+                _consolidatedManualModuleSelections.TryGetValue(scope, out var chosen)
+                    ? chosen : (true, true, true, true, true));
+        }
+        else
+        {
+            _consolidatedManualSelectionScope = string.Empty;
+            if (_normalManualModuleSelectionBeforeConsolidated is { } normal)
+                ApplyManualModuleSelection(normal);
+            _normalManualModuleSelectionBeforeConsolidated = null;
+        }
         _isConsolidatedTallyScope = active;
         OnPropertyChanged(nameof(IsConsolidatedTallyScope));
         NotifyTallyExportAvailability();
@@ -1537,6 +1605,12 @@ public sealed class DashboardViewModel :
         {
             if (SetProperty(ref _includeBankStatement, value))
             {
+                if (_isConsolidatedTallyScope)
+                {
+                    RememberConsolidatedManualModuleSelection();
+                    RefreshTallyCommandStates();
+                    return;
+                }
                 PersistTallyExportPreference("Bank", "Include", value);
                 ApplyManualTileToAutoSetting("Bank", value);
                 RefreshAutoSyncTileIndicators();
@@ -1552,6 +1626,12 @@ public sealed class DashboardViewModel :
         {
             if (SetProperty(ref _includePurchases, value))
             {
+                if (_isConsolidatedTallyScope)
+                {
+                    RememberConsolidatedManualModuleSelection();
+                    RefreshTallyCommandStates();
+                    return;
+                }
                 PersistTallyExportPreference("Purchase", "Include", value);
                 ApplyManualTileToAutoSetting("Purchase", value);
                 RefreshAutoSyncTileIndicators();
@@ -1567,6 +1647,12 @@ public sealed class DashboardViewModel :
         {
             if (SetProperty(ref _includeSales, value))
             {
+                if (_isConsolidatedTallyScope)
+                {
+                    RememberConsolidatedManualModuleSelection();
+                    RefreshTallyCommandStates();
+                    return;
+                }
                 PersistTallyExportPreference("Sales", "Include", value);
                 ApplyManualTileToAutoSetting("Sales", value);
                 RefreshAutoSyncTileIndicators();
@@ -1578,12 +1664,12 @@ public sealed class DashboardViewModel :
     public bool IncludeCashEntries
     {
         get => _includeCashEntries;
-        set { if (SetProperty(ref _includeCashEntries, value)) { PersistTallyExportPreference("Cash", "Include", value); ApplyManualTileToAutoSetting("Cash", value); RefreshAutoSyncTileIndicators(); RefreshTallyCommandStates(); } }
+        set { if (SetProperty(ref _includeCashEntries, value)) { if (_isConsolidatedTallyScope) { RememberConsolidatedManualModuleSelection(); RefreshTallyCommandStates(); return; } PersistTallyExportPreference("Cash", "Include", value); ApplyManualTileToAutoSetting("Cash", value); RefreshAutoSyncTileIndicators(); RefreshTallyCommandStates(); } }
     }
     public bool IncludeJournals
     {
         get => _includeJournals;
-        set { if (SetProperty(ref _includeJournals, value)) { PersistTallyExportPreference("Journal", "Include", value); ApplyManualTileToAutoSetting("Journal", value); RefreshAutoSyncTileIndicators(); RefreshTallyCommandStates(); } }
+        set { if (SetProperty(ref _includeJournals, value)) { if (_isConsolidatedTallyScope) { RememberConsolidatedManualModuleSelection(); RefreshTallyCommandStates(); return; } PersistTallyExportPreference("Journal", "Include", value); ApplyManualTileToAutoSetting("Journal", value); RefreshAutoSyncTileIndicators(); RefreshTallyCommandStates(); } }
     }
 
     // Compatibility aliases retained for the earlier Bank-only command.
