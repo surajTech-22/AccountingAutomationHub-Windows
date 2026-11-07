@@ -39,6 +39,8 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         // Voucher XML and ALTERID delta authority; do not request a new
         // full-company snapshot. Normal Refresh may silently defer a pulse,
         // so its return alone is never proof of a live checkpoint.
+        var beforeRefresh = existingRepository.GetBankSyncState(
+            client.Id, client.FinancialYear, confirmedLink.CompanyKey);
         await normalCoordinator.RefreshNowAsync(
             forceLinkedSynchronization: true,
             cancellationToken: cancellationToken,
@@ -46,6 +48,12 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             // complete FY Master/Voucher authority before preparing any CREATE/ALTER.
             forceFullBaseline: true);
         RequireSameSavedLink(client, confirmedLink);
+        // Normal RefreshNowAsync is also used by noncritical heartbeats and
+        // can return after recording a Tally sync error. Its return value
+        // alone is NOT proof that old SQLite vouchers were refreshed.
+        // Refuse to match against an old marker or 09:19-era Voucher index.
+        RequireFreshNormalBaseline(beforeRefresh, existingRepository.GetBankSyncState(
+            client.Id, client.FinancialYear, confirmedLink.CompanyKey));
 
         // No duplicate live-index read here. The ORIGINAL consolidated
         // importer calls ReadVerifiedMarkerAsync immediately before
@@ -189,6 +197,27 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             UnitCount = liveMarker.UnitCount,
             GodownCount = liveMarker.GodownCount
         };
+    }
+
+    // A real full baseline always persists a NEW timestamp and active-FY
+    // Voucher authority through the original normal coordinator. If the
+    // refresh failed but the coordinator swallowed its exception for its
+    // heartbeat UI, the older checkpoint must NEVER authorize import.
+    internal static void RequireFreshNormalBaseline(
+        TallyBankSyncState? previous, TallyBankSyncState? current)
+    {
+        if (current is null ||
+            current.LastFullSyncUtc == DateTime.MinValue ||
+            current.LastFullSyncUtc <= (previous?.LastFullSyncUtc ?? DateTime.MinValue) ||
+            current.LastAlterId <= 0 || current.LastFyVoucherCount < 0 ||
+            !current.LastStatus.Contains(
+                "complete FY baseline synchronized", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The original Tally full-FY synchronization did not commit a fresh " +
+                "MASTERID/ALTERID and complete Voucher XML baseline. Its prior saved " +
+                "voucher index is stale or the refresh failed. No consolidated " +
+                "CREATE/ALTER was authorized. Check the normal Tally sync error " +
+                "and refresh the existing link before importing.");
     }
 
     private static void RequireSameCompany(
