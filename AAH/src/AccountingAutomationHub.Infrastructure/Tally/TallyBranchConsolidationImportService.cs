@@ -308,8 +308,14 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         bool separateCashLedgers = false,
         CancellationToken cancellationToken = default,
         string? accountingFinancialYear = null,
-        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedVoucherTypesByBranch = null)
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? usedVoucherTypesByBranch = null,
+        bool createOnlyVoucherTypes = false)
     {
+        // Creation-only never writes cash ledgers, groups, voucher transactions
+        // or any already present voucher type (including numbering settings).
+        if (createOnlyVoucherTypes && (!separateVoucherTypes || separateCashLedgers))
+            throw new InvalidOperationException(
+                "Voucher-type creation-only mode cannot change cash, groups or vouchers.");
         ArgumentNullException.ThrowIfNull(confirmedLink);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(branches);
@@ -339,17 +345,20 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         // is unverified. Mandatory groups are independent of the two options.
         if (separateVoucherTypes && allVoucherTypes.Length == 0)
             throw new InvalidOperationException("Tally did not return a voucher type catalog.");
-        // A previously created branch type might have an unsupported or
-        // automatically renumbering configuration. Never silently ALTER its
-        // settings or existing vouchers. Verify it before GROUP writes begin.
-        foreach (var reused in plan.VoucherTypes.Where(x => !x.Create))
-            RequireManualVoucherTypeNumbering(beforeXml, reused.Name);
-        var toCreate = plan.Groups.Where(x => x.Create)
-            .Select(x => new MasterRecord { Type = "Group", Name = x.Name, Parent = x.Parent })
-            .ToArray();
-        var cash = plan.CashLedgers.Where(x => x.Create)
-            .Select(x => new MasterRecord { Type = "Ledger", Name = x.Name, Parent = "Cash-in-Hand" })
-            .ToArray();
+        // Reused Voucher Types are verified by name + parent + MASTERID in
+        // the existing planner. Their native None numbering is never changed.
+        if (createOnlyVoucherTypes && plan.Groups.Any(x => x.Create))
+            throw new InvalidOperationException(
+                "Creation-only mode found missing compulsory branch groups. " +
+                "No group or Voucher Type was created. Verify groups separately.");
+        var toCreate = createOnlyVoucherTypes ? Array.Empty<MasterRecord>()
+            : plan.Groups.Where(x => x.Create)
+                .Select(x => new MasterRecord { Type = "Group", Name = x.Name, Parent = x.Parent })
+                .ToArray();
+        var cash = createOnlyVoucherTypes ? Array.Empty<MasterRecord>()
+            : plan.CashLedgers.Where(x => x.Create)
+                .Select(x => new MasterRecord { Type = "Ledger", Name = x.Name, Parent = "Cash-in-Hand" })
+                .ToArray();
 
         int createdGroups = 0, createdCash = 0, createdTypes = 0;
         // One-by-one existing Upsert validates Tally's response AND reads the
@@ -385,7 +394,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
                 .ConfigureAwait(false);
             var readback = ReadLiveMasters(readbackXml);
             RequireMaster(readback, "Voucher Type", requirement.Name, requirement.BaseType);
-            RequireManualVoucherTypeNumbering(readbackXml, requirement.Name);
+            RequireNoneNumberingForNewVoucherType(readbackXml, requirement.Name);
             createdTypes++;
         }
 
@@ -400,12 +409,15 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         foreach (var v in plan.VoucherTypes)
         {
             RequireMaster(after, "Voucher Type", v.Name, v.BaseType);
-            RequireManualVoucherTypeNumbering(finalXml, v.Name);
+            if (v.Create) RequireNoneNumberingForNewVoucherType(finalXml, v.Name);
         }
         return new TallyBranchMasterImportResult(
             destination.CompanyKey, plan.Pan, plan.FinancialYear, plan.Groups.Count,
             createdGroups, createdCash, createdTypes,
-            "Branch master read-back passed. No consolidated vouchers were posted. " +
+            (createOnlyVoucherTypes
+                ? "Creation-only: missing Voucher Types created and read back; " +
+                  "all existing masters/numbering and all vouchers were left unchanged. "
+                : "Branch master read-back passed. No consolidated vouchers were posted. ") +
             "Each branch GST ledger remains source-owned; no GST journal was regenerated.");
     }
 
@@ -436,8 +448,8 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             branches, fresh, true, separateVoucherTypes, separateCashLedgers,
             separateVoucherTypes ? baseTypes : null, usedVoucherTypesByBranch);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
-        foreach (var reused in plan.VoucherTypes.Where(x => !x.Create))
-            RequireManualVoucherTypeNumbering(freshXml, reused.Name);
+        // An existing type's None numbering does not block the read-only
+        // source preview. No voucher type is created/altered here.
         // Generate Consolidated XML is read-only: already existing branch
         // Groups are not repeated in the master CREATE file. Explicitly
         // verify EVERY reused compulsory Group against live destination
@@ -447,6 +459,44 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         foreach (var group in plan.Groups.Where(g => !g.Create))
             RequireMaster(fresh, "Group", group.Name, group.Parent);
         return plan;
+    }
+
+    /// <summary>
+    /// Validate None numbering only for a newly created type. Tally can omit
+    /// the native field when it means None/default. Existing types are never
+    /// modified or required to change their numbering configuration.
+    /// </summary>
+    internal static void RequireNoneNumberingForNewVoucherType(
+        string liveMastersXml, string typeName)
+    {
+        var doc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            liveMastersXml, "created branch Voucher Type None readback");
+        var matching = doc.Descendants().Where(x =>
+                x.Name.LocalName.Equals("VOUCHERTYPE", StringComparison.OrdinalIgnoreCase))
+            .Where(x => (x.Elements().FirstOrDefault(y =>
+                        y.Name.LocalName.Equals("NAME", StringComparison.OrdinalIgnoreCase))
+                        ?.Value.Trim() ??
+                    x.Attributes().FirstOrDefault(y =>
+                        y.Name.LocalName.Equals("NAME", StringComparison.OrdinalIgnoreCase))
+                        ?.Value.Trim() ?? "")
+                    .Equals(typeName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matching.Length != 1)
+            throw new InvalidOperationException(
+                "New Voucher Type '" + typeName +
+                "' could not be uniquely read back from linked Tally. " +
+                "No voucher was posted.");
+        var methods = matching.Select(x => x.Elements().FirstOrDefault(y =>
+                y.Name.LocalName.Equals("NUMBERINGMETHOD", StringComparison.OrdinalIgnoreCase))
+                ?.Value.Trim() ?? "")
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (methods.Any(x => !x.Equals("None", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "New Voucher Type '" + typeName +
+                "' did not retain None numbering (found: " +
+                string.Join(", ", methods) + "). No existing voucher was altered.");
     }
 
     /// <summary>
