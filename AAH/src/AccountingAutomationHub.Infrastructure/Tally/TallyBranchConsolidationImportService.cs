@@ -360,6 +360,96 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
                 .Select(x => new MasterRecord { Type = "Ledger", Name = x.Name, Parent = "Cash-in-Hand" })
                 .ToArray();
 
+        // Older AAH releases created Cash (B-<opaque branch ID>). Tally
+        // already has the corresponding real Ledger MASTERID and possibly
+        // years of vouchers. NEVER create a second "Cash - Branch" ledger
+        // or move the 21+ Contra vouchers merely to repair the display name.
+        // Rename that exact verified ledger IN PLACE under the original
+        // master-first gate; all native Tally postings retain its MASTERID.
+        var renamedCashCount = 0;
+        foreach (var cashLedger in plan.CashLedgers.Where(x => x.PreviousMasterId.Length > 0))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var prior = before.Where(x =>
+                x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                x.Name.Equals(cashLedger.PreviousName, StringComparison.OrdinalIgnoreCase) &&
+                x.Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase) &&
+                x.TallyMasterId.Equals(cashLedger.PreviousMasterId, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (prior.Length != 1)
+                throw new InvalidOperationException(
+                    "Legacy Cash MASTERID or parent changed before rename. No Tally POST was sent.");
+
+            // Inspect the ORIGINAL fresh native master XML, not source preview
+            // or local SQLite. Require the same immutable MASTERID, GUID and
+            // positive previous ALTERID before issuing one master ALTER.
+            var beforeDocument = TallyConsolidatedXmlTextSafety.ParseDocument(
+                beforeXml, "original Cash ledger rename authority");
+            static string MasterField(XElement element, string key) =>
+                element.Elements().FirstOrDefault(x => x.Name.LocalName.Equals(key,
+                    StringComparison.OrdinalIgnoreCase))?.Value.Trim() ??
+                element.Attributes().FirstOrDefault(x => x.Name.LocalName.Equals(key,
+                    StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            var oldNative = beforeDocument.Descendants().Where(x =>
+                x.Name.LocalName.Equals("LEDGER", StringComparison.OrdinalIgnoreCase) &&
+                MasterField(x, "NAME").Equals(cashLedger.PreviousName,
+                    StringComparison.OrdinalIgnoreCase) &&
+                MasterField(x, "MASTERID").Equals(cashLedger.PreviousMasterId,
+                    StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (oldNative.Length != 1 ||
+                !MasterField(oldNative[0], "PARENT").Equals("Cash-in-Hand",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(MasterField(oldNative[0], "GUID")) ||
+                !long.TryParse(MasterField(oldNative[0], "ALTERID"), out var previousAlterId) ||
+                previousAlterId <= 0)
+                throw new InvalidOperationException(
+                    "Tally did not return one complete GUID/ALTERID/MASTERID for " +
+                    cashLedger.PreviousName + ". Do not guess a Cash master rename.");
+            // Never start if the friendly name has appeared concurrently.
+            tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+            var latestXml = await tally.ExportMastersAsync(destination, cancellationToken)
+                .ConfigureAwait(false);
+            var latest = ReadLiveMasters(latestXml);
+            if (latest.Any(x => x.Name.Equals(cashLedger.Name, StringComparison.OrdinalIgnoreCase)) ||
+                latest.Count(x => x.Name.Equals(cashLedger.PreviousName,
+                    StringComparison.OrdinalIgnoreCase) &&
+                    x.TallyMasterId.Equals(cashLedger.PreviousMasterId,
+                        StringComparison.OrdinalIgnoreCase)) != 1)
+                throw new InvalidOperationException(
+                    "Tally Cash ledger identity changed during rename preparation. " +
+                    "Refresh the original master authority; no duplicate ledger created.");
+            var request = BuildBoundLegacyCashLedgerRenameXml(
+                destination.Name, cashLedger.PreviousName, cashLedger.Name,
+                cashLedger.PreviousMasterId, MasterField(oldNative[0], "GUID"));
+            var response = TallyHttpService.ParseImportResponse(
+                await tally.ImportXmlAsync(request, cancellationToken).ConfigureAwait(false));
+            if (response.Created != 0 || response.Altered != 1 ||
+                response.Errors != 0 || response.Exceptions != 0 ||
+                !string.IsNullOrWhiteSpace(response.LineError))
+                throw new InvalidOperationException(
+                    "Tally did not confirm exactly one existing Cash Ledger ALTER. " +
+                    "Re-read the same master before any retry; no voucher was posted. " +
+                    response.LineError);
+
+            tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+            var renamedXml = await tally.ExportMastersAsync(destination, cancellationToken)
+                .ConfigureAwait(false);
+            var afterRename = ReadLiveMasters(renamedXml);
+            var sameId = afterRename.Where(x =>
+                x.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) &&
+                x.Name.Equals(cashLedger.Name, StringComparison.OrdinalIgnoreCase) &&
+                x.Parent.Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase) &&
+                x.TallyMasterId.Equals(cashLedger.PreviousMasterId,
+                    StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (sameId.Length != 1 ||
+                afterRename.Any(x => x.Name.Equals(cashLedger.PreviousName,
+                    StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException(
+                    "Tally did not independently confirm that the old Cash ledger " +
+                    "was renamed with the SAME MASTERID. No voucher will be sent.");
+            renamedCashCount++;
+        }
+
         int createdGroups = 0, createdCash = 0, createdTypes = 0;
         // One-by-one existing Upsert validates Tally's response AND reads the
         // resulting parent from Tally. A failure halts the stage, never advances
@@ -417,8 +507,39 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             (createOnlyVoucherTypes
                 ? "Creation-only: missing Voucher Types created and read back; " +
                   "all existing masters/numbering and all vouchers were left unchanged. "
-                : "Branch master read-back passed. No consolidated vouchers were posted. ") +
+                : "Branch master read-back passed. " + renamedCashCount +
+                  " old hash-named Cash ledger(s) renamed under their original " +
+                  "MASTERID; no consolidated vouchers were posted. ") +
             "Each branch GST ledger remains source-owned; no GST journal was regenerated.");
+    }
+
+    // Only the old hash-named, already-verified Cash-in-Hand ledger may use
+    // this bounded master ALTER. This changes NAME only (not group, opening
+    // balance, voucher totals or master identity).
+    internal static string BuildBoundLegacyCashLedgerRenameXml(
+        string companyName, string previousName, string friendlyName,
+        string masterId, string guid)
+    {
+        if (string.IsNullOrWhiteSpace(previousName) ||
+            !previousName.StartsWith("Cash (B-", StringComparison.OrdinalIgnoreCase) ||
+            !previousName.EndsWith(')') ||
+            !friendlyName.StartsWith("Cash - ", StringComparison.OrdinalIgnoreCase) ||
+            !long.TryParse(masterId, out var id) || id <= 0 ||
+            string.IsNullOrWhiteSpace(guid))
+            throw new InvalidOperationException("Legacy Cash rename requires original verified Tally identity.");
+        var xml = new StringBuilder();
+        TallyExcelParityXmlWriter.BeginAllMastersImport(xml, companyName);
+        xml.AppendLine(new XElement("TALLYMESSAGE",
+            new XElement("LEDGER",
+                new XAttribute("NAME", previousName),
+                new XAttribute("ACTION", "Alter"),
+                new XElement("MASTERID", masterId),
+                new XElement("GUID", guid),
+                new XElement("NAME", friendlyName),
+                new XElement("PARENT", "Cash-in-Hand")))
+            .ToString(SaveOptions.DisableFormatting));
+        TallyExcelParityXmlWriter.EndAllMastersImport(xml);
+        return xml.ToString();
     }
 
     /// <summary>Read-only live Tally preflight for the prepared XML stage.</summary>
