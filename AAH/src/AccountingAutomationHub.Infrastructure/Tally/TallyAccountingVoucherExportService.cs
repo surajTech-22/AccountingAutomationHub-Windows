@@ -609,7 +609,7 @@ public sealed class TallyAccountingVoucherExportService
 
         const int minBatchSize = 10;
         const int maxBatchSize = 400;
-        var batchSize = Math.Min(80, prepared.Count);
+        var batchSize = Math.Min(160, prepared.Count);
         var recoveryBatches = new Stack<PreparedVoucher[]>();
         var knownLiveIds = liveBefore.Select(item => item.MasterId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var acceptedPrepared = new HashSet<PreparedVoucher>();
@@ -3651,20 +3651,23 @@ public sealed class TallyAccountingVoucherExportService
     }
 
     /// <summary>
-    /// Shared individual/consolidated Tally backpressure policy. Start with
-    /// 80 vouchers and adjust after each acknowledged request; cap at 400 so
-    /// Tally is not driven unresponsive by a large company.
+    /// Shared individual/consolidated Tally backpressure policy. A 160-voucher
+    /// initial request avoids the proven CL019 80/90/100-voucher crawl; a
+    /// sub-9-second confirmed POST grows substantially, while genuinely slow
+    /// or uncertain responses shrink the next batch. Hard cap remains 400.
     /// </summary>
     internal static int NextAdaptiveVoucherBatchSize(int current, long elapsedMs)
     {
         const int minimum = 10;
         const int maximum = 400;
         current = Math.Clamp(current, minimum, maximum);
-        return elapsedMs <= 2000
-            ? Math.Min(maximum, Math.Max(current + 20, (int)Math.Ceiling(current * 1.35)))
-            : elapsedMs <= 6000 ? Math.Min(maximum, current + 10)
-            : elapsedMs <= 12000 ? Math.Max(minimum, (int)Math.Floor(current * 0.75))
-            : Math.Max(minimum, current / 2);
+        return elapsedMs <= 4000
+            ? Math.Min(maximum, Math.Max(current + 50, (int)Math.Ceiling(current * 1.40)))
+            : elapsedMs <= 9000
+                ? Math.Min(maximum, Math.Max(current + 35, (int)Math.Ceiling(current * 1.20)))
+                : elapsedMs <= 16000
+                    ? Math.Max(minimum, (int)Math.Floor(current * 0.80))
+                    : Math.Max(minimum, current / 2);
     }
 
     private static string BuildVoucherOnlyXml(string companyName, IReadOnlyCollection<PreparedVoucher> vouchers)
