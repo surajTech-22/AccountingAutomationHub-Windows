@@ -2224,6 +2224,91 @@ public sealed class TallyConsolidatedVoucherImportService(
                             p.Amount == expected.Amount));
     }
 
+
+    // Only the verified PREVIOUS same-MASTERID accounting version may be
+    // altered. Tally's automatic voucher renumbering can advance ALTERID
+    // on other vouchers in the type's series; in this TYPE-ONLY route, an
+    // increased ALTERID is acceptable only after proving the FULL native
+    // content still equals the SAVED previous version. Normal accounting
+    // ALTER keeps its existing strict exact-ALTERID barrier.
+    internal static bool PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+        TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        TallySourceBindingVersionState saved, XElement preparedVoucher,
+        string previousType)
+    {
+        if (saved is null ||
+            !saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+            !IgnoreCase.Equals(saved.MasterId, live.MasterId) ||
+            (saved.Guid.Length > 0 && !IgnoreCase.Equals(saved.Guid, live.Guid)) ||
+            !IgnoreCase.Equals(previousType, live.VoucherType) ||
+            !MatchesTypeOnlyPreparedVoucher(preparedVoucher, live, fullAuthority))
+            return false;
+        if (PreviousConsolidatedVersionMatches(live, fullAuthority, saved))
+            return true;
+        // NEVER waive stale ALTERID for a different date/type, a changed
+        // reference/party/narration, ledger/GST field or signed DR/CR.
+        // A native Tally ALTERID must monotonically advance and the saved
+        // old source fingerprint must remain provably identical.
+        if (saved.LastVerifiedAlterId <= 0 ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var liveAlter) ||
+            liveAlter <= saved.LastVerifiedAlterId ||
+            live.VoucherDate is not DateTime originalDate ||
+            saved.VerifiedContentHash.Length == 0)
+            return false;
+        var readback = ReadVerifiedLiveConsolidatedVersion(live, fullAuthority);
+        return readback is not null &&
+            (IgnoreCase.Equals(saved.VerifiedContentHash, readback.Value.Hash) ||
+             SavedConsolidatedVersionProvesOwnFingerprint(
+                 saved.VerifiedVersion, saved.VerifiedContentHash,
+                 originalDate, live.VoucherType, live.Reference,
+                 readback.Value.Version));
+    }
+
+    // A previous v633 ALTER was accepted at Tally MASTERID 5, but was left
+    // pending because Tally renumbered it. Only the immutable same-source
+    // pending version plus exact live MASTERID, GUID, desired type and FULL
+    // signed original postings may complete it. Never POST the ALTER again.
+    internal static bool CanReconcileAcceptedTypeOnlyAlter(
+        XElement desired, string desiredHash, string desiredVersion,
+        TallySourceBindingVersionState pending, TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
+    {
+        if (pending is null ||
+            !pending.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase) ||
+            pending.MasterId.Length == 0 ||
+            !IgnoreCase.Equals(pending.MasterId, live.MasterId) ||
+            (pending.Guid.Length > 0 && !IgnoreCase.Equals(pending.Guid, live.Guid)) ||
+            pending.VerifiedContentHash.Length == 0 ||
+            pending.LastVerifiedAlterId <= 0 ||
+            !IgnoreCase.Equals(pending.PendingContentHash, desiredHash) ||
+            !string.Equals(pending.PendingVersion, desiredVersion, StringComparison.Ordinal) ||
+            !IgnoreCase.Equals(Value(desired, "VOUCHERTYPENAME"), live.VoucherType) ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var actualAlterId) ||
+            actualAlterId <= pending.LastVerifiedAlterId)
+            return false;
+        return MatchesTypeOnlyPreparedVoucher(desired, live, fullAuthority) &&
+               ReadVerifiedLiveConsolidatedVersion(live, fullAuthority) is not null;
+    }
+
+    // A reverse transition must prove that the live former child is a
+    // genuine Tally VOUCHERTYPE master under the original base type.
+    internal static bool IsVerifiedBranchSubtypeParent(
+        IReadOnlyDictionary<string, XElement> liveMasters,
+        string childType, string parentType)
+    {
+        if (string.IsNullOrWhiteSpace(parentType) ||
+            !childType.StartsWith(parentType + " - ", StringComparison.OrdinalIgnoreCase) ||
+            !liveMasters.TryGetValue(MasterKey("VOUCHERTYPE", childType), out var child) ||
+            !IgnoreCase.Equals(Value(child, "PARENT"), parentType) ||
+            !long.TryParse(Value(child, "MASTERID"), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var masterId) || masterId <= 0)
+            return false;
+        return true;
+    }
+
     // Type-only means no change to an original posting, date, reference,
     // narration or party. Use the existing normal Tally strict comparator,
     // then independently read the complete signed native DR/CR from Tally.
