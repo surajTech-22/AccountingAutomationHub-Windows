@@ -132,11 +132,24 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
             {
                 db.Open();
                 using var cmd = db.CreateCommand();
-                cmd.CommandText = "CREATE TABLE Clients(Id INTEGER PRIMARY KEY); INSERT INTO Clients VALUES(901);";
+                cmd.CommandText = "CREATE TABLE Clients(Id INTEGER PRIMARY KEY, ClientCode TEXT, ClientName TEXT); " +
+                    "INSERT INTO Clients VALUES(901,'CL019','Mitansh Technology');";
                 cmd.ExecuteNonQuery();
             }
             var repo = new SqliteTallyRepository(connectionString);
             repo.Initialize();
+            // Legacy Live Tally company links may store a blank FY. The active
+            // client FY is proven instead by the durable BankSyncState.
+            using (var db = new SqliteConnection(connectionString))
+            {
+                db.Open();
+                using var cmd = db.CreateCommand();
+                cmd.CommandText =
+                    "INSERT INTO TallyClientLinks " +
+                    "(ClientId, CompanyKey, CompanyName, FinancialYear, LinkedUtc, UpdatedUtc) " +
+                    "VALUES (901,'BOOK-42','CL019 Consolidated','','2026-11-07','2026-11-07');";
+                cmd.ExecuteNonQuery();
+            }
             var link = new TallyClientLink
             {
                 ClientId = 901, FinancialYear = "2025-26",
@@ -196,8 +209,36 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
                 .Single(row => row.MasterId == "35").PartyLedger == "Kreativ Creative",
                 "failed native readback overwrote old unverified voucher");
             var before = repo.GetBankSyncState(901, link.FinancialYear, link.CompanyKey)!;
+            var persistedLink = repo.GetLinkForClient(901)
+                ?? throw new InvalidOperationException("CL019 stored company link missing");
+            Check(persistedLink.FinancialYear.Length == 0 &&
+                  persistedLink.CompanyKey == link.CompanyKey &&
+                  persistedLink.ClientId == link.ClientId,
+                "test must use the actual persisted original blank-FY Live Tally link");
+            // A conflicting explicit FY must still block persistence and
+            // preserve the previous authority.
+            var wrongYearLink = new TallyClientLink
+            {
+                ClientId = persistedLink.ClientId,
+                CompanyKey = persistedLink.CompanyKey,
+                FinancialYear = "2024-25"
+            };
+            bool rejectedWrongYear = false;
+            try
+            {
+                TallyConsolidatedPreImportAuthorityWrapper.PersistVerifiedOriginalLiveVoucherAuthority(
+                    repo, before, wrongYearLink, marker, fresh, freshXml);
+            }
+            catch (InvalidOperationException) { rejectedWrongYear = true; }
+            Check(rejectedWrongYear &&
+                  repo.GetVoucherIndexRange(link.CompanyKey, link.FinancialYear,
+                    new DateTime(2025, 4, 1), new DateTime(2026, 3, 31))
+                    .Single(row => row.MasterId == "35").PartyLedger == "Kreativ Creative",
+                "a truly wrong supplied client FY was accepted or overwrote cached data");
+            // The SAME saved link with no FY must use the original active FY
+            // checkpoint, and update both index and full XML with new data.
             TallyConsolidatedPreImportAuthorityWrapper.PersistVerifiedOriginalLiveVoucherAuthority(
-                repo, before, link, marker, fresh, freshXml);
+                repo, before, persistedLink, marker, fresh, freshXml);
             var readback = repo.GetVoucherIndexRange(link.CompanyKey, link.FinancialYear,
                 new DateTime(2025, 4, 1), new DateTime(2026, 3, 31));
             var changed = readback.Single(row => row.MasterId == "35");
@@ -217,7 +258,7 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
                   after.LastAlterId >= 672 &&
                   after.LastIncrementalSyncUtc > DateTime.MinValue,
                 "native voucher refresh invented Master baseline or failed to record refreshed authority");
-            Console.WriteLine("PASS: real isolated SQLite readback updates CL019 MASTERID 35 from Kreativ Creative to Kreativ and Creative in BOTH original Live Tally index and complete signed XML; old source and other vouchers preserved.");
+            Console.WriteLine("PASS: actual blank-FY CL019 linked company uses original verified client FY, rejects wrong FY, and persists MASTERID 35 new ledger/ALTERID in BOTH real SQLite Voucher index and full XML.");
         }
         finally
         {
