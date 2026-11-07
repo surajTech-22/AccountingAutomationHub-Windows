@@ -1475,7 +1475,26 @@ public sealed class TallyHttpService : IDisposable
         if (highestKnownMasterId < 0)
             throw new InvalidOperationException("Native import-batch readback has an invalid pre-batch MASTERID watermark.");
 
-        var predicate = string.Join(" OR ", ids.Select(id => "($MasterID = " + id + ")")
+        // 645 pre-existing CL019 ALTER MASTERIDs would otherwise create a
+        // giant OR formula in the Tally TDL collection. Coalesce only
+        // CONSECUTIVE exact IDs into closed ranges, preserving strict scope.
+        var sortedIds = ids.Select(id => long.Parse(id, CultureInfo.InvariantCulture))
+            .OrderBy(id => id).ToArray();
+        var ranges = new List<(long First, long Last)>();
+        foreach (var id in sortedIds)
+        {
+            if (ranges.Count > 0 &&
+                ranges[^1].Last < long.MaxValue && id == ranges[^1].Last + 1)
+                ranges[^1] = (ranges[^1].First, id);
+            else
+                ranges.Add((id, id));
+        }
+        var terms = ranges.Select(range =>
+            range.First == range.Last
+                ? "($MasterID = " + range.First.ToString(CultureInfo.InvariantCulture) + ")"
+                : "($MasterID >= " + range.First.ToString(CultureInfo.InvariantCulture) +
+                  " AND $MasterID <= " + range.Last.ToString(CultureInfo.InvariantCulture) + ")");
+        var predicate = string.Join(" OR ", terms
             .Append("($MasterID > " + highestKnownMasterId.ToString(CultureInfo.InvariantCulture) + ")"));
         IReadOnlyList<TallyVoucherIndexRecord> index;
         IReadOnlyList<TallyVoucherXmlSnapshot> full;
