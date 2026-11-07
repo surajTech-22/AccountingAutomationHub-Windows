@@ -1666,6 +1666,25 @@ public sealed class TallyConsolidatedVoucherImportService(
                         readbackLimit?.Token ?? cancellationToken).ConfigureAwait(false);
                     afterIndex = after.Index;
                     afterFull = after.Full;
+                    // A partial/empty Tally EXPORT must never be mistaken
+                    // for definite non-acceptance. CREATE/ALTER never DELETE
+                    // an existing MASTERID, even when numbering changes.
+                    var liveIds = afterIndex.Select(item => item.MasterId.Trim())
+                        .ToHashSet(IgnoreCase);
+                    var nativeIds = afterFull.Select(item => item.MasterId.Trim())
+                        .ToHashSet(IgnoreCase);
+                    var expectedOldIds = indexByMasterId.Values.Where(item =>
+                        item.VoucherDate?.Date >= fromDate &&
+                        item.VoucherDate?.Date <= toDate)
+                        .Select(item => item.MasterId.Trim());
+                    if (liveIds.Count != afterIndex.Count ||
+                        nativeIds.Count != afterFull.Count ||
+                        !liveIds.SetEquals(nativeIds) ||
+                        expectedOldIds.Any(id => !liveIds.Contains(id)))
+                        throw new InvalidOperationException(
+                            "Adaptive post-write Tally index/native XML is " +
+                            "incomplete or lost an existing MASTERID. " +
+                            "All affected sources remain pending; no retry.");
                     // Identical native index+full XML persistence to the
                     // normal individual exporter, ONCE per batch.
                     tallyRepository.ReplaceVoucherIndexRange(
@@ -1772,11 +1791,21 @@ public sealed class TallyConsolidatedVoucherImportService(
                     // readback showing no desired change is a rejection;
                     // unknown/clean response without proof remains pending.
                     var unchangedOld = record.Alter &&
+                        alterTargets.TryGetValue(expected.SourceAnchor, out var old) &&
                         afterIndex.Any(item =>
                             IgnoreCase.Equals(item.MasterId, record.MasterId) &&
                             (record.Guid.Length == 0 ||
                              IgnoreCase.Equals(item.Guid, record.Guid)) &&
-                            !IgnoreCase.Equals(item.VoucherType, expected.Type));
+                            IgnoreCase.Equals(item.VoucherType, old.VoucherType) &&
+                            !IgnoreCase.Equals(item.VoucherType, expected.Type) &&
+                            item.VoucherDate?.Date == old.VoucherDate?.Date &&
+                            IgnoreCase.Equals(item.Reference, old.Reference) &&
+                            IgnoreCase.Equals(item.Narration, old.Narration) &&
+                            SamePostings(
+                                item.LedgerPostings.Select(posting =>
+                                    (posting.LedgerName, posting.SignedAmount)).ToArray(),
+                                old.LedgerPostings.Select(posting =>
+                                    (posting.LedgerName, posting.SignedAmount)).ToArray()));
                     var definitelyAbsent = !record.Alter &&
                         !afterIndex.Any(item =>
                             newlyWrittenIds.Contains(item.MasterId) &&
