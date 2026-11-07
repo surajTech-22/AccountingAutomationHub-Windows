@@ -590,6 +590,12 @@ public static class TallyConsolidatedPreparedXmlBuilder
             // or disables branch-specific destination voucher types.
             VoucherTypeBaseByDestination = plan.VoucherTypes.ToDictionary(
                 item => item.Name, item => item.BaseType,
+                StringComparer.OrdinalIgnoreCase),
+            // This AAH-only identity map never goes to Tally. It proves
+            // "Cash - Karnataka" belongs to the exact B-... voucher scope
+            // when an original Cash line is changed in one bound ALTER.
+            BranchCashLedgerNamesById = plan.CashLedgers.ToDictionary(
+                item => item.BranchId, item => item.Name,
                 StringComparer.OrdinalIgnoreCase)
         };
     }
@@ -697,5 +703,7 @@ public sealed record TallyConsolidatedPreparedXmlResult(
     // The target's old-version/read-back gate must make the final CREATE/ALTER decision.
     public int RebasedBranchAlterCount { get; init; }
     public IReadOnlyDictionary<string, string> VoucherTypeBaseByDestination { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, string> BranchCashLedgerNamesById { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
