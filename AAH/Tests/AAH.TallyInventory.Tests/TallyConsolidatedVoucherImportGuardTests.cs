@@ -271,6 +271,151 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "and native signed DRCR; PARTYNAME/BASICNARRATION aliases work; changed XML/ALTERID/GUID block.");
 
 
+
+        // v634 regression: switching type lets Tally assign another voucher
+        // number, including the reverse direction. Other automatically
+        // renumbered vouchers may acquire a higher ALTERID but are eligible
+        // only when the saved previous type/date/reference/party/entire native
+        // signed DRCR are still proven, with the SAME bound MASTERID/GUID.
+        var updatedNativeXml = normalFullXml.Replace(
+            "<ALTERID>382</ALTERID>", "<ALTERID>383</ALTERID>",
+            StringComparison.Ordinal);
+        var updatedLive = new TallyVoucherIndexRecord
+        {
+            MasterId = "359", Guid = normalGuid, AlterId = "383",
+            VoucherDate = originalDate, VoucherType = "Payment",
+            VoucherNumber = "TALLY-RENUMBERED-1001",
+            Reference = "BANK-REFERENCE-01",
+            PartyLedger = "Original Supplier",
+            Narration = "Payment to original supplier",
+            LedgerPostings = normalizedIndex.LedgerPostings
+        };
+        var updatedFull = new[] {
+            new TallyVoucherXmlSnapshot(
+                "359", normalGuid, "Payment", originalDate, updatedNativeXml)
+            { AlterId = "383" }
+        };
+        var desiredTypeXml = System.Xml.Linq.XElement.Parse("""
+            <VOUCHER>
+              <DATE>20250531</DATE><VOUCHERTYPENAME>Payment - Karnataka</VOUCHERTYPENAME>
+              <VOUCHERNUMBER>ORIGINAL-01</VOUCHERNUMBER>
+              <REFERENCE>BANK-REFERENCE-01</REFERENCE>
+              <PARTYLEDGERNAME>Original Supplier</PARTYLEDGERNAME>
+              <NARRATION>Payment to original supplier</NARRATION>
+              <ALLLEDGERENTRIES.LIST>
+                <LEDGERNAME>Original Supplier</LEDGERNAME><AMOUNT>-40000.00</AMOUNT>
+              </ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST>
+                <LEDGERNAME>Bank Account</LEDGERNAME><AMOUNT>40000.00</AMOUNT>
+              </ALLLEDGERENTRIES.LIST>
+            </VOUCHER>
+            """);
+        var renumberProof = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("PreviousConsolidatedTypeOnlyWithTallyRenumberMatches",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("v634 native renumbering guard missing");
+        bool CanRebaseAfterTallyNumbering(
+            TallyVoucherIndexRecord candidate,
+            TallySourceBindingVersionState previous,
+            System.Xml.Linq.XElement expected,
+            TallyVoucherXmlSnapshot[] snapshots,
+            string originalType = "Payment") =>
+            (bool)renumberProof.Invoke(null,
+                new object[] { candidate, snapshots, previous, expected, originalType })!;
+        if (normalLinkedPrevious.Invoke(null,
+                new object[] { updatedLive, updatedFull, previousLinkedVersion }) is not bool oldPassed ||
+            oldPassed || !CanRebaseAfterTallyNumbering(
+                updatedLive, previousLinkedVersion, desiredTypeXml, updatedFull))
+            throw new InvalidOperationException(
+                "v634 did not reconcile Tally-only number/ALTERID changes after strict old gate.");
+        var wrongNumberAmount = new System.Xml.Linq.XElement(desiredTypeXml);
+        wrongNumberAmount.Descendants("AMOUNT").Last().Value = "40001.00";
+        var wrongNumberSource = new System.Xml.Linq.XElement(desiredTypeXml);
+        wrongNumberSource.Element("REFERENCE")!.Value = "ANOTHER-REFERENCE";
+        if (CanRebaseAfterTallyNumbering(updatedLive, previousLinkedVersion,
+                wrongNumberAmount, updatedFull) ||
+            CanRebaseAfterTallyNumbering(updatedLive, previousLinkedVersion,
+                wrongNumberSource, updatedFull) ||
+            CanRebaseAfterTallyNumbering(updatedLive, previousLinkedVersion,
+                desiredTypeXml, updatedFull, "Receipt"))
+            throw new InvalidOperationException(
+                "v634 waived previous-version authority for changed DRCR, reference or original type.");
+        var changedMaster = new TallyVoucherIndexRecord
+        {
+            MasterId = "999", Guid = normalGuid, AlterId = "383",
+            VoucherDate = originalDate, VoucherType = "Payment",
+            Reference = updatedLive.Reference, Narration = updatedLive.Narration,
+            PartyLedger = updatedLive.PartyLedger,
+            LedgerPostings = normalizedIndex.LedgerPostings
+        };
+        if (CanRebaseAfterTallyNumbering(changedMaster, previousLinkedVersion,
+                desiredTypeXml, updatedFull))
+            throw new InvalidOperationException("v634 renumber rebase changed source MASTERID.");
+        var pendingGuard = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("CanReconcileAcceptedTypeOnlyAlter",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("v634 pending accepted-ALTER recovery missing");
+        var currentChild = new TallyVoucherIndexRecord
+        {
+            MasterId = "359", Guid = normalGuid, AlterId = "383",
+            VoucherDate = originalDate, VoucherType = "Payment - Karnataka",
+            VoucherNumber = "TALLY-NEW-101", Reference = "BANK-REFERENCE-01",
+            PartyLedger = "Original Supplier", Narration = "Payment to original supplier",
+            LedgerPostings = normalizedIndex.LedgerPostings
+        };
+        var childFullXml = updatedNativeXml.Replace(
+            "<VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>",
+            "<VOUCHERTYPENAME>Payment - Karnataka</VOUCHERTYPENAME>",
+            StringComparison.Ordinal);
+        var childAuthority = new[] {
+            new TallyVoucherXmlSnapshot("359", normalGuid, "Payment - Karnataka",
+                originalDate, childFullXml) { AlterId = "383" }
+        };
+        var accepted = new TallySourceBindingVersionState
+        {
+            State = "AcceptedAwaitingVerification", MasterId = "359", Guid = normalGuid,
+            LastVerifiedAlterId = 382, VerifiedContentHash = linkedHash,
+            PendingContentHash = "desired-hash", PendingVersion = "desired-version"
+        };
+        bool CanReconcile(string hash = "desired-hash", string version = "desired-version",
+            TallyVoucherIndexRecord? current = null) =>
+            (bool)pendingGuard.Invoke(null, new object[] {
+                desiredTypeXml, hash, version, accepted,
+                current ?? currentChild, childAuthority
+            })!;
+        if (!CanReconcile() || CanReconcile("different-hash") ||
+            CanReconcile(version: "different-version") ||
+            CanReconcile(current: updatedLive))
+            throw new InvalidOperationException(
+                "v634 accepted ALTER recovery must bind only the immutable pending version and desired live type.");
+        var parentGuard = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("IsVerifiedBranchSubtypeParent",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("v634 reverse parent verification missing");
+        var childMaster = new System.Xml.Linq.XElement("VOUCHERTYPE",
+            new System.Xml.Linq.XAttribute("NAME", "Payment - Karnataka"),
+            new System.Xml.Linq.XElement("PARENT", "Payment"),
+            new System.Xml.Linq.XElement("MASTERID", "351"));
+        var liveTypes = new Dictionary<string, System.Xml.Linq.XElement>(
+            StringComparer.OrdinalIgnoreCase) { ["VOUCHERTYPE|Payment - Karnataka"] = childMaster };
+        bool CorrectParent(string parent, System.Xml.Linq.XElement master) {
+            liveTypes["VOUCHERTYPE|Payment - Karnataka"] = master;
+            return (bool)parentGuard.Invoke(null, new object[] {
+                liveTypes, "Payment - Karnataka", parent
+            })!;
+        }
+        if (!CorrectParent("Payment", childMaster) ||
+            CorrectParent("Receipt", childMaster))
+            throw new InvalidOperationException("Reverse voucher type accepted wrong Tally parent.");
+        var alteredParent = new System.Xml.Linq.XElement(childMaster);
+        alteredParent.Element("PARENT")!.Value = "Receipt";
+        if (CorrectParent("Payment", alteredParent))
+            throw new InvalidOperationException("Reverse type ignored live Tally child parent.");
+        Console.WriteLine("PASS: v634 Tally-controlled numbering, increased ALTERID proof, immutable accepted readback and reversible parent/master gate.");
+
         // Another CL019 regression: 645 normal synchronized Voucher objects
         // had full signed XML, but the SQLite index did not persist the
         // individual posting objects. Exercise the EXACT normal Tally reader
