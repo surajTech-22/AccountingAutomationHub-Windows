@@ -169,12 +169,26 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             VerifiedContentHash = linkedHash, VerifiedVersion = linkedVersion,
             LastVerifiedAlterId = 382
         };
-        var nativeOldVersion = TallyConsolidatedVoucherImportService
-            .ReadVerifiedLiveConsolidatedVersion(normalizedIndex, [normalSnapshot]);
+        var normalLinkedReadback = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("ReadVerifiedLiveConsolidatedVersion",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Normal-linked consolidated readback method missing.");
+        var normalLinkedPrevious = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("PreviousConsolidatedVersionMatches",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Normal-linked previous DRCR gate missing.");
+        (string Hash, string Version)? ReadLinkedFull(TallyVoucherXmlSnapshot snapshot)
+        {
+            var returned = normalLinkedReadback.Invoke(null,
+                new object[] { normalizedIndex, new[] { snapshot } });
+            return returned is ValueTuple<string, string> tuple ? tuple : null;
+        }
+        var nativeOldVersion = ReadLinkedFull(normalSnapshot);
+        var originalPreviousMatches = (bool)normalLinkedPrevious.Invoke(null,
+            new object[] { normalizedIndex, new[] { normalSnapshot }, previousLinkedVersion })!;
         if (nativeOldVersion is null ||
             !nativeOldVersion.Value.Hash.Equals(linkedHash, StringComparison.OrdinalIgnoreCase) ||
-            !TallyConsolidatedVoucherImportService.PreviousConsolidatedVersionMatches(
-                normalizedIndex, [normalSnapshot], previousLinkedVersion))
+            !originalPreviousMatches)
             throw new InvalidOperationException(
                 "Normal Tally Link PARTYNAME/BASICNARRATION normalization was not reused by " +
                 "the consolidated wrapper; unchanged Payment 359/382 incorrectly blocked.");
@@ -182,22 +196,19 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "<AMOUNT>-40000.00</AMOUNT>", "<AMOUNT>-40001.00</AMOUNT>", StringComparison.Ordinal);
         var changedXml = new TallyVoucherXmlSnapshot(
             "359", normalGuid, "Payment", originalDate, changedLiveXml) { AlterId = "382" };
-        if (TallyConsolidatedVoucherImportService.ReadVerifiedLiveConsolidatedVersion(
-                normalizedIndex, [changedXml]) is not null)
+        if (ReadLinkedFull(changedXml) is not null)
             throw new InvalidOperationException(
                 "Consolidated wrapper accepted full Tally XML with changed signed DRCR.");
         var wrongAlter = new TallyVoucherXmlSnapshot(
             "359", normalGuid, "Payment", originalDate, normalFullXml) { AlterId = "383" };
-        if (TallyConsolidatedVoucherImportService.ReadVerifiedLiveConsolidatedVersion(
-                normalizedIndex, [wrongAlter]) is not null)
+        if (ReadLinkedFull(wrongAlter) is not null)
             throw new InvalidOperationException(
                 "Consolidated wrapper accepted full Tally XML with changed native ALTERID.");
         var wrongGuidXml = normalFullXml.Replace(normalGuid,
             "different-native-voucher-guid", StringComparison.Ordinal);
         var wrongGuid = new TallyVoucherXmlSnapshot(
             "359", normalGuid, "Payment", originalDate, wrongGuidXml) { AlterId = "382" };
-        if (TallyConsolidatedVoucherImportService.ReadVerifiedLiveConsolidatedVersion(
-                normalizedIndex, [wrongGuid]) is not null)
+        if (ReadLinkedFull(wrongGuid) is not null)
             throw new InvalidOperationException(
                 "Consolidated wrapper ignored changed GUID inside original full Voucher XML.");
         Console.WriteLine(
