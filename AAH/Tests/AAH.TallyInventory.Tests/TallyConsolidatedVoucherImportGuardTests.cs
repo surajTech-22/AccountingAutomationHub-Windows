@@ -395,14 +395,35 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             .Descendants("LEDGER").Single();
         if (renameElement.Attribute("ACTION")?.Value != "Alter" ||
             renameElement.Attribute("NAME")?.Value != "Cash (" + ownBranch + ")" ||
-            renameElement.Element("MASTERID")?.Value != "477" ||
-            renameElement.Element("GUID")?.Value != bankGuid ||
+            renameElement.Attribute("RESERVEDNAME")?.Value != "" ||
+            renameElement.Element("MASTERID") is not null ||
+            renameElement.Element("GUID") is not null ||
+            renameElement.Element("ALTERID") is not null ||
             renameElement.Element("NAME")?.Value != "Cash - Karnataka" ||
             renameElement.Element("PARENT")?.Value != "Cash-in-Hand" ||
             renameElement.Descendants("VOUCHER").Any())
             throw new InvalidOperationException(
-                "v640 new Cash display name does not use same-MASTERID master ALTER.");
-        Console.WriteLine("PASS: v640 readable Cash - Karnataka; exact B-branch scope, one name-only master ALTER, unchanged signed DR/CR.");
+                "v641 old-name Tally master ALTER must NOT import foreign generated " +
+                "MASTERID, GUID or ALTERID; those are checked around the request.");
+        var missingGuidRejected = false;
+        try
+        {
+            cashRename.Invoke(null, new object[]
+            {
+                "Combined Books", "Cash (" + ownBranch + ")",
+                "Cash - Karnataka", "477", ""
+            });
+        }
+        catch (System.Reflection.TargetInvocationException ex)
+            when (ex.InnerException is InvalidOperationException)
+        {
+            missingGuidRejected = true;
+        }
+        if (!missingGuidRejected)
+            throw new InvalidOperationException(
+                "v641 must require the original ledger GUID for master ALTER");
+        Console.WriteLine("PASS: v641 readable Cash - Karnataka; old-name Tally ALTER with " +
+            "no generated IDs on wire, strict source scope and unchanged signed DR/CR.");
 
         // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
         // as PartyLedger and BASICNARRATION as Narration in its saved index.
