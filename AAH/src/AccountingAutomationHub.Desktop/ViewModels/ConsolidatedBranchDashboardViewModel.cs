@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Domain.Clients;
 using AccountingAutomationHub.Desktop.Commands;
@@ -21,6 +22,7 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
     private readonly SqliteConsolidatedBranchReadbackRepository _readback = new();
     private readonly Func<string> _tallyProgressReader;
     private string _tallyImportProgressStatus = "Reading durable consolidated Tally import verification...";
+    private int _progressRefreshGeneration;
     private string _status = "Reading saved branch accounting records...";
     private string _warning = string.Empty;
 
@@ -81,8 +83,25 @@ public sealed class ConsolidatedBranchDashboardViewModel : PageViewModel
 
     public void RefreshTallyImportProgress()
     {
-        try { TallyImportProgressStatus = _tallyProgressReader(); }
-        catch (Exception ex) { TallyImportProgressStatus = "Tally progress unavailable: " + ex.Message; }
+        // The shared Tally dashboard may create this ViewModel while opening a
+        // consolidated workspace. Read the original saved Tally progress in
+        // the background rather than blocking the WPF navigation dispatcher.
+        var generation = Interlocked.Increment(ref _progressRefreshGeneration);
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        _ = Task.Run(() =>
+        {
+            string status;
+            try { status = _tallyProgressReader(); }
+            catch (Exception ex) { status = "Tally progress unavailable: " + ex.Message; }
+            if (dispatcher.HasShutdownStarted) return;
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() =>
+                {
+                    if (generation == Volatile.Read(ref _progressRefreshGeneration))
+                        TallyImportProgressStatus = status;
+                }));
+        });
     }
     public string BranchSummary => $"{BranchCount} branches · FY {_financialYear}";
 
