@@ -39,21 +39,51 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         // Voucher XML and ALTERID delta authority; do not request a new
         // full-company snapshot. Normal Refresh may silently defer a pulse,
         // so its return alone is never proof of a live checkpoint.
-        var beforeRefresh = existingRepository.GetBankSyncState(
-            client.Id, client.FinancialYear, confirmedLink.CompanyKey);
+        // The Live Tally Link owns the synchronized Company/FY authority.
+        // Reuse its ordinary delta/checkpoint path rather than imposing a
+        // NEW full-year baseline timestamp on every consolidated import.
         await normalCoordinator.RefreshNowAsync(
             forceLinkedSynchronization: true,
             cancellationToken: cancellationToken,
-            // Identical to an individual explicit Tally export: rebuild one fresh
-            // complete FY Master/Voucher authority before preparing any CREATE/ALTER.
-            forceFullBaseline: true);
+            forceFullBaseline: false);
         RequireSameSavedLink(client, confirmedLink);
-        // Normal RefreshNowAsync is also used by noncritical heartbeats and
-        // can return after recording a Tally sync error. Its return value
-        // alone is NOT proof that old SQLite vouchers were refreshed.
-        // Refuse to match against an old marker or 09:19-era Voucher index.
-        RequireFreshNormalBaseline(beforeRefresh, existingRepository.GetBankSyncState(
-            client.Id, client.FinancialYear, confirmedLink.CompanyKey));
+        var synchronized = existingRepository.GetBankSyncState(
+            client.Id, client.FinancialYear, confirmedLink.CompanyKey);
+        if (synchronized is null || synchronized.LastFullSyncUtc == DateTime.MinValue ||
+            synchronized.LastFyVoucherCount < 0 || synchronized.LastAlterId <= 0)
+            throw new InvalidOperationException(
+                "Live Tally Link has not established its original complete FY authority. " +
+                "No consolidated voucher can be imported without it.");
+
+        // ERP9's tiny ALTERID pulse can remain unchanged even after a voucher
+        // ALTER. The ORIGINAL individual-client native index is the independent
+        // proof. If its saved index is old, reconcile from the ORIGINAL native
+        // full-Voucher reader under the Live Link's existing operation gate.
+        // This repairs already-stale CL019 voucher 35, not only future writes.
+        var range = GetFinancialYearRange(client.FinancialYear);
+        var savedIndex = existingRepository.GetVoucherIndexRange(
+            confirmedLink.CompanyKey, client.FinancialYear, range.From, range.To);
+        var nativeIndex = await existingTally.ExportVoucherIndexFreshAsync(
+            destination, range.From, range.To, cancellationToken);
+        var requiresNativeRefresh = savedIndex.Count != synchronized.LastFyVoucherCount ||
+                                    !existingRepository.HasCompleteVoucherXmlAuthority(
+                                        confirmedLink.CompanyKey, client.FinancialYear, savedIndex.Count);
+        if (!requiresNativeRefresh)
+        {
+            try { RequireSameVoucherIndex(savedIndex, nativeIndex, synchronized.LastAlterId); }
+            catch (InvalidOperationException) { requiresNativeRefresh = true; }
+        }
+        if (requiresNativeRefresh)
+        {
+            await normalCoordinator.RunWithLinkedTallyOperationGateAsync(
+                token => RefreshVoucherAuthorityFromOriginalLiveLinkAsync(
+                    client, confirmedLink, destination, range, token), cancellationToken);
+        }
+        RequireSameSavedLink(client, confirmedLink);
+        // ImportAsync repeats this unchanged native marker and full-DRCR
+        // verification before each real voucher CREATE or ALTER.
+        await ReadVerifiedMarkerAsync(
+            confirmedLink, destination, client.FinancialYear, cancellationToken);
 
         // No duplicate live-index read here. The ORIGINAL consolidated
         // importer calls ReadVerifiedMarkerAsync immediately before
@@ -199,25 +229,177 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         };
     }
 
-    // A real full baseline always persists a NEW timestamp and active-FY
-    // Voucher authority through the original normal coordinator. If the
-    // refresh failed but the coordinator swallowed its exception for its
-    // heartbeat UI, the older checkpoint must NEVER authorize import.
-    internal static void RequireFreshNormalBaseline(
-        TallyBankSyncState? previous, TallyBankSyncState? current)
+    private async Task RefreshVoucherAuthorityFromOriginalLiveLinkAsync(
+        ClientProfile client, TallyClientLink link, TallyCompanyInfo company,
+        (DateTime From, DateTime To) range, CancellationToken cancellationToken)
     {
-        if (current is null ||
-            current.LastFullSyncUtc == DateTime.MinValue ||
-            current.LastFullSyncUtc <= (previous?.LastFullSyncUtc ?? DateTime.MinValue) ||
-            current.LastAlterId <= 0 || current.LastFyVoucherCount < 0 ||
-            !current.LastStatus.Contains(
-                "complete FY baseline synchronized", StringComparison.OrdinalIgnoreCase))
+        RequireSameSavedLink(client, link);
+        var before = await existingTally.GetVoucherChangeMarkerAsync(
+            company, cancellationToken);
+        if (before.CompanyName.Length > 0 &&
+            !before.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
-                "The original Tally full-FY synchronization did not commit a fresh " +
-                "MASTERID/ALTERID and complete Voucher XML baseline. Its prior saved " +
-                "voucher index is stale or the refresh failed. No consolidated " +
-                "CREATE/ALTER was authorized. Check the normal Tally sync error " +
-                "and refresh the existing link before importing.");
+                "The native Tally refresh did not identify the linked destination company.");
+        var current = existingRepository.GetBankSyncState(
+            client.Id, client.FinancialYear, link.CompanyKey)
+            ?? throw new InvalidOperationException(
+                "The Live Tally Link checkpoint disappeared during native voucher refresh.");
+        if (current.LastFullSyncUtc == DateTime.MinValue)
+            throw new InvalidOperationException(
+                "Initial Live Tally Master/FY baseline has not completed.");
+
+        // Same original individual Tally reader, bounded to each calendar
+        // month. NEVER write the index before every required native Voucher
+        // object and all signed DR/CR XML have been read successfully.
+        var rows = new List<TallyVoucherIndexRecord>();
+        var xml = new List<TallyVoucherXmlSnapshot>();
+        for (var month = new DateTime(range.From.Year, range.From.Month, 1);
+             month <= range.To; month = month.AddMonths(1))
+        {
+            var from = month < range.From ? range.From : month;
+            var to = month.AddMonths(1).AddDays(-1);
+            if (to > range.To) to = range.To;
+            var slice = await existingTally.ExportVoucherAuthorityFreshAsync(
+                company, from, to, cancellationToken);
+            rows.AddRange(slice.Index);
+            xml.AddRange(slice.Full);
+        }
+
+        // ERP9's global marker may be unreliable. A second independent thin
+        // native index still must prove that this FY's MASTERID/ALTERID
+        // population remained stable while the month slices were acquired.
+        var recheck = await existingTally.ExportVoucherIndexFreshAsync(
+            company, range.From, range.To, cancellationToken);
+        var after = await existingTally.GetVoucherChangeMarkerAsync(
+            company, cancellationToken);
+        if (after.CompanyName.Length > 0 &&
+            !after.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The linked Tally destination changed during native voucher readback.");
+        if (before.HasReliableAlterId && after.HasReliableAlterId &&
+            (before.LastAlterId != after.LastAlterId ||
+             !string.Equals(before.Token, after.Token, StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "Live Tally changed while its FY vouchers were being refreshed. " +
+                "No stale or mixed-generation authority was saved.");
+        if (rows.Count != recheck.Count ||
+            rows.GroupBy(v => v.MasterId.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Any(g => g.Key.Length == 0 || g.Count() != 1) ||
+            recheck.GroupBy(v => v.MasterId.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Any(g => g.Key.Length == 0 || g.Count() != 1))
+            throw new InvalidOperationException(
+                "Native full-FY Voucher index changed while acquiring native XML.");
+        var nativeById = rows.ToDictionary(
+            v => v.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
+        if (recheck.Any(v =>
+                !nativeById.TryGetValue(v.MasterId.Trim(), out var native) ||
+                !string.Equals(v.AlterId.Trim(), native.AlterId.Trim(),
+                    StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Fresh native Voucher MASTERID/ALTERID changed during XML read. " +
+                "The original Live Tally authority remains unchanged.");
+        RequireSameSavedLink(client, link);
+        PersistVerifiedOriginalLiveVoucherAuthority(
+            existingRepository, current, link, before, rows, xml);
+    }
+
+    // Extracted only to enable a real SQLite replay of CL019's stale row.
+    // This saves the SAME normal Live Tally Index and full-XML repository
+    // tables as the individual importer, never modifies source vouchers,
+    // does not POST any Tally XML and does not invent a full Master baseline.
+    internal static void PersistVerifiedOriginalLiveVoucherAuthority(
+        SqliteTallyRepository repository, TallyBankSyncState state,
+        TallyClientLink link, TallyVoucherChangeMarker marker,
+        IReadOnlyList<TallyVoucherIndexRecord> rows,
+        IReadOnlyList<TallyVoucherXmlSnapshot> full)
+    {
+        if (state.ClientId != link.ClientId ||
+            !state.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+            !state.FinancialYear.Equals(link.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
+            state.LastFullSyncUtc == DateTime.MinValue)
+            throw new InvalidOperationException(
+                "Native Tally Voucher refresh is not bound to the original Client/FY/CompanyKey.");
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var latestAlterId = state.LastAlterId;
+        foreach (var row in rows)
+        {
+            if (!row.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
+                !row.FinancialYear.Equals(link.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
+                row.MasterId.Trim().Length == 0 || !ids.Add(row.MasterId.Trim()) ||
+                !long.TryParse(row.AlterId.Trim(), NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var alterId) || alterId <= 0)
+                throw new InvalidOperationException(
+                    "Native live Voucher identity/ALTERID is missing, duplicated, or from the wrong FY/book.");
+            latestAlterId = Math.Max(latestAlterId, alterId);
+        }
+        var fullById = full.GroupBy(
+                v => v.MasterId.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+        if (ids.Count != full.Count ||
+            rows.Any(row => !fullById.TryGetValue(row.MasterId.Trim(), out var snapshots) ||
+                snapshots.Length != 1 ||
+                snapshots[0].OriginalXml.Trim().Length == 0 ||
+                (row.Guid.Trim().Length > 0 && snapshots[0].Guid.Trim().Length > 0 &&
+                 !string.Equals(snapshots[0].Guid.Trim(), row.Guid.Trim(),
+                     StringComparison.OrdinalIgnoreCase)) ||
+                !string.Equals(snapshots[0].AlterId.Trim(), row.AlterId.Trim(),
+                    StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Live native Voucher index and complete Voucher XML do not agree. " +
+                "The saved synchronized authority was not changed.");
+
+        // No Tally POST: only the original shared index/XML cache changes.
+        repository.ReplaceVoucherIndex(link.CompanyKey, link.FinancialYear, rows);
+        repository.ReplaceVoucherXmlAuthority(link.CompanyKey, link.FinancialYear, full);
+        if (!repository.HasCompleteVoucherXmlAuthority(
+                link.CompanyKey, link.FinancialYear, rows.Count))
+            throw new InvalidOperationException(
+                "Updated Live Tally index/full XML failed database readback.");
+        var updatedIndex = repository.GetVoucherIndexRange(
+            link.CompanyKey, link.FinancialYear,
+            new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture), 4, 1),
+            new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture) + 1, 3, 31));
+        var originalById = rows.ToDictionary(
+            row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
+        if (updatedIndex.Count != rows.Count ||
+            updatedIndex.Any(row =>
+                !originalById.TryGetValue(row.MasterId.Trim(), out var original) ||
+                !string.Equals(row.AlterId, original.AlterId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.Guid, original.Guid, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.PartyLedger, original.PartyLedger, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.ContentHash, original.ContentHash, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Updated Live Tally MASTERID/ALTERID or ledger content did not persist in SQLite.");
+        var verifiedFull = repository.GetVoucherXmlAuthorityByMasterIds(
+            link.CompanyKey, link.FinancialYear, ids);
+        if (verifiedFull.Count != full.Count ||
+            verifiedFull.Any(row =>
+                !fullById.TryGetValue(row.MasterId.Trim(), out var snapshots) ||
+                snapshots.Length != 1 ||
+                !string.Equals(row.AlterId.Trim(), snapshots[0].AlterId.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.OriginalXml, snapshots[0].OriginalXml, StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "Updated Live Tally full signed Voucher XML did not persist correctly.");
+        // Only the proven native Voucher authority advances; the normal
+        // Live Tally Link retains exclusive ownership of full Master baseline.
+        var saved = repository.GetBankSyncState(
+            link.ClientId, link.FinancialYear, link.CompanyKey)
+            ?? throw new InvalidOperationException("Original Tally sync checkpoint vanished.");
+        saved.LastFyVoucherCount = rows.Count;
+        saved.LastAlterId = Math.Max(saved.LastAlterId, latestAlterId);
+        if (marker.HasReliableAlterId && marker.LastAlterId > 0)
+        {
+            saved.LastAlterId = Math.Max(saved.LastAlterId, marker.LastAlterId);
+            saved.LastTallyChangeToken = marker.Token;
+            saved.LastVoucherCount = marker.VoucherCount;
+        }
+        saved.LastIncrementalSyncUtc = DateTime.UtcNow;
+        saved.LastStatus =
+            "Live Tally native FY Voucher authority refreshed using original individual " +
+            "reader; " + rows.Count + " complete index/XML object(s), verified through " +
+            "ALTERID " + saved.LastAlterId + ".";
+        repository.UpsertBankSyncState(saved);
     }
 
     private static void RequireSameCompany(

@@ -663,6 +663,19 @@ public sealed class TallyLiveConnectionCoordinator :
         }
     }
 
+    // The consolidated adapter uses the same live-link operation gate for
+    // an exceptional native Voucher authority repair. This prevents a normal
+    // five-second delta from racing the exact shared SQLite index/XML update.
+    // Individual Tally import and ordinary heartbeats are unchanged.
+    internal async Task RunWithLinkedTallyOperationGateAsync(
+        Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        await _tallyOperationGate.WaitAsync(cancellationToken);
+        try { await operation(cancellationToken); }
+        finally { _tallyOperationGate.Release(); }
+    }
+
     private async Task<bool> WaitForTallyOperationAsync(CancellationToken cancellationToken = default)
     {
         await _tallyOperationGate.WaitAsync(cancellationToken);

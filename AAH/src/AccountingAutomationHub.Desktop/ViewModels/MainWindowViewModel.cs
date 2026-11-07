@@ -3176,16 +3176,12 @@ public sealed class MainWindowViewModel :
             {
                 try
                 {
-                    var beforeRefresh = _tallyRepository.GetBankSyncState(
-                        parentId, financialYear, link.CompanyKey);
-                    await _tallyCoordinator.RefreshNowAsync(forceLinkedSynchronization: true);
-                    // Individual Tally persists each successful native readback;
-                    // consolidated now does the same. The global FY checkpoint
-                    // must additionally advance only after the ORIGINAL linked
-                    // coordinator actually commits its fresh full baseline.
-                    TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(
-                        beforeRefresh, _tallyRepository.GetBankSyncState(
-                            parentId, financialYear, link.CompanyKey));
+                    // Reuse the SAME Live Tally Link authority verification
+                    // after a real accepted write. This refreshes changed native
+                    // vouchers without requiring a fabricated new full baseline.
+                    // Every CREATE/ALTER was already individually live-verified,
+                    // so no write request is resent here.
+                    await authorityWrapper.VerifyAsync(visible, stillLinked, company);
                 }
                 catch (Exception readFailure)
                 {
