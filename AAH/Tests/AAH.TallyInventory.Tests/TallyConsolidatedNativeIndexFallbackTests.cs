@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Domain.Tally;
+using AccountingAutomationHub.Infrastructure.Tally;
 using AccountingAutomationHub.Desktop.Services;
 
 internal static class TallyConsolidatedNativeIndexFallbackTests
