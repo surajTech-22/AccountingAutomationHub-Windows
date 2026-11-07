@@ -117,6 +117,105 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
+        // as PartyLedger and BASICNARRATION as Narration in its saved index.
+        // The consolidated Previous->Desired wrapper MUST use those SAME
+        // normal index values and the SAME native full-XML DR/CR reader.
+        // Requiring only raw PARTYLEDGERNAME/NARRATION would reject this
+        // perfectly unchanged linked voucher despite the same 359/382.
+        const string normalGuid = "8784a1d3-991b-41fd-b05e-404565f76a87-00000167";
+        const string normalFullXml = """
+            <VOUCHER>
+              <MASTERID>359</MASTERID><ALTERID>382</ALTERID>
+              <GUID>8784a1d3-991b-41fd-b05e-404565f76a87-00000167</GUID>
+              <DATE>20250531</DATE><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+              <REFERENCE>BANK-REFERENCE-01</REFERENCE>
+              <PARTYNAME>Original Supplier</PARTYNAME>
+              <BASICNARRATION>Payment to original supplier</BASICNARRATION>
+              <NATIVELEDGER.LIST>
+                <LEDGERNAME>Original Supplier</LEDGERNAME><AMOUNT>-40000.00</AMOUNT>
+                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              </NATIVELEDGER.LIST>
+              <NATIVELEDGER.LIST>
+                <LEDGERNAME>Bank Account</LEDGERNAME><AMOUNT>40000.00</AMOUNT>
+                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              </NATIVELEDGER.LIST>
+            </VOUCHER>
+            """;
+        var originalDate = new DateTime(2025, 5, 31);
+        var normalizedIndex = new TallyVoucherIndexRecord
+        {
+            MasterId = "359", AlterId = "382", Guid = normalGuid,
+            VoucherDate = originalDate, VoucherType = "Payment",
+            Reference = "BANK-REFERENCE-01", PartyLedger = "Original Supplier",
+            Narration = "Payment to original supplier",
+            LedgerPostings = new TallyLedgerPostingRecord[]
+            {
+                new() { LedgerName = "Original Supplier", SignedAmount = -40000m },
+                new() { LedgerName = "Bank Account", SignedAmount = 40000m }
+            }
+        };
+        var normalSnapshot = new TallyVoucherXmlSnapshot(
+            "359", normalGuid, "Payment", originalDate, normalFullXml) { AlterId = "382" };
+        var linkedOldSigned = "Bank Account:40000.00|Original Supplier:-40000.00";
+        var linkedHash = TallyVoucherFingerprint.BuildContentHash(
+            originalDate, "Payment", "BANK-REFERENCE-01", "Original Supplier",
+            40000m, "Payment to original supplier|" + linkedOldSigned);
+        var linkedVersion = "CONSOLIDATED|20250531|Payment|BANK-REFERENCE-01|" +
+            linkedOldSigned + "|" + linkedHash;
+        var previousLinkedVersion = new TallySourceBindingVersionState
+        {
+            State = "Verified", MasterId = "359", Guid = normalGuid,
+            VerifiedContentHash = linkedHash, VerifiedVersion = linkedVersion,
+            LastVerifiedAlterId = 382
+        };
+        var normalLinkedReadback = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("ReadVerifiedLiveConsolidatedVersion",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Normal-linked consolidated readback method missing.");
+        var normalLinkedPrevious = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("PreviousConsolidatedVersionMatches",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Normal-linked previous DRCR gate missing.");
+        (string Hash, string Version)? ReadLinkedFull(TallyVoucherXmlSnapshot snapshot)
+        {
+            var returned = normalLinkedReadback.Invoke(null,
+                new object[] { normalizedIndex, new[] { snapshot } });
+            return returned is ValueTuple<string, string> tuple ? tuple : null;
+        }
+        var nativeOldVersion = ReadLinkedFull(normalSnapshot);
+        var originalPreviousMatches = (bool)normalLinkedPrevious.Invoke(null,
+            new object[] { normalizedIndex, new[] { normalSnapshot }, previousLinkedVersion })!;
+        if (nativeOldVersion is null ||
+            !nativeOldVersion.Value.Hash.Equals(linkedHash, StringComparison.OrdinalIgnoreCase) ||
+            !originalPreviousMatches)
+            throw new InvalidOperationException(
+                "Normal Tally Link PARTYNAME/BASICNARRATION normalization was not reused by " +
+                "the consolidated wrapper; unchanged Payment 359/382 incorrectly blocked.");
+        var changedLiveXml = normalFullXml.Replace(
+            "<AMOUNT>-40000.00</AMOUNT>", "<AMOUNT>-40001.00</AMOUNT>", StringComparison.Ordinal);
+        var changedXml = new TallyVoucherXmlSnapshot(
+            "359", normalGuid, "Payment", originalDate, changedLiveXml) { AlterId = "382" };
+        if (ReadLinkedFull(changedXml) is not null)
+            throw new InvalidOperationException(
+                "Consolidated wrapper accepted full Tally XML with changed signed DRCR.");
+        var wrongAlter = new TallyVoucherXmlSnapshot(
+            "359", normalGuid, "Payment", originalDate, normalFullXml) { AlterId = "383" };
+        if (ReadLinkedFull(wrongAlter) is not null)
+            throw new InvalidOperationException(
+                "Consolidated wrapper accepted full Tally XML with changed native ALTERID.");
+        var wrongGuidXml = normalFullXml.Replace(normalGuid,
+            "different-native-voucher-guid", StringComparison.Ordinal);
+        var wrongGuid = new TallyVoucherXmlSnapshot(
+            "359", normalGuid, "Payment", originalDate, wrongGuidXml) { AlterId = "382" };
+        if (ReadLinkedFull(wrongGuid) is not null)
+            throw new InvalidOperationException(
+                "Consolidated wrapper ignored changed GUID inside original full Voucher XML.");
+        Console.WriteLine(
+            "PASS: consolidated Previous->Desired uses original individual Tally normalized index " +
+            "and native signed DRCR; PARTYNAME/BASICNARRATION aliases work; changed XML/ALTERID/GUID block.");
+
+
         // Another CL019 regression: 645 normal synchronized Voucher objects
         // had full signed XML, but the SQLite index did not persist the
         // individual posting objects. Exercise the EXACT normal Tally reader
