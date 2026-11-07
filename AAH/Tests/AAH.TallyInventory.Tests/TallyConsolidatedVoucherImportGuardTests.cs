@@ -342,6 +342,68 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             new System.Xml.Linq.XElement("AMOUNT", "1"))), "extra Cash posting");
         Console.WriteLine("PASS: v639 CL019 one combined type/Cash bound ALTER; same-type Cash-only allowed; foreign scopes, changed DRCR, date and reference refused.");
 
+        // v640: the same Cash-only or type+Cash voucher ALTER must also
+        // accept a HUMAN-READABLE destination name, but ONLY when the
+        // original prepared branch ID maps to that exact friendly name.
+        var readableGuard = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "MatchesTypeOrBranchCashPreparedVoucherWithPlan",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("v640 branch-cash identity proof missing");
+        var cashNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [ownBranch] = "Cash - Karnataka",
+            ["B-000000000000000000000000"] = "Cash - Gujarat"
+        };
+        bool SafeNamedCash(System.Xml.Linq.XElement voucher,
+            IReadOnlyDictionary<string, string>? map = null) =>
+            (bool)readableGuard.Invoke(null, new object?[]
+            {
+                voucher, oldBank, cl019OldCashNative, map ?? cashNames
+            })!;
+        var readable = new System.Xml.Linq.XElement(desiredBankXml);
+        readable.Descendants("LEDGERNAME")
+            .Single(x => x.Value == cashName).Value = "Cash - Karnataka";
+        if (!SafeNamedCash(readable) || SafeNamedCash(readable,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) ||
+            SafeCombined(readable))
+            throw new InvalidOperationException(
+                "v640 human Cash ledger must be proven by the exact source branch ID only.");
+        var foreignCash = new System.Xml.Linq.XElement(readable);
+        foreignCash.Descendants("LEDGERNAME").Last().Value = "Cash - Gujarat";
+        if (SafeNamedCash(foreignCash))
+            throw new InvalidOperationException("v640 accepted another branch's friendly Cash.");
+        var changedReadableAmount = new System.Xml.Linq.XElement(readable);
+        changedReadableAmount.Descendants("AMOUNT").Last().Value = "500001";
+        if (SafeNamedCash(changedReadableAmount))
+            throw new InvalidOperationException("v640 changed the previous signed Cash amount.");
+        var duplicateCash = new System.Xml.Linq.XElement(readable);
+        duplicateCash.Add(new System.Xml.Linq.XElement("ALLLEDGERENTRIES.LIST",
+            new System.Xml.Linq.XElement("LEDGERNAME", "Cash - Karnataka"),
+            new System.Xml.Linq.XElement("AMOUNT", "1")));
+        if (SafeNamedCash(duplicateCash))
+            throw new InvalidOperationException("v640 accepted an additional cash posting.");
+        var cashRename = typeof(TallyBranchConsolidationImportService).GetMethod(
+            "BuildBoundLegacyCashLedgerRenameXml",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("v640 safe master rename builder missing");
+        var renameXml = (string)cashRename.Invoke(null, new object[]
+        {
+            "Combined Books", "Cash (" + ownBranch + ")",
+            "Cash - Karnataka", "477", bankGuid
+        })!;
+        var renameElement = System.Xml.Linq.XDocument.Parse(renameXml)
+            .Descendants("LEDGER").Single();
+        if (renameElement.Attribute("ACTION")?.Value != "Alter" ||
+            renameElement.Attribute("NAME")?.Value != "Cash (" + ownBranch + ")" ||
+            renameElement.Element("MASTERID")?.Value != "477" ||
+            renameElement.Element("GUID")?.Value != bankGuid ||
+            renameElement.Element("NAME")?.Value != "Cash - Karnataka" ||
+            renameElement.Element("PARENT")?.Value != "Cash-in-Hand" ||
+            renameElement.Descendants("VOUCHER").Any())
+            throw new InvalidOperationException(
+                "v640 new Cash display name does not use same-MASTERID master ALTER.");
+        Console.WriteLine("PASS: v640 readable Cash - Karnataka; exact B-branch scope, one name-only master ALTER, unchanged signed DR/CR.");
+
         // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
         // as PartyLedger and BASICNARRATION as Narration in its saved index.
         // The consolidated Previous->Desired wrapper MUST use those SAME
