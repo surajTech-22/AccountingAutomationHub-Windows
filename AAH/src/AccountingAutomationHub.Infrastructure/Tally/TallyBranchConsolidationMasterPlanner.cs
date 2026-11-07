@@ -281,10 +281,10 @@ public static class TallyBranchConsolidationMasterPlanner
     private static string BuildVoucherTypeXml(string companyName,
         IEnumerable<TallyBranchVoucherTypeRequirement> types)
     {
-        // The existing original All Masters XML serializer and one-at-a-time
-        // import/readback are reused. Newly created subtypes select the
-        // original Voucher Type and use Manual numbering to preserve already
-        // recorded voucher numbers through same-MASTERID ALTER.
+        // Create only genuinely missing branch voucher-type Masters.
+        // Do not change an existing Tally voucher-type Master or any voucher.
+        // Native numbering remains None as requested; no Manual/Automatic
+        // numbering migration and no voucher ALTER is part of this stage.
         var xml = new StringBuilder();
         TallyExcelParityXmlWriter.BeginAllMastersImport(xml, companyName);
         foreach (var type in types.Where(x => x.Create))
@@ -294,12 +294,10 @@ public static class TallyBranchConsolidationMasterPlanner
                 .Append(SecurityElement.Escape(type.Name)).AppendLine("\" ACTION=\"Create\">");
             xml.Append("          <NAME>").Append(SecurityElement.Escape(type.Name)).AppendLine("</NAME>");
             xml.Append("          <PARENT>").Append(SecurityElement.Escape(type.BaseType)).AppendLine("</PARENT>");
-            // Preserve the existing destination voucher number during
-            // same-MASTERID type ALTER. An implicit automatic numbering
-            // scheme can renumber the entire destination voucher series.
-            // Tally's native Voucher Type master field is NUMBERINGMETHOD.
-            // Never ALTER numbering on a previously existing master.
-            xml.AppendLine("          <NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>");
+            // New masters use the requested None setting. Existing masters
+            // are never ALTERed, and this creation-only action never posts
+            // or reclassifies existing vouchers.
+            xml.AppendLine("          <NUMBERINGMETHOD>None</NUMBERINGMETHOD>");
             xml.AppendLine("        </VOUCHERTYPE>");
             xml.AppendLine("      </TALLYMESSAGE>");
         }
