@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using System.Threading;
+using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Infrastructure.Tally;
 
@@ -13,6 +14,7 @@ namespace AccountingAutomationHub.Desktop.ViewModels;
 /// </summary>
 public sealed class ConsolidatedTallyImportViewModel : PageViewModel
 {
+    private readonly IClientPreferenceRepository _clientPreferences;
     private readonly Func<bool, bool, Task<TallyBranchMasterImportResult>> _importMasters;
     private readonly Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> _prepareXml;
     private readonly Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> _importVouchers;
@@ -33,13 +35,26 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
         Func<bool, bool, Task<TallyConsolidatedPreparedXmlResult>> prepareXml,
         Func<bool, bool, Task<TallyConsolidatedVoucherImportResult>> importVouchers,
         Func<bool, bool, Task<int>> verifyAcceptedReadOnly,
-        Func<string> tallyProgressReader)
+        Func<string> tallyProgressReader,
+        IClientPreferenceRepository clientPreferences)
         : base("Tally Import", "Consolidated · existing Tally link, settings and import design")
     {
         if (parentClientId <= 0 || string.IsNullOrWhiteSpace(financialYear))
             throw new ArgumentException("Saved consolidated Client/FY is required.");
         ParentClientId = parentClientId;
         FinancialYear = financialYear;
+        _clientPreferences = clientPreferences
+            ?? throw new ArgumentNullException(nameof(clientPreferences));
+        // Load settings BEFORE WPF binds the checkboxes. Never share state
+        // with a different parent client or accounting financial year.
+        _separateVoucherTypes = bool.TryParse(
+            _clientPreferences.Get(parentClientId,
+                ConsolidatedTallyImportSelectionPreferences.SeparateVoucherTypesKey(financialYear)),
+            out var savedTypes) && savedTypes;
+        _separateCashLedgers = bool.TryParse(
+            _clientPreferences.Get(parentClientId,
+                ConsolidatedTallyImportSelectionPreferences.SeparateCashLedgersKey(financialYear)),
+            out var savedCash) && savedCash;
         ExistingDashboardWorkspace = existingDashboardWorkspace
             ?? throw new ArgumentNullException(nameof(existingDashboardWorkspace));
         _importMasters = importMasters ?? throw new ArgumentNullException(nameof(importMasters));
@@ -103,12 +118,35 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     public bool SeparateVoucherTypes
     {
         get => _separateVoucherTypes;
-        set => SetProperty(ref _separateVoucherTypes, value);
+        set
+        {
+            if (SetProperty(ref _separateVoucherTypes, value))
+                SaveSelection(ConsolidatedTallyImportSelectionPreferences.SeparateVoucherTypesKey(FinancialYear), value);
+        }
     }
     public bool SeparateCashLedgers
     {
         get => _separateCashLedgers;
-        set => SetProperty(ref _separateCashLedgers, value);
+        set
+        {
+            if (SetProperty(ref _separateCashLedgers, value))
+                SaveSelection(ConsolidatedTallyImportSelectionPreferences.SeparateCashLedgersKey(FinancialYear), value);
+        }
+    }
+
+    private void SaveSelection(string settingKey, bool selected)
+    {
+        try
+        {
+            // Rare explicit UI toggles: save immediately rather than risking
+            // loss on shutdown or allowing asynchronous writes to reorder.
+            _clientPreferences.Set(ParentClientId, settingKey, selected.ToString());
+        }
+        catch (Exception ex)
+        {
+            MasterImportStatus = "Import selection could not be saved for this Client/FY: " +
+                ex.Message + ". Current selection remains active until this panel is closed.";
+        }
     }
     public string MasterImportStatus
     {
