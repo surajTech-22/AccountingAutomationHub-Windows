@@ -120,6 +120,27 @@ public static class TallyBranchConsolidationMasterPlanner
         var normalized = branches.OrderBy(x => x.BranchId, StringComparer.OrdinalIgnoreCase).ToArray();
         if (separateVoucherTypes)
         {
+            // Creating a subtype under a name-only or stale original Tally
+            // Voucher Type is NOT permitted. The live master must have its
+            // own positive destination MASTERID before any branch GROUP
+            // or Voucher Type is posted.
+            foreach (var original in usedVoucherTypesByBranch?.Values
+                         .SelectMany(x => x).Distinct(StringComparer.OrdinalIgnoreCase)
+                         ?? Enumerable.Empty<string>())
+            {
+                var matches = freshDestinationMasters.Where(x =>
+                    x.Type.Equals("Voucher Type", StringComparison.OrdinalIgnoreCase) &&
+                    x.Name.Equals(original, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (matches.Length != 1 ||
+                    !long.TryParse(matches[0].TallyMasterId,
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var originalId) || originalId <= 0)
+                    throw new InvalidOperationException(
+                        "Original parent Tally Voucher Type '" + original +
+                        "' has no unique verified destination MASTERID. " +
+                        "No branch master creation or voucher ALTER is allowed.");
+            }
             if (usedVoucherTypesByBranch is null ||
                 usedVoucherTypesByBranch.Count != normalized.Length ||
                 normalized.Any(branch =>
@@ -260,8 +281,10 @@ public static class TallyBranchConsolidationMasterPlanner
     private static string BuildVoucherTypeXml(string companyName,
         IEnumerable<TallyBranchVoucherTypeRequirement> types)
     {
-        // A preview only: supported Tally versions must confirm the exact
-        // VOUCHERTYPE XML inheritance/numbering and live readback before posting.
+        // The existing original All Masters XML serializer and one-at-a-time
+        // import/readback are reused. Newly created subtypes select the
+        // original Voucher Type and use Manual numbering to preserve already
+        // recorded voucher numbers through same-MASTERID ALTER.
         var xml = new StringBuilder();
         TallyExcelParityXmlWriter.BeginAllMastersImport(xml, companyName);
         foreach (var type in types.Where(x => x.Create))
@@ -271,6 +294,12 @@ public static class TallyBranchConsolidationMasterPlanner
                 .Append(SecurityElement.Escape(type.Name)).AppendLine("\" ACTION=\"Create\">");
             xml.Append("          <NAME>").Append(SecurityElement.Escape(type.Name)).AppendLine("</NAME>");
             xml.Append("          <PARENT>").Append(SecurityElement.Escape(type.BaseType)).AppendLine("</PARENT>");
+            // Preserve the existing destination voucher number during
+            // same-MASTERID type ALTER. An implicit automatic numbering
+            // scheme can renumber the entire destination voucher series.
+            // Tally's native Voucher Type master field is NUMBERINGMETHOD.
+            // Never ALTER numbering on a previously existing master.
+            xml.AppendLine("          <NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>");
             xml.AppendLine("        </VOUCHERTYPE>");
             xml.AppendLine("      </TALLYMESSAGE>");
         }
