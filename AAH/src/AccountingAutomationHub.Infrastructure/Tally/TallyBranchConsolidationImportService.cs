@@ -423,8 +423,10 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         var financialYear = RequireConfirmedDestination(confirmedLink, destination, accountingFinancialYear);
         var live = await tally.DiscoverCompaniesAsync(cancellationToken).ConfigureAwait(false);
         RequireUniqueLiveDestination(confirmedLink, destination, live, financialYear);
-        var fresh = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
-            .ConfigureAwait(false));
+        tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+        var freshXml = await tally.ExportMastersAsync(destination, cancellationToken)
+            .ConfigureAwait(false);
+        var fresh = ReadLiveMasters(freshXml);
         var baseTypes = fresh.Where(x => x.Type == "Voucher Type")
             .Select(x => x.Name)
             .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase)))
@@ -434,6 +436,8 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             branches, fresh, true, separateVoucherTypes, separateCashLedgers,
             separateVoucherTypes ? baseTypes : null, usedVoucherTypesByBranch);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(plan);
+        foreach (var reused in plan.VoucherTypes.Where(x => !x.Create))
+            RequireManualVoucherTypeNumbering(freshXml, reused.Name);
         // Generate Consolidated XML is read-only: already existing branch
         // Groups are not repeated in the master CREATE file. Explicitly
         // verify EVERY reused compulsory Group against live destination
