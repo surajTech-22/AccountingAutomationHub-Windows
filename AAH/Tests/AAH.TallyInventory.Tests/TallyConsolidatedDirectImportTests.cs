@@ -63,7 +63,7 @@ internal static class TallyConsolidatedDirectImportTests
               "individual-client normal Tally coordinator must not contain consolidated-specific guards");
         Check(wrapper.Contains("normalCoordinator.RefreshNowAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("forceLinkedSynchronization: true", StringComparison.Ordinal) &&
-              wrapper.Contains("forceFullBaseline: true", StringComparison.Ordinal) &&
+              wrapper.Contains("forceFullBaseline: false", StringComparison.Ordinal) &&
               wrapper.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("FindNativeProjectionRecheckMonths(", StringComparison.Ordinal) &&
               wrapper.Contains("GetBankSyncState(", StringComparison.Ordinal) &&
@@ -79,8 +79,10 @@ internal static class TallyConsolidatedDirectImportTests
               wrapper.Contains("RequireSameSavedLink(client, confirmedLink)", StringComparison.Ordinal) &&
               !wrapper.Contains("ExportFullCompanySnapshotAsync(", StringComparison.Ordinal) &&
               !wrapper.Contains("ImportXmlAsync(", StringComparison.Ordinal) &&
-              !wrapper.Contains("ReplaceVoucherIndex(", StringComparison.Ordinal),
-              "consolidated explicit import must use the individual full-FY baseline and native Voucher proof without independent duplicate snapshots or source-binding writes");
+              wrapper.Contains("repository.ReplaceVoucherIndex(", StringComparison.Ordinal) &&
+              wrapper.Contains("repository.ReplaceVoucherXmlAuthority(", StringComparison.Ordinal) &&
+              wrapper.Contains("RunWithLinkedTallyOperationGateAsync(", StringComparison.Ordinal),
+              "consolidated explicit import must reuse original Live Tally authority, repair stale native vouchers only with verified index and XML, and never POST a duplicate voucher");
         Check(importer.Contains("consolidatedVerifiedMarkerReader = null", StringComparison.Ordinal) &&
               importer.Contains("ReadTrustedMarkerAsync(", StringComparison.Ordinal) &&
               importer.Contains("consolidatedVerifiedMarkerReader is null", StringComparison.Ordinal) &&
