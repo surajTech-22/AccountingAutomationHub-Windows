@@ -57,20 +57,25 @@ internal static class TallyConsolidatedDirectImportTests
               export.Contains("tallyAcknowledgedAlterCount", StringComparison.Ordinal),
               "master-first, ALTER and diagnostic flow must remain intact");
 
-        // v632 intentionally creates MISSING Voucher Type masters ONLY.
-        // Existing CL019 vouchers (645) must never be CREATEd, ALTERed or
-        // DELETEd because the separate-type checkbox was selected. The
-        // read-only source preview also must not emit importable voucher XML.
+        // v633: v632 master CREATE-only remains the first stage. The
+        // voucher step now uses only previous->desired ALTER for VERIFIED,
+        // already bound vouchers; it cannot create masters or new vouchers.
+        // Selecting Generate XML must remain strictly read-only.
         var selectedTypes = export.IndexOf("if (separateTypes)", StringComparison.Ordinal);
-        var masterOnlyReturn = export.IndexOf(
-            "return new TallyConsolidatedVoucherImportResult(", selectedTypes,
-            StringComparison.Ordinal);
-        Check(selectedTypes >= 0 && masterOnlyReturn > selectedTypes &&
-              masterOnlyReturn < prepare && call > prepare &&
-              export.Contains("0, masters.CreatedVoucherTypes", StringComparison.Ordinal) &&
+        Check(selectedTypes >= 0 &&
+              export.IndexOf("await ImportConsolidatedMastersAsync(", selectedTypes,
+                  StringComparison.Ordinal) < prepare &&
+              export.Contains("voucherTypeOnlyAlter: separateTypes", StringComparison.Ordinal) &&
               main.Contains("createOnlyVoucherTypes: separateVoucherTypes", StringComparison.Ordinal) &&
-              main.Contains("if (separateTypes) produceManualImportFiles = false;", StringComparison.Ordinal),
-            "selected branch types must be CREATION-ONLY with zero Voucher CREATE/ALTER or manual import file");
+              main.Contains("if (separateTypes) produceManualImportFiles = false;", StringComparison.Ordinal) &&
+              importer.Contains("bool voucherTypeOnlyAlter = false", StringComparison.Ordinal) &&
+              importer.Contains("MatchesTypeOnlyPreparedVoucher(", StringComparison.Ordinal) &&
+              importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
+              importer.Contains("var createCandidates = voucherTypeOnlyAlter", StringComparison.Ordinal) &&
+              importer.Contains("if (voucherTypeOnlyAlter) continue; // No ledger/master creation.", StringComparison.Ordinal) &&
+              importer.Contains("voucherTypeOnlyAlter &&", StringComparison.Ordinal) &&
+              importer.Contains("allowExistingNoneNumbering: voucherTypeOnlyAlter", StringComparison.Ordinal),
+            "selected branch types must use original MASTERID bound type-only ALTER with zero voucher or master CREATE");
         var mastersOnly = branchMasterImporter.IndexOf(
             "public async Task<TallyBranchMasterImportResult> ImportMastersAsync(",
             StringComparison.Ordinal);
@@ -87,7 +92,7 @@ internal static class TallyConsolidatedDirectImportTests
               !masterStage.Contains("RequireManualVoucherTypeNumbering(", StringComparison.Ordinal) &&
               branchMasterPlanner.Contains("<NUMBERINGMETHOD>None</NUMBERINGMETHOD>", StringComparison.Ordinal),
             "new branch type Masters must use None, reuse existing types, and never write Groups/Cash or vouchers in creation-only mode");
-        Console.WriteLine("PASS: v632 branch Voucher Type creation-only keeps existing Tally type numbering, all 645 voucher entries and original DR/CR untouched.");
+        Console.WriteLine("PASS: v633 creates only missing None-numbered Voucher Type masters then ALTERs previously bound vouchers without other CREATE or DR/CR edits.");
 
         Check(coordinator.Contains("bool forceFullBaseline = true)", StringComparison.Ordinal) &&
               coordinator.Contains("forceFullBaseline: forceLinkedSynchronization && forceFullBaseline", StringComparison.Ordinal) &&
