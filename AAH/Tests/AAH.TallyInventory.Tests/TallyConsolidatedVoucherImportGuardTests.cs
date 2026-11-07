@@ -373,7 +373,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             new TallyVoucherXmlSnapshot("359", normalGuid, "Payment - Karnataka",
                 originalDate, childFullXml) { AlterId = "383" }
         };
-        var accepted = new TallySourceBindingVersionState
+        var acceptedTypeOnly = new TallySourceBindingVersionState
         {
             State = "AcceptedAwaitingVerification", MasterId = "359", Guid = normalGuid,
             LastVerifiedAlterId = 382, VerifiedContentHash = linkedHash,
@@ -382,7 +382,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         bool CanReconcile(string hash = "desired-hash", string version = "desired-version",
             TallyVoucherIndexRecord? current = null) =>
             (bool)pendingGuard.Invoke(null, new object[] {
-                desiredTypeXml, hash, version, accepted,
+                desiredTypeXml, hash, version, acceptedTypeOnly,
                 current ?? currentChild, childAuthority
             })!;
         if (!CanReconcile() || CanReconcile("different-hash") ||
