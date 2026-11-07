@@ -331,15 +331,61 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
                 $"FY '{link.FinancialYear}', CompanyKey '{link.CompanyKey}'.");
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var latestAlterId = state.LastAlterId;
+        var (fyStart, fyEnd) = GetFinancialYearRange(financialYear);
+        var normalizedRows = new List<TallyVoucherIndexRecord>(rows.Count);
         foreach (var row in rows)
         {
-            if (!row.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-                !row.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
-                row.MasterId.Trim().Length == 0 || !ids.Add(row.MasterId.Trim()) ||
-                !long.TryParse(row.AlterId.Trim(), NumberStyles.Integer,
+            var masterId = row.MasterId.Trim();
+            if (!row.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Fresh native Voucher MASTERID '{masterId}' has a different Tally CompanyKey. " +
+                    "No synchronized authority was changed.");
+            if (row.VoucherDate is not DateTime date ||
+                date.Date < fyStart || date.Date > fyEnd)
+                throw new InvalidOperationException(
+                    $"Fresh native Voucher MASTERID '{masterId}' has date " +
+                    $"'{row.VoucherDate:yyyy-MM-dd}' outside active Client/FY " +
+                    $"{financialYear} ({fyStart:yyyy-MM-dd} to {fyEnd:yyyy-MM-dd}). " +
+                    "No synchronized authority was changed.");
+            if (masterId.Length == 0 || !ids.Add(masterId))
+                throw new InvalidOperationException(
+                    $"Fresh native Voucher MASTERID is missing or duplicated ('{masterId}'). " +
+                    "No synchronized authority was changed.");
+            if (!long.TryParse(row.AlterId.Trim(), NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var alterId) || alterId <= 0)
                 throw new InvalidOperationException(
-                    "Native live Voucher identity/ALTERID is missing, duplicated, or from the wrong FY/book.");
+                    $"Fresh native Voucher MASTERID {masterId} has invalid ALTERID " +
+                    $"'{row.AlterId}'. No synchronized authority was changed.");
+
+            // TallyHttpService.ParseVoucherIndex stamps row.FinancialYear from
+            // TallyCompanyInfo.FinancialYear (the company BOOKSFROM year).
+            // The original Live Tally coordinator instead keys its voucher
+            // index by active client.FinancialYear. A company with books open
+            // from an older FY may legitimately have vouchers in 2025-26.
+            // Never use that per-row company metadata as a fiscal-year
+            // mismatch. The exact CompanyKey and actual voucher DATE are
+            // independently verified above; persist a copy in the verified
+            // active Client/FY without mutating the raw native readback.
+            normalizedRows.Add(new TallyVoucherIndexRecord
+            {
+                CompanyKey = link.CompanyKey,
+                FinancialYear = financialYear,
+                MasterId = row.MasterId,
+                AlterId = row.AlterId,
+                Guid = row.Guid,
+                VoucherDate = row.VoucherDate,
+                VoucherType = row.VoucherType,
+                VoucherNumber = row.VoucherNumber,
+                Reference = row.Reference,
+                PartyLedger = row.PartyLedger,
+                DebitLedgers = row.DebitLedgers,
+                CreditLedgers = row.CreditLedgers,
+                Amount = row.Amount,
+                Narration = row.Narration,
+                LedgerPostings = row.LedgerPostings,
+                ContentHash = row.ContentHash,
+                LastSeenUtc = row.LastSeenUtc
+            });
             latestAlterId = Math.Max(latestAlterId, alterId);
         }
         var fullById = full.GroupBy(
@@ -359,7 +405,7 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
                 "The saved synchronized authority was not changed.");
 
         // No Tally POST: only the original shared index/XML cache changes.
-        repository.ReplaceVoucherIndex(link.CompanyKey, financialYear, rows);
+        repository.ReplaceVoucherIndex(link.CompanyKey, financialYear, normalizedRows);
         repository.ReplaceVoucherXmlAuthority(link.CompanyKey, financialYear, full);
         if (!repository.HasCompleteVoucherXmlAuthority(
                 link.CompanyKey, financialYear, rows.Count))
@@ -369,7 +415,7 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             link.CompanyKey, financialYear,
             new DateTime(int.Parse(financialYear[..4], CultureInfo.InvariantCulture), 4, 1),
             new DateTime(int.Parse(financialYear[..4], CultureInfo.InvariantCulture) + 1, 3, 31));
-        var originalById = rows.ToDictionary(
+        var originalById = normalizedRows.ToDictionary(
             row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
         if (updatedIndex.Count != rows.Count ||
             updatedIndex.Any(row =>
