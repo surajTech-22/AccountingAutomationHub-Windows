@@ -234,11 +234,36 @@ public static class TallyBranchConsolidationMasterPlanner
             // Cash ledger is OPTIONAL. Do not conflate its option with compulsory groups.
             if (separateCashLedgers)
             {
-                // A separate optional Cash ledger still needs a unique Tally name.
-                // Use the durable non-geographical branch ID, never its state name.
-                var cashName = "Cash (" + branch.BranchId.Trim() + ")";
+                // The stable B-... ID remains an INTERNAL branch voucher identity.
+                // Tally users should see "Cash - Karnataka", not "Cash (B-...)".
+                // Branch display names are already checked unique in this client.
+                var cashName = "Cash - " + name;
+                var legacyName = "Cash (" + branch.BranchId.Trim() + ")";
                 var create = NeedsCreate(cashName, "Ledger", "Cash-in-Hand");
-                cashToCreate.Add(new(branch.BranchId, cashName, create));
+                var previousId = "";
+                if (existing.TryGetValue(legacyName, out var oldCash))
+                {
+                    // Never CREATE a second ledger beside an old hash-named
+                    // ledger; migrate the exact existing MASTERID instead.
+                    if (!create)
+                        throw new InvalidOperationException(
+                            "Both old internal and friendly Cash ledgers exist for " +
+                            name + ". Review existing Tally master identities; no new Cash created.");
+                    if (oldCash.Length != 1 ||
+                        !oldCash[0].Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) ||
+                        !oldCash[0].Parent.Trim().Equals("Cash-in-Hand", StringComparison.OrdinalIgnoreCase) ||
+                        !long.TryParse(oldCash[0].TallyMasterId.Trim(),
+                            System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture, out var id) ||
+                        id <= 0)
+                        throw new InvalidOperationException(
+                            "Old branch Cash ledger lacks a unique, live Cash-in-Hand MASTERID. " +
+                            "Cannot safely rename " + legacyName + ".");
+                    previousId = oldCash[0].TallyMasterId.Trim();
+                    create = false;
+                }
+                cashToCreate.Add(new(branch.BranchId, cashName, create,
+                    previousId.Length > 0 ? legacyName : "", previousId));
             }
             if (!separateVoucherTypes) continue;
 
@@ -337,7 +362,8 @@ public sealed record TallyBranchGroupRequirement(
     string BranchId, string Gstin, string Parent, string Name, bool Create);
 
 public sealed record TallyBranchCashLedgerRequirement(
-    string BranchId, string Name, bool Create);
+    string BranchId, string Name, bool Create,
+    string PreviousName = "", string PreviousMasterId = "");
 
 public sealed record TallyBranchVoucherTypeRequirement(
     string BranchId, string BaseType, string Name, bool Create);
