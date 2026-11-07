@@ -191,6 +191,11 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
             });
             var fresh = new[] { Actual("35", "39", "Kreativ and Creative"),
                                 Actual("36", "41", "Unchanged Supplier") };
+            // EXACT original native-reader behavior: each returned row has
+            // TallyCompanyInfo.FinancialYear (derived from COMPANY BOOKSFROM),
+            // not the active AAH Client/FY used to select April 2025-March 2026.
+            // The old v629 guard rejected these valid live vouchers before saving.
+            foreach (var row in fresh) row.FinancialYear = "2023-24";
             var freshXml = new[] { Xml("35", "39", "Kreativ and Creative"),
                                    Xml("36", "41", "Unchanged Supplier") };
             var marker = new TallyVoucherChangeMarker
@@ -204,6 +209,27 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
             Check(RejectsInvalidNativeReadback(repo, link, marker, fresh,
                     new[] { freshXml[1] }),
                 "incomplete live XML was accepted as current authority");
+            // Wrong book, actual out-of-period transaction, missing ALTERID,
+            // duplicate MASTERID and incomplete full XML must still block
+            // before either of the live-link repository tables is modified.
+            var wrongBookRows = new[] { Actual("35", "39", "Kreativ and Creative"), fresh[1] };
+            wrongBookRows[0].CompanyKey = "ANOTHER-TALLY-BOOK";
+            Check(RejectsInvalidNativeReadback(repo, link, marker, wrongBookRows, freshXml),
+                "wrong Tally CompanyKey was accepted as an active-FY voucher");
+            var wrongDateRows = new[] { Actual("35", "39", "Kreativ and Creative"), fresh[1] };
+            wrongDateRows[0].VoucherDate = new DateTime(2024, 4, 22);
+            Check(RejectsInvalidNativeReadback(repo, link, marker, wrongDateRows, freshXml),
+                "voucher truly outside requested active client FY was accepted");
+            var missingAlterRows = new[] { Actual("35", "", "Kreativ and Creative"), fresh[1] };
+            Check(RejectsInvalidNativeReadback(repo, link, marker, missingAlterRows, freshXml),
+                "voucher without native ALTERID was accepted");
+            var duplicateMasterRows = new[] { fresh[0], Actual("35", "41", "Unchanged Supplier") };
+            Check(RejectsInvalidNativeReadback(repo, link, marker, duplicateMasterRows, freshXml),
+                "duplicate native MASTERID was accepted");
+            Check(repo.GetVoucherXmlAuthorityByMasterIds(
+                link.CompanyKey, link.FinancialYear, new[] { "35" })
+                .Single().OriginalXml.Contains("Kreativ Creative", StringComparison.Ordinal),
+                "rejected native authority unexpectedly changed existing complete XML");
             Check(repo.GetVoucherIndexRange(link.CompanyKey, link.FinancialYear,
                     new DateTime(2025, 4, 1), new DateTime(2026, 3, 31))
                 .Single(row => row.MasterId == "35").PartyLedger == "Kreativ Creative",
@@ -242,8 +268,11 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
             var readback = repo.GetVoucherIndexRange(link.CompanyKey, link.FinancialYear,
                 new DateTime(2025, 4, 1), new DateTime(2026, 3, 31));
             var changed = readback.Single(row => row.MasterId == "35");
-            Check(changed.AlterId == "39" && changed.PartyLedger == "Kreativ and Creative",
-                "new live MASTERID 35 ALTERID/ledger did not update SQLite voucher index");
+            Check(changed.AlterId == "39" && changed.PartyLedger == "Kreativ and Creative" &&
+                  changed.FinancialYear == "2025-26" && changed.CompanyKey == link.CompanyKey,
+                "new live MASTERID 35 ALTERID/ledger was not saved under active 2025-26 client FY");
+            Check(fresh.All(row => row.FinancialYear == "2023-24"),
+                "native raw Tally book-start FY data was mutated by normalization");
             Check(readback.Single(row => row.MasterId == "36").PartyLedger == "Unchanged Supplier",
                 "native refresh changed an unrelated voucher");
             var liveFull = repo.GetVoucherXmlAuthorityByMasterIds(
@@ -258,7 +287,8 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
                   after.LastAlterId >= 672 &&
                   after.LastIncrementalSyncUtc > DateTime.MinValue,
                 "native voucher refresh invented Master baseline or failed to record refreshed authority");
-            Console.WriteLine("PASS: actual blank-FY CL019 linked company uses original verified client FY, rejects wrong FY, and persists MASTERID 35 new ledger/ALTERID in BOTH real SQLite Voucher index and full XML.");
+            Console.WriteLine("PASS: CL019 native company BOOKSFROM FY 2023-24 is normalized ONLY for saved 2025-26 active Client/FY, while original raw vouchers remain unchanged.");
+            Console.WriteLine("PASS: actual blank-FY CL019 linked company uses original verified client FY, rejects wrong book/date/ALTERID/duplicates, and persists MASTERID 35 new ledger/ALTERID in BOTH real SQLite Voucher index and full XML.");
         }
         finally
         {
