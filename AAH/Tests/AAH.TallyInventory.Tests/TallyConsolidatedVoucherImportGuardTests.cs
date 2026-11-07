@@ -296,7 +296,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 new() { LedgerName = "Cash", SignedAmount = 500000m }
             }
         };
-        var oldBankNative = new[] {
+        var cl019OldCashNative = new[] {
             new TallyVoucherXmlSnapshot("355", bankGuid, "Contra - Karnataka",
                 oldBank.VoucherDate.Value,
                 previousBankXml.ToString()) { AlterId = "5944" }
@@ -309,7 +309,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             TallyVoucherIndexRecord? current = null,
             TallyVoucherXmlSnapshot[]? snapshots = null) =>
             (bool)combinedCashGuard.Invoke(null, new object[] {
-                prepared, current ?? oldBank, snapshots ?? oldBankNative
+                prepared, current ?? oldBank, snapshots ?? cl019OldCashNative
             })!;
         if (SafeTypeOnly(desiredBankXml))
             throw new InvalidOperationException("Type-only incorrectly approved a changed branch Cash ledger.");
