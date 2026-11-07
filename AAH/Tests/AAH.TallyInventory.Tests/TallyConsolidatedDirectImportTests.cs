@@ -33,7 +33,6 @@ internal static class TallyConsolidatedDirectImportTests
         // v638: one original Tally Import panel on Dashboard and the dedicated
         // import tab; all five module selections and both optional controls
         // must survive Client/FY navigation and a full desktop restart.
-        var preferences = typeof(ConsolidatedTallyImportSelectionPreferences);
         Check(ConsolidatedTallyImportSelectionPreferences.EncodeModules(
                   true, false, true, false, true) == "10101" &&
               ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(
