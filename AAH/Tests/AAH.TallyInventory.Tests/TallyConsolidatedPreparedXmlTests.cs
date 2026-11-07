@@ -63,9 +63,9 @@ internal static class TallyConsolidatedPreparedXmlTests
 
         // CL019 branch voucher-type option: only voucher types actually used
         // in each current branch are created. The original Tally parent must
-        // already exist and carry a real destination MASTERID. The branch
-        // child type MUST use Manual numbering before ANY existing voucher
-        // is changed, preserving the original voucher number.
+        // already exist and carry a real destination MASTERID. Newly created
+        // branch masters use None numbering. Existing vouchers are NEVER
+        // CREATEd/ALTERed as part of this creation-only stage.
         var liveSalesType = new MasterRecord
         {
             Type = "Voucher Type", Name = "Sales",
@@ -90,11 +90,31 @@ internal static class TallyConsolidatedPreparedXmlTests
               requestedTypes.Length == 2 &&
               requestedTypes.All(t =>
                   t.Element("PARENT")?.Value == "Sales" &&
-                  t.Element("NUMBERINGMETHOD")?.Value == "Manual") &&
+                  t.Element("NUMBERINGMETHOD")?.Value == "None") &&
               requestedTypes.Select(t => t.Element("NAME")?.Value).ToHashSet(
                   StringComparer.OrdinalIgnoreCase)
                 .SetEquals(new[] { "Sales - Karnataka", "Sales - Tamil Nadu" }),
-            "branch type planner created the wrong parent or unsafe auto-numbering masters");
+            "branch type planner must create only missing correct-parent None-numbered masters");
+        // Existing child master (e.g. CL019's Debit Note - Gujarat)
+        // must be REUSED by name/parent/MASTERID regardless of a None native
+        // numbering field. Only the genuinely missing other child is CREATEd.
+        var existingChild = new MasterRecord
+        {
+            Type = "Voucher Type", Name = "Sales - Karnataka",
+            Parent = "Sales", TallyMasterId = "901"
+        };
+        var reusePlan = TallyBranchConsolidationMasterPlanner.Build(
+            "Consolidated Books", "test-company", "2025-26",
+            [Karnataka, TamilNadu], [liveSalesType, existingChild], true,
+            separateVoucherTypes: true,
+            eligibleVoucherTypes: new[] { "Sales" },
+            usedVoucherTypesByBranch: branchUsage);
+        Check(reusePlan.VoucherTypes.Count == 2 &&
+              reusePlan.VoucherTypes.Single(x => x.Name == "Sales - Karnataka").Create == false &&
+              reusePlan.VoucherTypes.Single(x => x.Name == "Sales - Tamil Nadu").Create &&
+              XDocument.Parse(reusePlan.VoucherTypeXml).Descendants("VOUCHERTYPE")
+                .Single().Attribute("NAME")?.Value == "Sales - Tamil Nadu",
+            "already existing branch type was recreated or its numbering was touched");
         var branchTypePrepared = TallyConsolidatedPreparedXmlBuilder.Build(
             branchTypePlan, [a, b]);
         var typedXml = XDocument.Parse(branchTypePrepared.VouchersXml);
@@ -112,10 +132,10 @@ internal static class TallyConsolidatedPreparedXmlTests
         var liveSubtypeXml = "<AAHMASTEREXPORT><COLLECTION>" +
             "<VOUCHERTYPE><NAME>Sales - Karnataka</NAME>" +
             "<PARENT>Sales</PARENT><MASTERID>901</MASTERID>" +
-            "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD></VOUCHERTYPE>" +
+            "<NUMBERINGMETHOD>None</NUMBERINGMETHOD></VOUCHERTYPE>" +
             "</COLLECTION></AAHMASTEREXPORT>";
         var numberingCheck = typeof(TallyBranchConsolidationImportService).GetMethod(
-            "RequireManualVoucherTypeNumbering",
+            "RequireNoneNumberingForNewVoucherType",
             System.Reflection.BindingFlags.NonPublic |
             System.Reflection.BindingFlags.Static)
             ?? throw new InvalidOperationException(
@@ -134,14 +154,16 @@ internal static class TallyConsolidatedPreparedXmlTests
         }
         VerifyNumbering(numberingCheck, liveSubtypeXml, "Sales - Karnataka");
         Reject(() => VerifyNumbering(
-                numberingCheck, liveSubtypeXml.Replace("Manual", "Automatic"),
+                numberingCheck, liveSubtypeXml.Replace("None", "Automatic"),
                 "Sales - Karnataka"),
-            "automatic numbering must block subtype ALTER to prevent silent renumbering");
+            "a new type cannot silently use Automatic numbering when None was requested");
+        VerifyNumbering(numberingCheck, liveSubtypeXml.Replace(
+            "<NUMBERINGMETHOD>None</NUMBERINGMETHOD>", ""),
+            "Sales - Karnataka"); // Tally may omit the native None/default method.
         Reject(() => VerifyNumbering(
-                numberingCheck, liveSubtypeXml.Replace(
-                    "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>", ""),
+                numberingCheck, liveSubtypeXml.Replace("None", "Manual"),
                 "Sales - Karnataka"),
-            "missing live numbering proof must block subtype ALTER");
+            "a new type cannot silently use Manual numbering when None was requested");
         var unboundBaseType = new MasterRecord
         {
             Type = "Voucher Type", Name = "Sales",
@@ -156,7 +178,7 @@ internal static class TallyConsolidatedPreparedXmlTests
             "an unverified Tally base voucher type must not permit branch master creation");
         Console.WriteLine(
             "PASS: existing consolidated planner creates only used branch subtypes " +
-            "under verified parent Tally MASTERIDs, with safe Manual numbering, " +
+            "under verified parent Tally MASTERIDs, with requested None numbering, " +
             "original amounts and native readback validation.");
 
         var result = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, b]);

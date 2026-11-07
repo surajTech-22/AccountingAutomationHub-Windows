@@ -97,7 +97,7 @@ internal static class TallyBranchMasterPlannerTests
               XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE")
                   .All(v => optional.VoucherTypes.Any(t => t.Name == (string?)v.Attribute("NAME") &&
                       t.BaseType == (string?)v.Element("PARENT") &&
-                      (string?)v.Element("NUMBERINGMETHOD") == "Manual")),
+                      (string?)v.Element("NUMBERINGMETHOD") == "None")),
               "only used optional subtype masters under their real parents in the unchanged XML layout");
         Console.WriteLine("PASS: optional used-only branch voucher types and original parent hierarchy.");
         var xmlUsage = TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(
