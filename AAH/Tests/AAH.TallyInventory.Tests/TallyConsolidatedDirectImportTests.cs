@@ -164,19 +164,36 @@ internal static class TallyConsolidatedDirectImportTests
               main.Contains("await authorityWrapper.VerifyAsync(visible, stillLinked, company)", StringComparison.Ordinal) &&
               coordinator.Contains("internal async Task RunWithLinkedTallyOperationGateAsync(", StringComparison.Ordinal),
             "consolidated native readback must use original live link, recover stale SQLite index/full XML and avoid timestamp-only full baseline.");
+        var adaptiveWriteStart = importer.IndexOf(
+            "var items = writePlan.OrderBy(item => item.Date).ToArray();",
+            StringComparison.Ordinal);
+        var adaptiveWriteEnd = importer.IndexOf(
+            "return new TallyConsolidatedVoucherImportResult(imported, createdMasters,",
+            adaptiveWriteStart, StringComparison.Ordinal);
+        Check(adaptiveWriteStart >= 0 && adaptiveWriteEnd > adaptiveWriteStart,
+            "v636 must write from a single continuous chronological adaptive queue.");
+        var adaptiveBody = importer[adaptiveWriteStart..adaptiveWriteEnd];
         Check(importer.Contains("var writePlan = source.Where(", StringComparison.Ordinal) &&
-              importer.Contains("GroupBy(item => (item.Date.Year, item.Date.Month))", StringComparison.Ordinal) &&
-              importer.Contains("Take(batchSize)", StringComparison.Ordinal) &&
-              importer.Contains("NextAdaptiveVoucherBatchSize(batchSize, watch.ElapsedMilliseconds)", StringComparison.Ordinal) &&
-              importer.Contains("TallyExcelParityXmlWriter.BeginErp9DataImport(", StringComparison.Ordinal) &&
-              importer.Contains("foreach (var record in records)", StringComparison.Ordinal) &&
-              importer.Contains("responseRejected", StringComparison.Ordinal) &&
-              importer.Contains("FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal) &&
-              importer.Contains("stopAfterReadFailure", StringComparison.Ordinal) &&
-              importer.Contains("knownOriginalMasterIds", StringComparison.Ordinal) &&
-              !importer.Contains("Voucher-ALTER-", StringComparison.Ordinal),
-            "v635 must prepare adaptive CREATE/ALTER envelopes, verify once after a failed or successful batch, reconcile per source without per-voucher POST.");
-        Console.WriteLine("PASS: v635 adaptive consolidated CREATE/ALTER/IGNORE, one envelope and one readback per bounded batch.");
+              adaptiveBody.Contains("for (var offset = 0; offset < items.Length;)", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("Take(batchSize)", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("NextAdaptiveVoucherBatchSize(batchSize, watch.ElapsedMilliseconds)", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("MonthBoundedVoucherReadbackRanges(", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("foreach (var (verifyFrom, verifyTo) in readbackRanges)", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("slices.Add((verifyFrom, verifyTo, native.Index, native.Full))", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("foreach (var slice in slices)", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("nativeReadbackFailed=", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("TargetBatchSize=", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("ActualBatchSize=", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("NextAdaptiveVoucherBatchSize(", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("knownOriginalMasterIds.UnionWith(", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("responseRejected", StringComparison.Ordinal) &&
+              adaptiveBody.Contains("FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal) &&
+              !adaptiveBody.Contains("foreach (var month in writePlan", StringComparison.Ordinal) &&
+              !adaptiveBody.Contains("GroupBy(item => (item.Date.Year, item.Date.Month))", StringComparison.Ordinal) &&
+              !adaptiveBody.Contains("stopAfterReadFailure", StringComparison.Ordinal) &&
+              !adaptiveBody.Contains("Voucher-ALTER-", StringComparison.Ordinal),
+            "v636 must NOT split adaptive voucher writes by month. Only Tally native readback is month bounded; prior version, pending/no-retry, individual sizing and diagnostics remain intact.");
+        Console.WriteLine("PASS: v636 one continuous 80-to-400 adaptive CREATE/ALTER write queue across months, safe per-month Tally readbacks, exact native DRCR.");
         Console.WriteLine(
             "PASS: consolidated native readback reuses Live Tally Link and the individual full Voucher parser, with no mandatory fresh baseline.");
 
