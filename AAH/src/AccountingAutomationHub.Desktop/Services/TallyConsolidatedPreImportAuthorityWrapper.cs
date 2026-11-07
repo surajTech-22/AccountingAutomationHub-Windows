@@ -313,18 +313,28 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         IReadOnlyList<TallyVoucherIndexRecord> rows,
         IReadOnlyList<TallyVoucherXmlSnapshot> full)
     {
+        // The saved Tally link is company identity, not FY storage authority.
+        // Legacy/ERP9 links may have FinancialYear='' even when the currently
+        // open Client/FY has a complete Live Tally checkpoint. The ORIGINAL
+        // coordinator always keys its index/XML by active client.FinancialYear.
+        var financialYear = state.FinancialYear.Trim();
         if (state.ClientId != link.ClientId ||
             !state.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-            !state.FinancialYear.Equals(link.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
+            financialYear.Length == 0 ||
+            (link.FinancialYear.Trim().Length > 0 &&
+             !financialYear.Equals(link.FinancialYear.Trim(), StringComparison.OrdinalIgnoreCase)) ||
             state.LastFullSyncUtc == DateTime.MinValue)
             throw new InvalidOperationException(
-                "Native Tally Voucher refresh is not bound to the original Client/FY/CompanyKey.");
+                "Native Tally Voucher refresh is not bound to the original Client/FY/CompanyKey. " +
+                $"Checkpoint: ClientId {state.ClientId}, FY '{financialYear}', " +
+                $"CompanyKey '{state.CompanyKey}'; Link: ClientId {link.ClientId}, " +
+                $"FY '{link.FinancialYear}', CompanyKey '{link.CompanyKey}'.");
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var latestAlterId = state.LastAlterId;
         foreach (var row in rows)
         {
             if (!row.CompanyKey.Equals(link.CompanyKey, StringComparison.OrdinalIgnoreCase) ||
-                !row.FinancialYear.Equals(link.FinancialYear, StringComparison.OrdinalIgnoreCase) ||
+                !row.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) ||
                 row.MasterId.Trim().Length == 0 || !ids.Add(row.MasterId.Trim()) ||
                 !long.TryParse(row.AlterId.Trim(), NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out var alterId) || alterId <= 0)
@@ -349,16 +359,16 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
                 "The saved synchronized authority was not changed.");
 
         // No Tally POST: only the original shared index/XML cache changes.
-        repository.ReplaceVoucherIndex(link.CompanyKey, link.FinancialYear, rows);
-        repository.ReplaceVoucherXmlAuthority(link.CompanyKey, link.FinancialYear, full);
+        repository.ReplaceVoucherIndex(link.CompanyKey, financialYear, rows);
+        repository.ReplaceVoucherXmlAuthority(link.CompanyKey, financialYear, full);
         if (!repository.HasCompleteVoucherXmlAuthority(
-                link.CompanyKey, link.FinancialYear, rows.Count))
+                link.CompanyKey, financialYear, rows.Count))
             throw new InvalidOperationException(
                 "Updated Live Tally index/full XML failed database readback.");
         var updatedIndex = repository.GetVoucherIndexRange(
-            link.CompanyKey, link.FinancialYear,
-            new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture), 4, 1),
-            new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture) + 1, 3, 31));
+            link.CompanyKey, financialYear,
+            new DateTime(int.Parse(financialYear[..4], CultureInfo.InvariantCulture), 4, 1),
+            new DateTime(int.Parse(financialYear[..4], CultureInfo.InvariantCulture) + 1, 3, 31));
         var originalById = rows.ToDictionary(
             row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
         if (updatedIndex.Count != rows.Count ||
@@ -371,7 +381,7 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             throw new InvalidOperationException(
                 "Updated Live Tally MASTERID/ALTERID or ledger content did not persist in SQLite.");
         var verifiedFull = repository.GetVoucherXmlAuthorityByMasterIds(
-            link.CompanyKey, link.FinancialYear, ids);
+            link.CompanyKey, financialYear, ids);
         if (verifiedFull.Count != full.Count ||
             verifiedFull.Any(row =>
                 !fullById.TryGetValue(row.MasterId.Trim(), out var snapshots) ||
@@ -384,7 +394,7 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         // Only the proven native Voucher authority advances; the normal
         // Live Tally Link retains exclusive ownership of full Master baseline.
         var saved = repository.GetBankSyncState(
-            link.ClientId, link.FinancialYear, link.CompanyKey)
+            link.ClientId, financialYear, link.CompanyKey)
             ?? throw new InvalidOperationException("Original Tally sync checkpoint vanished.");
         saved.LastFyVoucherCount = rows.Count;
         saved.LastAlterId = Math.Max(saved.LastAlterId, latestAlterId);
