@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using System.Threading;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Infrastructure.Tally;
 
@@ -19,6 +20,7 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
     private string _acceptedVerificationStatus = "Any Tally-accepted voucher awaiting live MASTERID can be verified read-only; this never resends a voucher.";
     private readonly Func<string> _tallyProgressReader;
     private string _tallyImportProgressStatus = "Checking the original Tally source-binding progress...";
+    private int _progressRefreshGeneration;
     private bool _separateVoucherTypes;
     private bool _separateCashLedgers;
     private string _masterImportStatus =
@@ -65,8 +67,25 @@ public sealed class ConsolidatedTallyImportViewModel : PageViewModel
 
     public void RefreshTallyImportProgress()
     {
-        try { TallyImportProgressStatus = _tallyProgressReader(); }
-        catch (Exception ex) { TallyImportProgressStatus = "Tally progress unavailable: " + ex.Message; }
+        // ReadConsolidatedVoucherProgress opens SQLite and can scan many
+        // durable source bindings. Never do that work in the Tally Import
+        // page constructor or on the WPF navigation/dispatcher thread.
+        var generation = Interlocked.Increment(ref _progressRefreshGeneration);
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        _ = Task.Run(() =>
+        {
+            string status;
+            try { status = _tallyProgressReader(); }
+            catch (Exception ex) { status = "Tally progress unavailable: " + ex.Message; }
+            if (dispatcher.HasShutdownStarted) return;
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() =>
+                {
+                    if (generation == Volatile.Read(ref _progressRefreshGeneration))
+                        TallyImportProgressStatus = status;
+                }));
+        });
     }
     public AsyncRelayCommand ImportBranchMastersCommand { get; }
     public AsyncRelayCommand PrepareConsolidatedXmlCommand { get; }
