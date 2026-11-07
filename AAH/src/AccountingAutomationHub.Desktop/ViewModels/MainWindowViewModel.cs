@@ -3078,22 +3078,15 @@ public sealed class MainWindowViewModel :
     private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
-        // TEMPORARY CREATION-ONLY SCOPE requested for branch Voucher Types.
-        // Even if the user selects the existing "Export" button, it must
-        // only create absent Voucher Type MASTERS via the same existing
-        // linked-Tally master importer. No Voucher CREATE/ALTER/DELETE, no
-        // GST/DRCR/numbering changes, and no duplicate source bindings.
+        // Phase 2 after v632: create any genuinely missing branch Voucher
+        // Type masters using the SAME linked-Tally importer, then use the
+        // EXISTING strict previous-version / MASTERID / ALTERID writer to
+        // change the type of VERIFIED vouchers only. Never CREATE a voucher,
+        // cash ledger or Group from the separate-type option.
         if (separateTypes)
-        {
-            var masters = await ImportConsolidatedMastersAsync(
+            await ImportConsolidatedMastersAsync(
                 parentId, financialYear, separateVoucherTypes: true,
                 separateCashLedgers: false);
-            return new TallyConsolidatedVoucherImportResult(
-                0, masters.CreatedVoucherTypes,
-                "Voucher Type master creation only. Existing branch types " +
-                "were reused unchanged; no existing or new voucher was posted. " +
-                masters.Status);
-        }
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash,
             produceManualImportFiles: false);
@@ -3160,7 +3153,8 @@ public sealed class MainWindowViewModel :
                 throw new InvalidOperationException(
                     "Consolidated Client/FY or linked Tally CompanyKey changed during normal pre-import synchronization. No voucher was posted.");
             var result = await importer.ImportAsync(link, company, prepared,
-                accountingFinancialYear: financialYear);
+                accountingFinancialYear: financialYear,
+                voucherTypeOnlyAlter: separateTypes);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import: " + result.Status,
                 prepared.FinalVouchers, result.ImportedVouchers, evidence,
