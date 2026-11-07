@@ -93,6 +93,28 @@ internal static class TallyConsolidatedDirectImportTests
               importer.Contains("ReconcileMissingVoucherBindingAuthority(", StringComparison.Ordinal),
               "original bound MASTERID/ALTERID/DRCR/duplicate gates must remain intact");
 
+        // CL019 7 Nov: 113 ALTERs were native-verified but normal SQLite
+        // Voucher index remained at pre-import ALTERID 672. Reuse the
+        // individual post-write index + full XML persistence on EACH fresh
+        // verified CREATE/ALTER/reconciliation readback. Never fabricate a
+        // company-wide sync checkpoint in the consolidated importer.
+        Check(importer.Split("tallyRepository.ReplaceVoucherIndexRange(",
+                  StringSplitOptions.None).Length - 1 == 3 &&
+              importer.Split("tallyRepository.UpsertVoucherXmlAuthority(",
+                  StringSplitOptions.None).Length - 1 == 3 &&
+              importer.Contains("afterAlter.Index", StringComparison.Ordinal) &&
+              importer.Contains("afterAlter.Full", StringComparison.Ordinal) &&
+              importer.Contains("after.Index", StringComparison.Ordinal) &&
+              importer.Contains("after.Full", StringComparison.Ordinal) &&
+              !importer.Contains("UpsertBankSyncState(", StringComparison.Ordinal) &&
+              wrapper.Contains("RequireFreshNormalBaseline(", StringComparison.Ordinal) &&
+              wrapper.Contains("current.LastFullSyncUtc <=", StringComparison.Ordinal) &&
+              main.Contains("TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(",
+                  StringComparison.Ordinal),
+            "consolidated readback must persist native individual index/full XML and refuse stale normal synchronization.");
+        Console.WriteLine(
+            "PASS: consolidated native readback persists current Voucher data like individual Tally and detects swallowed stale-sync failures.");
+
         // Opening Tally Import is a PAGE NAVIGATION, never an implicit full
         // branch XML regeneration. The Dashboard already owns its shared source
         // preview, so initiating it again when selecting Tally Import blocked
