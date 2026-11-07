@@ -117,6 +117,55 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // v633 type-only voucher transition: only a verified original voucher
+        // whose FULL native DR/CR, date, party, reference and GST fields are
+        // unchanged may be moved into its branch subtype. Changes to source
+        // amounts, tax or party cannot sneak through a type-only command.
+        var originalForSubtype = """
+            <VOUCHER>
+              <DATE>20260228</DATE>
+              <VOUCHERTYPENAME>Debit Note</VOUCHERTYPENAME>
+              <REFERENCE>KA-C-26-1924192</REFERENCE>
+              <NARRATION>Imported from branch</NARRATION>
+              <PARTYGSTIN>29AAAAA1111A1Z5</PARTYGSTIN>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>Creditor KA</LEDGERNAME><AMOUNT>-7.08</AMOUNT></ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>Taxable KA</LEDGERNAME><AMOUNT>6.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>IGST KA</LEDGERNAME><AMOUNT>1.08</AMOUNT></ALLLEDGERENTRIES.LIST>
+            </VOUCHER>
+            """;
+        var targetSubtype = System.Xml.Linq.XElement.Parse(originalForSubtype);
+        targetSubtype.Element("VOUCHERTYPENAME")!.Value = "Debit Note - Karnataka";
+        var nativeSubtypeSource = new[] {
+            new TallyVoucherXmlSnapshot(
+                live.MasterId, "", live.VoucherType, live.VoucherDate!.Value,
+                originalForSubtype) { AlterId = live.AlterId }
+        };
+        bool SafeTypeOnly(System.Xml.Linq.XElement voucher) =>
+            TallyConsolidatedVoucherImportService.MatchesTypeOnlyPreparedVoucher(
+                voucher, live, nativeSubtypeSource);
+        if (!SafeTypeOnly(targetSubtype))
+            throw new InvalidOperationException(
+                "A strictly identical original live voucher must allow type-only ALTER.");
+        var changedTax = new System.Xml.Linq.XElement(targetSubtype);
+        changedTax.Element("PARTYGSTIN")!.Value = "29BBBBB1111B1Z5";
+        if (SafeTypeOnly(changedTax))
+            throw new InvalidOperationException(
+                "Type-only ALTER permitted a different GSTIN.");
+        var changedDrcr = new System.Xml.Linq.XElement(targetSubtype);
+        changedDrcr.Descendants("AMOUNT").First().Value = "-7.09";
+        if (SafeTypeOnly(changedDrcr))
+            throw new InvalidOperationException(
+                "Type-only ALTER permitted a different signed posting.");
+        var changedDate = new System.Xml.Linq.XElement(targetSubtype);
+        changedDate.Element("DATE")!.Value = "20260227";
+        if (SafeTypeOnly(changedDate))
+            throw new InvalidOperationException("Type-only ALTER permitted another date.");
+        var changedReference = new System.Xml.Linq.XElement(targetSubtype);
+        changedReference.Element("REFERENCE")!.Value = "SOME-OTHER-INVOICE";
+        if (SafeTypeOnly(changedReference))
+            throw new InvalidOperationException("Type-only ALTER permitted another source.");
+        Console.WriteLine("PASS: v633 type-only strict live voucher proof preserves signed DRCR, GSTIN, date and source reference.");
+
         // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
         // as PartyLedger and BASICNARRATION as Narration in its saved index.
         // The consolidated Previous->Desired wrapper MUST use those SAME
