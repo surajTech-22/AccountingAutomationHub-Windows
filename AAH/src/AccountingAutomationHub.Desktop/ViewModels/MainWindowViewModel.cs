@@ -4152,7 +4152,7 @@ public sealed class MainWindowViewModel :
         // idle. The scope-key gate prevents a new XML preparation on any
         // subsequent 5-second heartbeat or passive link-status notification.
         if (tallyConnectedNow && !_tallyCoordinator.IsBusy &&
-            (CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel) &&
+            CurrentPage is ConsolidatedBranchDashboardViewModel &&
             _clientContext.CurrentClient is { } previewClient)
         {
             var linkKey = _tallyCoordinator.GetCurrentClientLink();
@@ -4166,7 +4166,7 @@ public sealed class MainWindowViewModel :
                         new Action(() =>
                         {
                             if (_clientContext.CurrentClient?.Id == previewClient.Id &&
-                                (CurrentPage is ConsolidatedBranchDashboardViewModel or ConsolidatedTallyImportViewModel))
+                                CurrentPage is ConsolidatedBranchDashboardViewModel)
                                 QueueConsolidatedSourcePreviewWarm(previewClient);
                         }));
             }
@@ -5079,9 +5079,16 @@ public sealed class MainWindowViewModel :
                 _dashboardViewModel.RefreshAccountingOverviewAfterExternalChange();
                 break;
             case ConsolidatedBranchDashboardViewModel:
-            case ConsolidatedTallyImportViewModel:
                 if (client is not null)
                     QueueConsolidatedSourcePreviewWarm(client);
+                break;
+            case ConsolidatedTallyImportViewModel:
+                // This page embeds the SAME prepared Dashboard Tally panel.
+                // Starting full branch XML preparation automatically here ran
+                // the original synchronous SQLite/source-fingerprint setup on
+                // the WPF dispatcher and could make tab navigation Not Responding.
+                // Reuse the existing preview; only an explicit Generate/Import
+                // command may prepare source XML from this import tab.
                 break;
             case PurchaseImportViewModel:
                 _purchaseViewModel.PrepareForDisplay();
