@@ -3261,7 +3261,8 @@ public sealed class MainWindowViewModel :
                         (types, cash) => ExportConsolidatedVouchersAsync(client.Id, client.FinancialYear, types, cash),
                         (types, cash) => VerifyConsolidatedAcceptedReadOnlyAsync(
                             client.Id, client.FinancialYear, types, cash),
-                        () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear));
+                        () => ReadConsolidatedTallyProgressStatus(client.Id, client.FinancialYear),
+                        _clientPreferenceRepository);
                 // Both screens reuse the exact same import commands, safety gates,
                 // option selections and prepared-XML statuses. Dashboard must not
                 // display a disabled export card without its real importer.

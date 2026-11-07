@@ -262,6 +262,8 @@ public sealed class DashboardViewModel :
     private (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)?
         _normalManualModuleSelectionBeforeConsolidated;
     private string _consolidatedManualSelectionScope = string.Empty;
+    private long _consolidatedManualSelectionClientId;
+    private string _consolidatedManualSelectionFinancialYear = string.Empty;
 
     private (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)
         CurrentManualModuleSelection() =>
@@ -288,9 +290,35 @@ public sealed class DashboardViewModel :
 
     private void RememberConsolidatedManualModuleSelection()
     {
-        if (_isConsolidatedTallyScope && _consolidatedManualSelectionScope.Length > 0)
-            _consolidatedManualModuleSelections[_consolidatedManualSelectionScope] =
-                CurrentManualModuleSelection();
+        if (!_isConsolidatedTallyScope ||
+            _consolidatedManualSelectionScope.Length == 0 ||
+            _consolidatedManualSelectionClientId <= 0)
+            return;
+        var selection = CurrentManualModuleSelection();
+        _consolidatedManualModuleSelections[_consolidatedManualSelectionScope] = selection;
+        // Preserve the ORIGINAL dashboard preference writer's asynchronous,
+        // coalesced SQLite path. The stored ClientId/FY belong to the scope
+        // being left, not the next workspace in ActiveClientContext.
+        QueueTallyPreferenceWrite(
+            _consolidatedManualSelectionClientId,
+            ConsolidatedTallyImportSelectionPreferences.ModulesKey(
+                _consolidatedManualSelectionFinancialYear),
+            ConsolidatedTallyImportSelectionPreferences.EncodeModules(
+                selection.Bank, selection.Purchase, selection.Sales,
+                selection.Cash, selection.Journal));
+    }
+
+    private (bool Bank, bool Purchase, bool Sales, bool Cash, bool Journal)
+        RestoreConsolidatedManualModuleSelection(ClientProfile client, string scope)
+    {
+        if (_consolidatedManualModuleSelections.TryGetValue(scope, out var selected))
+            return selected;
+        // No saved selection => original five-module default; a deliberate
+        // all-unselected "00000" must also survive a full application restart.
+        var stored = _clientPreferences.Get(client.Id,
+            ConsolidatedTallyImportSelectionPreferences.ModulesKey(client.FinancialYear));
+        return ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(stored, out selected)
+            ? selected : (true, true, true, true, true);
     }
 
     // Consolidated has its own link but cannot post parent legacy rows as
@@ -313,14 +341,18 @@ public sealed class DashboardViewModel :
                 _normalManualModuleSelectionBeforeConsolidated =
                     CurrentManualModuleSelection();
             _consolidatedManualSelectionScope = scope;
+            _consolidatedManualSelectionClientId = clientForSelection?.Id ?? 0;
+            _consolidatedManualSelectionFinancialYear = clientForSelection?.FinancialYear ?? string.Empty;
             ApplyManualModuleSelection(
-                scope.Length > 0 &&
-                _consolidatedManualModuleSelections.TryGetValue(scope, out var chosen)
-                    ? chosen : (true, true, true, true, true));
+                clientForSelection is not null && scope.Length > 0
+                    ? RestoreConsolidatedManualModuleSelection(clientForSelection, scope)
+                    : (true, true, true, true, true));
         }
         else
         {
             _consolidatedManualSelectionScope = string.Empty;
+            _consolidatedManualSelectionClientId = 0;
+            _consolidatedManualSelectionFinancialYear = string.Empty;
             if (_normalManualModuleSelectionBeforeConsolidated is { } normal)
                 ApplyManualModuleSelection(normal);
             _normalManualModuleSelectionBeforeConsolidated = null;
