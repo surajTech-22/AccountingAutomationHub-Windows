@@ -215,9 +215,16 @@ public sealed class TallyConsolidatedVoucherImportService(
     // never permission to ignore a newly changed AAH ledger or amount.
     internal static bool IsVerifiedUnchangedBoundSource(
         TallySourceBindingVersionState saved,
-        TallyVoucherIndexRecord live, string preparedSourceHash)
+        TallyVoucherIndexRecord live, string preparedSourceHash,
+        string? desiredVoucherType = null)
     {
-        return saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
+        // Even an old legacy source binding with a previously accepted hash
+        // cannot skip a changed destination voucher type. The desired new
+        // branch subtype (or restoration to base) must use the original
+        // Previous->Desired same-MASTERID ALTER writer instead.
+        return (desiredVoucherType is null ||
+                IgnoreCase.Equals(live.VoucherType, desiredVoucherType)) &&
+               saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) &&
                saved.MasterId.Trim().Length > 0 &&
                IgnoreCase.Equals(saved.MasterId.Trim(), live.MasterId.Trim()) &&
                saved.VerifiedContentHash.Length > 0 &&
@@ -917,7 +924,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // positive last-verified ALTERID + native GUID. Tally's FY
                 // full signed DR/CR is available for ALL vouchers above, but
                 // this unchanged source does not need a second comparison.
-                if (IsVerifiedUnchangedBoundSource(state, liveBound, planned.ContentHash))
+                if (IsVerifiedUnchangedBoundSource(
+                        state, liveBound, planned.ContentHash, planned.Type))
                 {
                     skipped.Add(planned.SourceAnchor);
                     continue;
