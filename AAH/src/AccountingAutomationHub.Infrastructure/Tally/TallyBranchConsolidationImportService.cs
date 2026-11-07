@@ -418,17 +418,45 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
                 throw new InvalidOperationException(
                     "Tally Cash ledger identity changed during rename preparation. " +
                     "Refresh the original master authority; no duplicate ledger created.");
+            // The fresh ledger NAME is the actual Tally ALTER routing identity.
+            // Confirm the same native GUID/ALTERID/MASTERID has survived the
+            // entire preflight; do not send any mutation after a concurrent
+            // ledger edit, even though the name is unchanged.
+            var latestDocument = TallyConsolidatedXmlTextSafety.ParseDocument(
+                latestXml, "fresh pre-rename Cash Ledger master authority");
+            var latestOld = latestDocument.Descendants().Where(x =>
+                x.Name.LocalName.Equals("LEDGER", StringComparison.OrdinalIgnoreCase) &&
+                MasterField(x, "NAME").Equals(cashLedger.PreviousName,
+                    StringComparison.OrdinalIgnoreCase) &&
+                MasterField(x, "MASTERID").Equals(cashLedger.PreviousMasterId,
+                    StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (latestOld.Length != 1 ||
+                !MasterField(latestOld[0], "PARENT").Equals("Cash-in-Hand",
+                    StringComparison.OrdinalIgnoreCase) ||
+                !MasterField(latestOld[0], "GUID").Equals(
+                    MasterField(oldNative[0], "GUID"), StringComparison.OrdinalIgnoreCase) ||
+                !long.TryParse(MasterField(latestOld[0], "ALTERID"),
+                    out var latestAlterId) || latestAlterId != previousAlterId)
+                throw new InvalidOperationException(
+                    "Cash ledger GUID/ALTERID/MASTERID changed between live master exports. " +
+                    "No name-based ALTER was sent.");
             var request = BuildBoundLegacyCashLedgerRenameXml(
                 destination.Name, cashLedger.PreviousName, cashLedger.Name,
                 cashLedger.PreviousMasterId, MasterField(oldNative[0], "GUID"));
             var response = TallyHttpService.ParseImportResponse(
                 await tally.ImportXmlAsync(request, cancellationToken).ConfigureAwait(false));
             if (response.Created != 0 || response.Altered != 1 ||
-                response.Errors != 0 || response.Exceptions != 0 ||
+                response.Ignored != 0 || response.Errors != 0 ||
+                response.Exceptions != 0 ||
                 !string.IsNullOrWhiteSpace(response.LineError))
                 throw new InvalidOperationException(
-                    "Tally did not confirm exactly one existing Cash Ledger ALTER. " +
-                    "Re-read the same master before any retry; no voucher was posted. " +
+                    "Tally did not confirm the in-place Cash ledger rename " +
+                    cashLedger.PreviousName + " -> " + cashLedger.Name +
+                    " at MASTERID " + cashLedger.PreviousMasterId +
+                    ". Created=" + response.Created + ", Altered=" + response.Altered +
+                    ", Ignored=" + response.Ignored + ", Errors=" + response.Errors +
+                    ", Exceptions=" + response.Exceptions + ". " +
+                    "No voucher was posted and no automatic rename retry is allowed. " +
                     response.LineError);
 
             tally.RequireFreshErp9MasterAuthorityForExplicitExport();
@@ -529,12 +557,17 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             throw new InvalidOperationException("Legacy Cash rename requires original verified Tally identity.");
         var xml = new StringBuilder();
         TallyExcelParityXmlWriter.BeginAllMastersImport(xml, companyName);
+        // Tally's documented master rename imports by ORIGINAL NAME, not
+        // by importing Tally's own generated MASTERID/GUID inside the object.
+        // The MASTERID and GUID were verified in TWO fresh native exports
+        // above and are verified again after the response. Adding those
+        // identity fields to the mutation made the 23:33 CL019 requests
+        // return Ignored=1 rather than a successful master ALTER.
         xml.AppendLine(new XElement("TALLYMESSAGE",
             new XElement("LEDGER",
                 new XAttribute("NAME", previousName),
+                new XAttribute("RESERVEDNAME", ""),
                 new XAttribute("ACTION", "Alter"),
-                new XElement("MASTERID", masterId),
-                new XElement("GUID", guid),
                 new XElement("NAME", friendlyName),
                 new XElement("PARENT", "Cash-in-Hand")))
             .ToString(SaveOptions.DisableFormatting));
