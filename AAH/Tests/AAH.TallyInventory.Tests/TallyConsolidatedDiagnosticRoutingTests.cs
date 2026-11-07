@@ -225,6 +225,23 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
               importer.Contains("tallyAcknowledgedAlter?.Invoke()", StringComparison.Ordinal),
             "Original Tally diagnostic/linked cache ignores successful bound ALTER acceptance or merges ALTER into CREATE.");
         Console.WriteLine("PASS: original detailed Tally ZIP and linked coordinator count/refresh verified ALTER separately from CREATE.");
+        // A prepared CREATE is an internal staging action, not a completed
+        // Tally import. Only after the full live import succeeds may the
+        // diagnostic classify every voucher as created, altered or skipped.
+        Check(coordinator.Contains(
+                  "Final consolidated voucher outcomes (after live Tally matching and readback):",
+                  StringComparison.Ordinal) &&
+              coordinator.Contains("Created: \" + result.TallyCreated", StringComparison.Ordinal) &&
+              coordinator.Contains("Altered: \" + result.TallyAltered", StringComparison.Ordinal) &&
+              coordinator.Contains("Skipped (existing / unchanged): ", StringComparison.Ordinal) &&
+              coordinator.Contains("(result.Selected - result.Imported)", StringComparison.Ordinal) &&
+              coordinator.Contains("result.Imported == result.TallyCreated + result.TallyAltered", StringComparison.Ordinal) &&
+              coordinator.Contains("result.UnverifiedAfterImport == 0", StringComparison.Ordinal) &&
+              coordinator.Contains("var consolidatedFinalOutcome = completedConsolidatedImport",
+                  StringComparison.Ordinal),
+            "Completed consolidated diagnostic lacks separate, verified CREATE/ALTER/SKIP counts or misclassifies preview/partial runs.");
+        Console.WriteLine("PASS: final consolidated diagnostic counts are CREATE + ALTER + SKIP only after completed live readback.");
+
 
 
         // CL019 v597 (4 Nov): compare FOUR actual consolidated UI behaviors
