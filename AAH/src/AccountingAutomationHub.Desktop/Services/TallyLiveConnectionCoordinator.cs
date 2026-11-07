@@ -2435,6 +2435,29 @@ public sealed class TallyLiveConnectionCoordinator :
 
         var tallyImpCopy = TryCopyTallyImportLog(folder);
 
+        // The prepared CREATE/ALTER figures above are staging counters, not
+        // the result of live MASTERID matching. Only a COMPLETED, fully
+        // verified consolidated import may classify the remaining source
+        // vouchers as skipped. A preview or partial/failed POST cannot do so.
+        var completedConsolidatedImport =
+            result.Status.StartsWith(
+                "Consolidated Tally (existing wrapper): Consolidated voucher import:",
+                StringComparison.Ordinal) &&
+            result.LiveReadErrors == 0 &&
+            result.UnverifiedAfterImport == 0 &&
+            result.TallyErrors == 0 &&
+            result.Imported == result.TallyCreated + result.TallyAltered &&
+            result.Selected >= result.Imported;
+        var consolidatedFinalOutcome = completedConsolidatedImport
+            ? "Final consolidated voucher outcomes (after live Tally matching and readback):" +
+              Environment.NewLine + "Created: " + result.TallyCreated +
+              Environment.NewLine + "Altered: " + result.TallyAltered +
+              Environment.NewLine + "Skipped (existing / unchanged): " +
+                  (result.Selected - result.Imported) +
+              Environment.NewLine + "Total classified: " + result.Selected +
+              Environment.NewLine
+            : string.Empty;
+
         var summary = $"""
 Accounting Automation Hub - Tally Export Diagnostic Pack
 Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
@@ -2449,7 +2472,7 @@ Selected: {result.Selected}
 Ready: {result.Ready}
 Ready CREATE: {result.ReadyCreates}
 Ready ALTER: {result.ReadyAlters}
-Tally write accepted / imported: {result.Imported}
+{consolidatedFinalOutcome}Tally write accepted / imported: {result.Imported}
 Exact duplicates skipped from LIVE Tally preflight: {result.ExactDuplicatesSkipped}
 Previously imported/altered existing source rows skipped from LIVE Tally preflight: {result.ExistingSourceDuplicatesSkipped}
 Repeated candidates inside this Hub export selection: {result.RepeatedSourceCandidatesSkipped}
