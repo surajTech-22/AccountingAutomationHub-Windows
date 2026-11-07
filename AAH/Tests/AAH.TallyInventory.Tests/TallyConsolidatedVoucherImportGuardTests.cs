@@ -117,6 +117,28 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
+        // v635: consolidated shares the EXACT adaptive backpressure policy
+        // from individual accounting export. Slow replies shrink batches;
+        // fast replies grow batches, without exceeding the Tally-safe cap.
+        var adaptive = typeof(TallyAccountingVoucherExportService).GetMethod(
+            "NextAdaptiveVoucherBatchSize",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "Individual-client adaptive voucher batch policy missing.");
+        int BatchAfter(int previous, long milliseconds) =>
+            (int)adaptive.Invoke(null, new object[] { previous, milliseconds })!;
+        if (BatchAfter(80, 1000) != 108 ||
+            BatchAfter(80, 4500) != 90 ||
+            BatchAfter(80, 9000) != 60 ||
+            BatchAfter(80, 16000) != 40 ||
+            BatchAfter(400, 1000) != 400 ||
+            BatchAfter(10, 50000) != 10)
+            throw new InvalidOperationException(
+                "v635 consolidated batch policy drifted from original individual exporter.");
+        Console.WriteLine(
+            "PASS: v635 shared adaptive voucher batch sizing is bounded 10-400 and reacts to Tally response time.");
+
         // v633 type-only voucher transition: only a verified original voucher
         // whose FULL native DR/CR, date, party, reference and GST fields are
         // unchanged may be moved into its branch subtype. Changes to source
@@ -940,7 +962,11 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             !importerSource.Contains(
                 "PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
             !importerSource.Contains(
-                "alterResponse.Altered != 1", StringComparison.Ordinal))
+                "FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "StageSourceBindingChange(", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "responseRejected", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "Separate voucher type bypasses master-first or existing bound ALTER safety gate.");
         Console.WriteLine("PASS: optional branch voucher-type toggle uses same source MASTERID, " +
@@ -962,9 +988,10 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         if (!importerSource.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
             !importerSource.Contains("StageSourceBindingChange(", StringComparison.Ordinal) ||
             !importerSource.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) ||
-            !importerSource.Contains("ConfirmedAlter", StringComparison.OrdinalIgnoreCase) ||
+            !importerSource.Contains("ConfirmSourceBindingVersion(", StringComparison.Ordinal) ||
             !importerSource.Contains("AcceptedAwaitingVerification", StringComparison.Ordinal) ||
-            !importerSource.Contains("alterResponse.Altered != 1", StringComparison.Ordinal))
+            !importerSource.Contains("record.Alter", StringComparison.Ordinal) ||
+            !importerSource.Contains("FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "Consolidated changed ledger bypasses normal previous-version/accepted/live verification.");
         Console.WriteLine("PASS: consolidated changed ledger uses original bound MASTERID ALTER " +

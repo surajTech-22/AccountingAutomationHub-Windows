@@ -750,10 +750,7 @@ public sealed class TallyAccountingVoucherExportService
             if (!recovering)
             {
                 var ms = watch.ElapsedMilliseconds;
-                batchSize = ms <= 2000 ? Math.Min(maxBatchSize, Math.Max(batchSize + 20, (int)Math.Ceiling(batchSize * 1.35)))
-                    : ms <= 6000 ? Math.Min(maxBatchSize, batchSize + 10)
-                    : ms <= 12000 ? Math.Max(minBatchSize, (int)Math.Floor(batchSize * 0.75))
-                    : Math.Max(minBatchSize, batchSize / 2);
+                batchSize = NextAdaptiveVoucherBatchSize(batchSize, ms);
             }
         }
 
@@ -3651,6 +3648,23 @@ public sealed class TallyAccountingVoucherExportService
             // path where it will be rejected, rather than being mistaken for an empty stage.
             return true;
         }
+    }
+
+    /// <summary>
+    /// Shared individual/consolidated Tally backpressure policy. Start with
+    /// 80 vouchers and adjust after each acknowledged request; cap at 400 so
+    /// Tally is not driven unresponsive by a large company.
+    /// </summary>
+    internal static int NextAdaptiveVoucherBatchSize(int current, long elapsedMs)
+    {
+        const int minimum = 10;
+        const int maximum = 400;
+        current = Math.Clamp(current, minimum, maximum);
+        return elapsedMs <= 2000
+            ? Math.Min(maximum, Math.Max(current + 20, (int)Math.Ceiling(current * 1.35)))
+            : elapsedMs <= 6000 ? Math.Min(maximum, current + 10)
+            : elapsedMs <= 12000 ? Math.Max(minimum, (int)Math.Floor(current * 0.75))
+            : Math.Max(minimum, current / 2);
     }
 
     private static string BuildVoucherOnlyXml(string companyName, IReadOnlyCollection<PreparedVoucher> vouchers)
