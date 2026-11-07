@@ -359,10 +359,28 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             link.CompanyKey, link.FinancialYear,
             new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture), 4, 1),
             new DateTime(int.Parse(link.FinancialYear[..4], CultureInfo.InvariantCulture) + 1, 3, 31));
+        var originalById = rows.ToDictionary(
+            row => row.MasterId.Trim(), StringComparer.OrdinalIgnoreCase);
         if (updatedIndex.Count != rows.Count ||
-            updatedIndex.Any(row => !ids.Contains(row.MasterId.Trim())))
+            updatedIndex.Any(row =>
+                !originalById.TryGetValue(row.MasterId.Trim(), out var original) ||
+                !string.Equals(row.AlterId, original.AlterId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.Guid, original.Guid, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.PartyLedger, original.PartyLedger, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.ContentHash, original.ContentHash, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException(
-                "Updated Live Tally voucher information was not saved correctly.");
+                "Updated Live Tally MASTERID/ALTERID or ledger content did not persist in SQLite.");
+        var verifiedFull = repository.GetVoucherXmlAuthorityByMasterIds(
+            link.CompanyKey, link.FinancialYear, ids);
+        if (verifiedFull.Count != full.Count ||
+            verifiedFull.Any(row =>
+                !fullById.TryGetValue(row.MasterId.Trim(), out var snapshots) ||
+                snapshots.Length != 1 ||
+                !string.Equals(row.AlterId.Trim(), snapshots[0].AlterId.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.OriginalXml, snapshots[0].OriginalXml, StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "Updated Live Tally full signed Voucher XML did not persist correctly.");
         // Only the proven native Voucher authority advances; the normal
         // Live Tally Link retains exclusive ownership of full Master baseline.
         var saved = repository.GetBankSyncState(
