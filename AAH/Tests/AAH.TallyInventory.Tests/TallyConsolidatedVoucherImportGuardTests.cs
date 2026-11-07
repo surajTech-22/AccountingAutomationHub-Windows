@@ -255,6 +255,93 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             throw new InvalidOperationException("Type-only ALTER permitted another source.");
         Console.WriteLine("PASS: v633 type-only strict live voucher proof preserves signed DRCR, GSTIN, date and source reference.");
 
+        // v639 CL019: 21 original Bank Contra vouchers had one ordinary
+        // Cash line, while the user's intentional selection requested a
+        // different branch Cash ledger together with restoring the parent
+        // voucher type. This is ONE same-MASTERID ALTER per voucher, not a
+        // type-only request and then a separate Cash ALTER.
+        const string ownBranch = "B-BFF10AAEA9D095199C45F469";
+        const string bankName = "HDFC Bank CA - 50200110437141";
+        const string cashName = "Cash (" + ownBranch + ")";
+        const string bankReference = "000000000000000";
+        const string bankNarration = "CASH DEPOSIT BY - NATWAR - KARATAGI KOPPAL DISTRICT";
+        const string bankGuid = "a12b7890-1234-5678-9999-abcdef012345";
+        var previousBankXml = System.Xml.Linq.XElement.Parse($"""
+            <VOUCHER>
+              <MASTERID>355</MASTERID><ALTERID>5944</ALTERID><GUID>{bankGuid}</GUID>
+              <DATE>20250521</DATE><VOUCHERTYPENAME>Contra - Karnataka</VOUCHERTYPENAME>
+              <REFERENCE>{bankReference}</REFERENCE>
+              <NARRATION>{bankNarration}</NARRATION>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>{bankName}</LEDGERNAME><AMOUNT>-500000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+              <ALLLEDGERENTRIES.LIST><LEDGERNAME>Cash</LEDGERNAME><AMOUNT>500000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+            </VOUCHER>
+            """);
+        var desiredBankXml = new System.Xml.Linq.XElement(previousBankXml);
+        desiredBankXml.Element("MASTERID")!.Remove();
+        desiredBankXml.Element("ALTERID")!.Remove();
+        desiredBankXml.Element("GUID")!.Remove();
+        desiredBankXml.Add(new System.Xml.Linq.XElement(
+            "VOUCHERNUMBER", ownBranch + "-BANK-56033"));
+        desiredBankXml.Element("VOUCHERTYPENAME")!.Value = "Contra";
+        desiredBankXml.Descendants("LEDGERNAME")
+            .Single(x => x.Value == "Cash").Value = cashName;
+        var oldBank = new TallyVoucherIndexRecord
+        {
+            MasterId = "355", AlterId = "5944", Guid = bankGuid,
+            VoucherDate = new DateTime(2025, 5, 21),
+            VoucherType = "Contra - Karnataka", VoucherNumber = "",
+            Reference = bankReference, Narration = bankNarration,
+            LedgerPostings = new TallyLedgerPostingRecord[] {
+                new() { LedgerName = bankName, SignedAmount = -500000m },
+                new() { LedgerName = "Cash", SignedAmount = 500000m }
+            }
+        };
+        var cl019OldCashNative = new[] {
+            new TallyVoucherXmlSnapshot("355", bankGuid, "Contra - Karnataka",
+                oldBank.VoucherDate.Value,
+                previousBankXml.ToString()) { AlterId = "5944" }
+        };
+        var combinedCashGuard = typeof(TallyConsolidatedVoucherImportService).GetMethod(
+            "MatchesTypeOrBranchCashPreparedVoucher",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("v639 same-voucher type and branch Cash proof missing");
+        bool SafeCombined(System.Xml.Linq.XElement prepared,
+            TallyVoucherIndexRecord? current = null,
+            TallyVoucherXmlSnapshot[]? snapshots = null) =>
+            (bool)combinedCashGuard.Invoke(null, new object[] {
+                prepared, current ?? oldBank, snapshots ?? cl019OldCashNative
+            })!;
+        if (SafeTypeOnly(desiredBankXml))
+            throw new InvalidOperationException("Type-only incorrectly approved a changed branch Cash ledger.");
+        if (!SafeCombined(desiredBankXml))
+            throw new InvalidOperationException(
+                "CL019 verified same-branch Cash plus original-type restore failed the one-ALTER gate.");
+        var cashOnly = new System.Xml.Linq.XElement(desiredBankXml);
+        cashOnly.Element("VOUCHERTYPENAME")!.Value = "Contra - Karnataka";
+        if (!SafeCombined(cashOnly))
+            throw new InvalidOperationException("Same-type Cash-only bound ALTER was incorrectly skipped.");
+        void RejectCombined(Action<System.Xml.Linq.XElement> change, string reason)
+        {
+            var changed = new System.Xml.Linq.XElement(desiredBankXml);
+            change(changed);
+            if (SafeCombined(changed))
+                throw new InvalidOperationException("v639 combined ALTER allowed " + reason);
+        }
+        RejectCombined(v => v.Descendants("AMOUNT").Last().Value = "500001.00", "different Cash amount");
+        RejectCombined(v => v.Descendants("AMOUNT").First().Value = "-500001.00", "different Bank amount");
+        RejectCombined(v => v.Descendants("LEDGERNAME").First().Value = "Other Bank", "different Bank ledger");
+        RejectCombined(v => v.Descendants("LEDGERNAME").Last().Value =
+            "Cash (B-000000000000000000000000)", "another branch Cash ledger");
+        RejectCombined(v => v.Element("VOUCHERNUMBER")!.Value =
+            "B-000000000000000000000000-BANK-56033", "another branch scope");
+        RejectCombined(v => v.Element("DATE")!.Value = "20250522", "changed date");
+        RejectCombined(v => v.Element("REFERENCE")!.Value = "OTHER", "changed reference");
+        RejectCombined(v => v.Element("NARRATION")!.Value = "OTHER", "changed narration");
+        RejectCombined(v => v.Add(new System.Xml.Linq.XElement("ALLLEDGERENTRIES.LIST",
+            new System.Xml.Linq.XElement("LEDGERNAME", cashName),
+            new System.Xml.Linq.XElement("AMOUNT", "1"))), "extra Cash posting");
+        Console.WriteLine("PASS: v639 CL019 one combined type/Cash bound ALTER; same-type Cash-only allowed; foreign scopes, changed DRCR, date and reference refused.");
+
         // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
         // as PartyLedger and BASICNARRATION as Narration in its saved index.
         // The consolidated Previous->Desired wrapper MUST use those SAME

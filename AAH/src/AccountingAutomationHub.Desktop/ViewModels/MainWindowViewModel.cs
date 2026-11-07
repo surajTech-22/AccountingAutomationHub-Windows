@@ -3083,6 +3083,14 @@ public sealed class MainWindowViewModel :
         // EXISTING strict previous-version / MASTERID / ALTERID writer to
         // change the type of VERIFIED vouchers only. Never CREATE a voucher,
         // cash ledger or Group from the separate-type option.
+        // Optional branch Cash ledgers are real masters, independent of
+        // voucher types. Verify/create them FIRST when selected. The voucher
+        // import later combines any Cash allocation change and voucher-type
+        // change into ONE ALTER per bound MASTERID, not one ALTER per option.
+        if (separateCash)
+            await ImportConsolidatedMastersAsync(
+                parentId, financialYear, separateVoucherTypes: false,
+                separateCashLedgers: true);
         if (separateTypes)
             await ImportConsolidatedMastersAsync(
                 parentId, financialYear, separateVoucherTypes: true,
