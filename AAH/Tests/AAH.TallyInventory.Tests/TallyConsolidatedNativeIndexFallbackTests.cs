@@ -189,13 +189,40 @@ internal static class TallyConsolidatedNativeIndexFallbackTests
                 LastTallyChangeToken = "unreliable-ERP9-pulse",
                 LastFullSyncUtc = new DateTime(2026, 11, 7, 3, 10, 0, DateTimeKind.Utc)
             });
-            var fresh = new[] { Actual("35", "39", "Kreativ and Creative"),
-                                Actual("36", "41", "Unchanged Supplier") };
-            // EXACT original native-reader behavior: each returned row has
-            // TallyCompanyInfo.FinancialYear (derived from COMPANY BOOKSFROM),
-            // not the active AAH Client/FY used to select April 2025-March 2026.
-            // The old v629 guard rejected these valid live vouchers before saving.
-            foreach (var row in fresh) row.FinancialYear = "2023-24";
+            // Run the ACTUAL production Tally XML index parser rather than
+            // assigning fake native row years in the test. The Company FY
+            // comes from BOOKSFROM 2023, but every Voucher is dated April
+            // 2025 inside the active Client/FY 2025-26.
+            var nativeCompanyFy = TallyCompanyInfo.NormalizeFinancialYear("", "20230401");
+            Check(nativeCompanyFy == "2023-24", "native company BOOKSFROM fiscal year not reproduced");
+            var parser = typeof(TallyHttpService).GetMethod(
+                "ParseVoucherIndex", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new InvalidOperationException("actual native Voucher XML parser missing");
+            static string NativeObject(string id, string alterId, string party) =>
+                "<VOUCHER>" +
+                "<DATE>20250422</DATE><MASTERID>" + id +
+                "</MASTERID><ALTERID>" + alterId +
+                "</ALTERID><GUID>CL019-" + id +
+                "</GUID><VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>" +
+                "<VOUCHERNUMBER>" + id + "</VOUCHERNUMBER>" +
+                "<REFERENCE>" + (id == "35" ? "KC1000148" : "OTHER") +
+                "</REFERENCE><PARTYLEDGERNAME>" + party + "</PARTYLEDGERNAME>" +
+                "<ALLLEDGERENTRIES.LIST><LEDGERNAME>Purchase</LEDGERNAME>" +
+                "<AMOUNT>40000</AMOUNT></ALLLEDGERENTRIES.LIST>" +
+                "<ALLLEDGERENTRIES.LIST><LEDGERNAME>" + party +
+                "</LEDGERNAME><AMOUNT>-40000</AMOUNT></ALLLEDGERENTRIES.LIST>" +
+                "</VOUCHER>";
+            var liveResponse = "<ENVELOPE><BODY><DATA><COLLECTION>" +
+                NativeObject("35", "39", "Kreativ and Creative") +
+                NativeObject("36", "41", "Unchanged Supplier") +
+                "</COLLECTION></DATA></BODY></ENVELOPE>";
+            var fresh = (IReadOnlyList<TallyVoucherIndexRecord>)parser.Invoke(
+                null, [liveResponse, link.CompanyKey, nativeCompanyFy])!;
+            Check(fresh.Count == 2 &&
+                  fresh.All(row => row.FinancialYear == "2023-24" &&
+                                   row.VoucherDate == new DateTime(2025, 4, 22)) &&
+                  fresh.Single(row => row.MasterId == "35").PartyLedger == "Kreativ and Creative",
+                "actual native XML parser did not recreate the live Tally FY/value mismatch");
             var freshXml = new[] { Xml("35", "39", "Kreativ and Creative"),
                                    Xml("36", "41", "Unchanged Supplier") };
             var marker = new TallyVoucherChangeMarker
