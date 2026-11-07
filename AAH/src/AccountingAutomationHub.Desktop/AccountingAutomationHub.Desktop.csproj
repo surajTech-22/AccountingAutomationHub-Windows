@@ -5,9 +5,9 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Version>4.0.0.636</Version>
-    <AssemblyVersion>4.0.0.636</AssemblyVersion>
-    <FileVersion>4.0.0.636</FileVersion>
+    <Version>4.0.0.637</Version>
+    <AssemblyVersion>4.0.0.637</AssemblyVersion>
+    <FileVersion>4.0.0.637</FileVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RootNamespace>AccountingAutomationHub.Desktop</RootNamespace>
     <AssemblyName>AccountingAutomationHub</AssemblyName>

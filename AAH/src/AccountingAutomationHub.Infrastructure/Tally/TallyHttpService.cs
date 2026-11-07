@@ -1443,6 +1443,107 @@ public sealed class TallyHttpService : IDisposable
     }
 
 
+
+    /// <summary>
+    /// Native post-write verification limited to the submitted CREATE/ALTER batch.
+    /// ALTERs are selected by their existing bound MASTERIDs; new CREATEs are
+    /// selected by MASTERIDs above the freshly synchronized pre-batch high-water
+    /// mark. No month-wide or FY-wide Voucher export is performed. Results are
+    /// always verified against the actual requested source and signed DR/CR.
+    /// If a Tally build reuses an earlier MASTERID, the caller must leave the
+    /// missing CREATE pending; it must not assume nonexistence or resend it.
+    /// </summary>
+    public async Task<(IReadOnlyList<TallyVoucherIndexRecord> Index, IReadOnlyList<TallyVoucherXmlSnapshot> Full)>
+        ExportVoucherAuthorityForImportBatchAsync(
+            TallyCompanyInfo company,
+            IReadOnlyCollection<string> alteredMasterIds,
+            long highestKnownMasterId,
+            DateTime fromDate,
+            DateTime toDate,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(company);
+        ArgumentNullException.ThrowIfNull(alteredMasterIds);
+        fromDate = fromDate.Date;
+        toDate = toDate.Date;
+        if (toDate < fromDate) (fromDate, toDate) = (toDate, fromDate);
+        var ids = alteredMasterIds.Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var id in ids)
+            if (!long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericId) || numericId <= 0)
+                throw new InvalidOperationException("Native import-batch readback requires a positive bound Tally MASTERID.");
+        if (highestKnownMasterId < 0)
+            throw new InvalidOperationException("Native import-batch readback has an invalid pre-batch MASTERID watermark.");
+
+        // 645 pre-existing CL019 ALTER MASTERIDs would otherwise create a
+        // giant OR formula in the Tally TDL collection. Coalesce only
+        // CONSECUTIVE exact IDs into closed ranges, preserving strict scope.
+        var sortedIds = ids.Select(id => long.Parse(id, CultureInfo.InvariantCulture))
+            .OrderBy(id => id).ToArray();
+        var ranges = new List<(long First, long Last)>();
+        foreach (var id in sortedIds)
+        {
+            if (ranges.Count > 0 &&
+                ranges[^1].Last < long.MaxValue && id == ranges[^1].Last + 1)
+                ranges[^1] = (ranges[^1].First, id);
+            else
+                ranges.Add((id, id));
+        }
+        var terms = ranges.Select(range =>
+            range.First == range.Last
+                ? "($MasterID = " + range.First.ToString(CultureInfo.InvariantCulture) + ")"
+                : "($MasterID >= " + range.First.ToString(CultureInfo.InvariantCulture) +
+                  " AND $MasterID <= " + range.Last.ToString(CultureInfo.InvariantCulture) + ")");
+        var predicate = string.Join(" OR ", terms
+            .Append("($MasterID > " + highestKnownMasterId.ToString(CultureInfo.InvariantCulture) + ")"));
+        IReadOnlyList<TallyVoucherIndexRecord> index;
+        IReadOnlyList<TallyVoucherXmlSnapshot> full;
+        if (ShouldUseErp9CompatibilityProbe())
+        {
+            var request = BuildErp9VoucherSliceRequest(company.Name, fromDate, toDate, predicate);
+            var response = await PostErp9TraceAsync(
+                "Voucher-ImportBatch-" + fromDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                "-" + toDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                request, cancellationToken).ConfigureAwait(false);
+            index = ValidateVoucherIndexRange(
+                ParseVoucherIndex(response, company.CompanyKey, company.FinancialYear), fromDate, toDate);
+            full = await ExportCompleteVoucherXmlAuthorityAsync(
+                company, index, fromDate, toDate, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var request = BuildVoucherAuthorityRequest(company.Name, fromDate, toDate, predicate);
+            var response = await PostAsync(request, cancellationToken, TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+            index = ValidateVoucherIndexRange(
+                ParseVoucherIndex(response, company.CompanyKey, company.FinancialYear), fromDate, toDate);
+            var byGuid = index.Where(item => item.Guid.Trim().Length > 0 && item.MasterId.Trim().Length > 0)
+                .GroupBy(item => item.Guid.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().MasterId.Trim(),
+                    StringComparer.OrdinalIgnoreCase);
+            full = ParseVoucherXmlSnapshots(response, byGuid)
+                .Where(item => item.VoucherDate is DateTime date &&
+                    date.Date >= fromDate && date.Date <= toDate)
+                .GroupBy(item => item.MasterId.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(item => item.OriginalXml.Length).First())
+                .ToArray();
+        }
+        var returnedIds = index.Select(item => item.MasterId.Trim()).ToArray();
+        var fullIds = full.Select(item => item.MasterId.Trim()).ToArray();
+        var indexSet = returnedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fullSet = fullIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (returnedIds.Length != indexSet.Count || fullIds.Length != fullSet.Count ||
+            !indexSet.SetEquals(fullSet) ||
+            ids.Any(id => !indexSet.Contains(id)) ||
+            index.Any(item => !long.TryParse(item.MasterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var masterId) ||
+                (masterId <= highestKnownMasterId && !ids.Contains(item.MasterId.Trim(), StringComparer.OrdinalIgnoreCase))))
+            throw new InvalidOperationException(
+                "Native import-batch readback returned incomplete/ambiguous full XML, missing bound " +
+                "MASTERIDs, or a voucher outside the batch ID filter. Preserve all pending " +
+                "CREATE/ALTER states without automatic resend.");
+        return (index, full);
+    }
+
     /// <summary>
     /// Fix49/Fix50 compatibility helper retained for inherited callers and source gates.
     /// Fix51 normal connected operation no longer uses this as a pre-write Merge path:
@@ -4830,8 +4931,13 @@ public sealed class TallyHttpService : IDisposable
     private static string BuildErp9VoucherSliceRequest(
         string companyName,
         DateTime fromDate,
-        DateTime toDate)
+        DateTime toDate,
+        string batchMasterIdFilter = "")
     {
+        // Leave ordinary initial/baseline synchronization unchanged. Only the
+        // post-write import-batch route constrains this native collection by ID.
+        var batchFilter = batchMasterIdFilter.Length == 0
+            ? string.Empty : " AND (" + XmlEscape(batchMasterIdFilter) + ")";
         const string collectionName = "AAH ERP9 Voucher Slice";
         var nativeMethods = string.Concat(new[]
         {
@@ -4866,7 +4972,7 @@ public sealed class TallyHttpService : IDisposable
                     <FETCH>Narration</FETCH>
                     <FETCH>Amount</FETCH>
                   </COLLECTION>
-                  <SYSTEM TYPE="Formulae" NAME="AAHERP9VoucherSlicePeriod">$Date &gt;= ##SVFromDate AND $Date &lt;= ##SVToDate</SYSTEM>
+                  <SYSTEM TYPE="Formulae" NAME="AAHERP9VoucherSlicePeriod">$Date &gt;= ##SVFromDate AND $Date &lt;= ##SVToDate{batchFilter}</SYSTEM>
                 </TDLMESSAGE>
               </TDL>
             </DESC>
@@ -5349,8 +5455,11 @@ public sealed class TallyHttpService : IDisposable
     private static string BuildVoucherAuthorityRequest(
         string companyName,
         DateTime fromDate,
-        DateTime toDate)
+        DateTime toDate,
+        string batchMasterIdFilter = "")
     {
+        var batchFilter = batchMasterIdFilter.Length == 0
+            ? string.Empty : " AND (" + XmlEscape(batchMasterIdFilter) + ")";
         const string collectionName = "AAH Voucher Authority";
         var nativeMethods = string.Concat(new[]
         {
@@ -5383,7 +5492,7 @@ public sealed class TallyHttpService : IDisposable
                     <FETCH>*</FETCH>
                     <FETCH>AllLedgerEntries.*,LedgerEntries.*,InventoryEntries.*,AllInventoryEntries.*,AccountingAllocations.*,BatchAllocations.*,BillAllocations.*,BankAllocations.*,CategoryAllocations.*,CostCentreAllocations.*</FETCH>
                   </COLLECTION>
-                  <SYSTEM TYPE="Formulae" NAME="AAHRequestedVoucherAuthorityPeriod">$Date &gt;= ##SVFromDate AND $Date &lt;= ##SVToDate</SYSTEM>
+                  <SYSTEM TYPE="Formulae" NAME="AAHRequestedVoucherAuthorityPeriod">$Date &gt;= ##SVFromDate AND $Date &lt;= ##SVToDate{batchFilter}</SYSTEM>
                 </TDLMESSAGE>
               </TDL>
             </DESC>

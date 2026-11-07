@@ -1608,7 +1608,7 @@ public sealed class SalesAutoImportService :
                             companyName,
                             new CustomerNameResolution(
                                 string.Empty,
-                                $"B2C Sales - {(placeOfSupply.Length == 0 ? "Unregistered" : placeOfSupply)}",
+                                "B2C Sales",
                                 "Generic Fallback"),
                             "Sales",
                             sectionName.StartsWith(

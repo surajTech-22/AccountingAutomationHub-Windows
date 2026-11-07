@@ -117,9 +117,8 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "must never be confirmed exact.");
         Console.WriteLine("PASS: CL019 same-source Tally auto-number and signed DR/CR strict duplicate comparator.");
 
-        // v635: consolidated shares the EXACT adaptive backpressure policy
-        // from individual accounting export. Slow replies shrink batches;
-        // fast replies grow batches, without exceeding the Tally-safe cap.
+        // v637: use the same adaptive individual/consolidated write sizing,
+        // but let all writes finish before the one native verification phase.
         var adaptive = typeof(TallyAccountingVoucherExportService).GetMethod(
             "NextAdaptiveVoucherBatchSize",
             System.Reflection.BindingFlags.NonPublic |
@@ -128,67 +127,79 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "Individual-client adaptive voucher batch policy missing.");
         int BatchAfter(int previous, long milliseconds) =>
             (int)adaptive.Invoke(null, new object[] { previous, milliseconds })!;
-        if (BatchAfter(80, 1000) != 108 ||
-            BatchAfter(80, 4500) != 90 ||
-            BatchAfter(80, 9000) != 60 ||
-            BatchAfter(80, 16000) != 40 ||
+        if (BatchAfter(160, 1000) != 224 ||
+            BatchAfter(160, 4500) != 195 ||
+            BatchAfter(160, 9001) != 128 ||
+            BatchAfter(160, 16001) != 80 ||
             BatchAfter(400, 1000) != 400 ||
             BatchAfter(10, 50000) != 10)
             throw new InvalidOperationException(
-                "v635 consolidated batch policy drifted from original individual exporter.");
-        Console.WriteLine(
-            "PASS: v635 shared adaptive voucher batch sizing is bounded 10-400 and reacts to Tally response time.");
+                "v637 adaptive policy must grow meaningfully after 3-5s Tally replies and shrink for slow replies.");
 
-        // v636 regression reproduces the 645-voucher CL019 monthly
-        // distribution. Individual-style writes MUST continue across month
-        // boundaries and increase with each fast response. Only READBACK
-        // should be split by calendar month.
-        var monthlyReadback = typeof(TallyConsolidatedVoucherImportService)
-            .GetMethod("MonthBoundedVoucherReadbackRanges",
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Static)
-            ?? throw new InvalidOperationException(
-                "v636 month-bounded readback helper missing.");
-        IReadOnlyList<(DateTime From, DateTime To)> ReadbackFor(DateTime[] dates) =>
-            (IReadOnlyList<(DateTime From, DateTime To)>)monthlyReadback.Invoke(
-                null, new object[] { dates })!;
-        var v636MonthlyCounts = new[] { 9, 37, 51, 46, 40, 54, 60, 73, 66, 110, 60, 39 };
-        var v636Dates = v636MonthlyCounts
-            .SelectMany((count, index) => Enumerable.Repeat(
-                new DateTime(index < 9 ? 2025 : 2026, (index + 3) % 12 + 1, 10),
-                count)).ToArray();
-        var v636Sizes = new List<int>();
-        var v636Next = 80;
-        var v636Offset = 0;
-        while (v636Offset < v636Dates.Length)
+        // 645 CL019 vouchers must write as 160/224/261 with fast replies,
+        // without resetting either the queue or the readback for new months.
+        var monthlyCounts = new[] { 9, 37, 51, 46, 40, 54, 60, 73, 66, 110, 60, 39 };
+        var dates = monthlyCounts.SelectMany((count, index) => Enumerable.Repeat(
+            new DateTime(index < 9 ? 2025 : 2026, (index + 3) % 12 + 1, 10), count)).ToArray();
+        var sizes = new List<int>();
+        var cursor = 0;
+        var next = 160;
+        while (cursor < dates.Length)
         {
-            var take = Math.Min(v636Next, v636Dates.Length - v636Offset);
-            v636Sizes.Add(take);
-            var slice = ReadbackFor(v636Dates.Skip(v636Offset).Take(take).ToArray());
-            if (slice.Count == 0 || slice.Any(range =>
-                range.From.Year != range.To.Year ||
-                range.From.Month != range.To.Month ||
-                range.From > range.To))
-                throw new InvalidOperationException(
-                    "v636 readback escaped Tally calendar-month bounds.");
-            if (v636Sizes.Count == 1 &&
-                (slice.Count != 3 ||
-                 slice[0].From.Month != 4 ||
-                 slice[1].From.Month != 5 ||
-                 slice[2].From.Month != 6))
-                throw new InvalidOperationException(
-                    "v636 80-voucher WRITE was still incorrectly restricted to April.");
-            v636Offset += take;
-            v636Next = BatchAfter(v636Next, 1500);
+            var take = Math.Min(next, dates.Length - cursor);
+            sizes.Add(take);
+            cursor += take;
+            next = BatchAfter(next, 1500);
         }
-        if (!v636Sizes.SequenceEqual(new[] { 80, 108, 146, 198, 113 }) ||
-            v636Sizes.Sum() != 645 || v636Next > 400)
+        if (!sizes.SequenceEqual(new[] { 160, 224, 261 }) || sizes.Sum() != 645)
             throw new InvalidOperationException(
-                "v636 fast 645-voucher adaptive WRITE queue was reset at month boundaries.");
-        Console.WriteLine(
-            "PASS: v636 CL019 645 monthly vouchers write as 80/108/146/198/113 " +
-            "on fast Tally replies, while each native readback remains month bounded.");
+                "v637 consolidated writes were incorrectly split by month or kept too small.");
 
+        // Test the real native collection filter used for the final readback.
+        // It must be both date-bounded and bound to only attempted MASTERIDs,
+        // rather than returning all vouchers for any source month.
+        var httpType = typeof(TallyHttpService);
+        foreach (var methodName in new[]
+        {
+            "BuildVoucherAuthorityRequest", "BuildErp9VoucherSliceRequest"
+        })
+        {
+            var build = httpType.GetMethod(methodName,
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("Missing native filtered Tally request: " + methodName);
+            var request = (string)build.Invoke(null, new object[]
+            {
+                "Combined Books", new DateTime(2025, 4, 1),
+                new DateTime(2026, 3, 31),
+                "($MasterID = 337) OR ($MasterID > 645)"
+            })!;
+            if (!request.Contains("$MasterID = 337", StringComparison.Ordinal) ||
+                !request.Contains("$MasterID &gt; 645", StringComparison.Ordinal) ||
+                !request.Contains("<FILTER>", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    methodName + " dropped batch-MASTERID filter or the native Tally collection.");
+        }
+
+        // The actual production coordinator must invoke native verification
+        // only after exiting the adaptive write loop, and only once.
+        var sourcePath = Path.Combine("AAH", "src", "AccountingAutomationHub.Infrastructure",
+            "Tally", "TallyConsolidatedVoucherImportService.cs");
+        if (!File.Exists(sourcePath))
+            throw new InvalidOperationException("v637 production source was unavailable for write/readback contract test.");
+        var source = File.ReadAllText(sourcePath);
+        var writeStart = source.IndexOf("for (var offset = 0; offset < items.Length;)",
+            StringComparison.Ordinal);
+        var finalReadback = source.IndexOf("// Exactly one final readback phase",
+            StringComparison.Ordinal);
+        var call = source.IndexOf("ExportVoucherAuthorityForImportBatchAsync(",
+            StringComparison.Ordinal);
+        if (writeStart < 0 || finalReadback <= writeStart || call <= finalReadback ||
+            call != source.LastIndexOf("ExportVoucherAuthorityForImportBatchAsync(",
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "v637 native voucher readback is not one final phase after all adaptive writes.");
+        Console.WriteLine("PASS: v637 645 vouchers use 160/224/261 adaptive writes, one final batch-only native readback.");
+        
         // v633 type-only voucher transition: only a verified original voucher
         // whose FULL native DR/CR, date, party, reference and GST fields are
         // unchanged may be moved into its branch subtype. Changes to source
