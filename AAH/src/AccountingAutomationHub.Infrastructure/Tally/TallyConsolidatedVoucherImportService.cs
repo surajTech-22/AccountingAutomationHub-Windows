@@ -1018,11 +1018,13 @@ public sealed class TallyConsolidatedVoucherImportService(
                                 planned.Type + " - ", StringComparison.OrdinalIgnoreCase)
                             : IgnoreCase.Equals(originalType, liveBound.VoucherType));
                     if (!correctType ||
-                        !MatchesTypeOrBranchCashPreparedVoucher(
-                            planned.Xml, liveBound, before.FullVouchers) ||
-                        !PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+                        !MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+                            planned.Xml, liveBound, before.FullVouchers,
+                            prepared.BranchCashLedgerNamesById) ||
+                        !PreviousConsolidatedTypeOnlyWithTallyRenumberMatchesWithPlan(
                             liveBound, before.FullVouchers, state,
-                            planned.Xml, originalType))
+                            planned.Xml, originalType,
+                            prepared.BranchCashLedgerNamesById))
                     {
                         preflightBoundConflicts.Add(
                             planned.SourceAnchor + " | MASTERID " + liveBound.MasterId +
@@ -1342,7 +1344,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         {
             var previous = alterTargets[planned.SourceAnchor];
             var targets = planned.Postings
-                .Where(post => IsOwnBranchCashLedger(post.Name, planned.Number))
+                .Where(post => IsOwnBranchCashLedger(post.Name, planned.Number,
+                    prepared.BranchCashLedgerNamesById))
                 .Select(post => post.Name).Distinct(IgnoreCase);
             foreach (var name in targets)
             {
@@ -1565,14 +1568,16 @@ public sealed class TallyConsolidatedVoucherImportService(
                             !IgnoreCase.Equals(previous.MasterId, masterId) ||
                             !IgnoreCase.Equals(live.VoucherType, originalLive.VoucherType) ||
                             !(typeOnlyOperation
-                                ? PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+                                ? PreviousConsolidatedTypeOnlyWithTallyRenumberMatchesWithPlan(
                                     live, fullAuthority, previous,
-                                    expected.Xml, originalLive.VoucherType)
+                                    expected.Xml, originalLive.VoucherType,
+                                    prepared.BranchCashLedgerNamesById)
                                 : PreviousConsolidatedVersionMatches(
                                     live, fullAuthority, previous)) ||
                             (typeOnlyOperation &&
-                             !MatchesTypeOrBranchCashPreparedVoucher(
-                                 expected.Xml, live, fullAuthority)))
+                             !MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+                                 expected.Xml, live, fullAuthority,
+                                 prepared.BranchCashLedgerNamesById)))
                             throw new InvalidOperationException(
                                 "Adaptive batch preflight rejected bound ALTER for " +
                                 expected.SourceAnchor + " at MASTERID=" + masterId +
@@ -2419,14 +2424,23 @@ public sealed class TallyConsolidatedVoucherImportService(
         TallyVoucherIndexRecord live,
         IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
         TallySourceBindingVersionState saved, XElement preparedVoucher,
-        string previousType)
+        string previousType) =>
+        PreviousConsolidatedTypeOnlyWithTallyRenumberMatchesWithPlan(
+            live, fullAuthority, saved, preparedVoucher, previousType, null);
+
+    private static bool PreviousConsolidatedTypeOnlyWithTallyRenumberMatchesWithPlan(
+        TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        TallySourceBindingVersionState saved, XElement preparedVoucher,
+        string previousType, IReadOnlyDictionary<string, string>? branchCashNames)
     {
         if (saved is null ||
             !saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
             !IgnoreCase.Equals(saved.MasterId, live.MasterId) ||
             (saved.Guid.Length > 0 && !IgnoreCase.Equals(saved.Guid, live.Guid)) ||
             !IgnoreCase.Equals(previousType, live.VoucherType) ||
-            !MatchesTypeOrBranchCashPreparedVoucher(preparedVoucher, live, fullAuthority))
+            !MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+                preparedVoucher, live, fullAuthority, branchCashNames))
             return false;
         if (PreviousConsolidatedVersionMatches(live, fullAuthority, saved))
             return true;
@@ -2544,7 +2558,14 @@ public sealed class TallyConsolidatedVoucherImportService(
     // allowed extra accounting edit in this special type-transition route.
     internal static bool MatchesTypeOrBranchCashPreparedVoucher(
         XElement preparedVoucher, TallyVoucherIndexRecord live,
-        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority) =>
+        MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+            preparedVoucher, live, fullAuthority, null);
+
+    private static bool MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+        XElement preparedVoucher, TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        IReadOnlyDictionary<string, string>? branchCashNames)
     {
         if (MatchesTypeOnlyPreparedVoucher(preparedVoucher, live, fullAuthority))
             return true;
@@ -2584,7 +2605,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 continue;
             var cashName = IgnoreCase.Equals(oldEntry.Name, "Cash") ? newEntry.Name :
                 IgnoreCase.Equals(newEntry.Name, "Cash") ? oldEntry.Name : "";
-            if (!IsOwnBranchCashLedger(cashName, number)) continue;
+            if (!IsOwnBranchCashLedger(cashName, number, branchCashNames)) continue;
             var adjusted = new XElement(preparedVoucher);
             var occurrences = adjusted.Descendants().Where(x =>
                     Is(x, "ALLLEDGERENTRIES.LIST") || Is(x, "LEDGERENTRIES.LIST"))
@@ -2606,15 +2627,33 @@ public sealed class TallyConsolidatedVoucherImportService(
         return false;
     }
 
-    private static bool IsOwnBranchCashLedger(string cashName, string sourceNumber)
+    private static bool IsOwnBranchCashLedger(
+        string cashName, string sourceNumber,
+        IReadOnlyDictionary<string, string>? branchCashNames = null)
     {
-        if (!cashName.StartsWith("Cash (B-", StringComparison.OrdinalIgnoreCase) ||
-            !cashName.EndsWith(')'))
-            return false;
-        var branchId = cashName["Cash (".Length..^1];
-        return branchId.Length == 26 && branchId.StartsWith("B-", StringComparison.OrdinalIgnoreCase) &&
-               branchId.AsSpan(2).ToString().All(Uri.IsHexDigit) &&
-               sourceNumber.StartsWith(branchId + "-", StringComparison.OrdinalIgnoreCase);
+        // Legacy names are supported for existing, already imported vouchers.
+        // Do not infer identity from only the human-readable state/branch name.
+        if (cashName.StartsWith("Cash (B-", StringComparison.OrdinalIgnoreCase) &&
+            cashName.EndsWith(')'))
+        {
+            var legacyId = cashName["Cash (".Length..^1];
+            if (legacyId.Length == 26 && legacyId.StartsWith("B-",
+                    StringComparison.OrdinalIgnoreCase) &&
+                legacyId.AsSpan(2).ToString().All(Uri.IsHexDigit) &&
+                sourceNumber.StartsWith(legacyId + "-", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        // The original builder already checked the branch IDs, unique display
+        // names and ownership of every prepared voucher. Its NON-WIRE mapping
+        // proves which named Cash Ledger belongs to the B-... source prefix.
+        if (branchCashNames is null) return false;
+        foreach (var (id, friendlyName) in branchCashNames)
+            if (id.Length == 26 && id.StartsWith("B-", StringComparison.OrdinalIgnoreCase) &&
+                id.AsSpan(2).ToString().All(Uri.IsHexDigit) &&
+                sourceNumber.StartsWith(id + "-", StringComparison.OrdinalIgnoreCase) &&
+                IgnoreCase.Equals(friendlyName, cashName))
+                return true;
+        return false;
     }
 
     private static bool FullVoucherMatches(ExpectedVoucher expected,
