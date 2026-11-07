@@ -321,8 +321,10 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
 
         // Read live masters immediately before planning. Local SQLite name matches
         // are never permission to ALTER/overwrite a foreign Tally master.
-        var before = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
-            .ConfigureAwait(false));
+        tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+        var beforeXml = await tally.ExportMastersAsync(destination, cancellationToken)
+            .ConfigureAwait(false);
+        var before = ReadLiveMasters(beforeXml);
         var allVoucherTypes = before.Where(x => x.Type == "Voucher Type")
             .Select(x => x.Name)
             .Where(x => !branches.Any(b => x.EndsWith(" - " + b.DisplayName, StringComparison.OrdinalIgnoreCase))) // exclude already-generated branch types only
@@ -337,6 +339,11 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         // is unverified. Mandatory groups are independent of the two options.
         if (separateVoucherTypes && allVoucherTypes.Length == 0)
             throw new InvalidOperationException("Tally did not return a voucher type catalog.");
+        // A previously created branch type might have an unsupported or
+        // automatically renumbering configuration. Never silently ALTER its
+        // settings or existing vouchers. Verify it before GROUP writes begin.
+        foreach (var reused in plan.VoucherTypes.Where(x => !x.Create))
+            RequireManualVoucherTypeNumbering(beforeXml, reused.Name);
         var toCreate = plan.Groups.Where(x => x.Create)
             .Select(x => new MasterRecord { Type = "Group", Name = x.Name, Parent = x.Parent })
             .ToArray();
@@ -373,19 +380,28 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
             var response = TallyHttpService.ParseImportResponse(
                 await tally.ImportXmlAsync(xml, cancellationToken).ConfigureAwait(false));
             RequireOneCreate(response, requirement.Name);
-            var readback = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
-                .ConfigureAwait(false));
+            tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+            var readbackXml = await tally.ExportMastersAsync(destination, cancellationToken)
+                .ConfigureAwait(false);
+            var readback = ReadLiveMasters(readbackXml);
             RequireMaster(readback, "Voucher Type", requirement.Name, requirement.BaseType);
+            RequireManualVoucherTypeNumbering(readbackXml, requirement.Name);
             createdTypes++;
         }
 
         // Final read-back confirms compulsory groups, optional masters and
         // durable Tally MASTERIDs even if Tally initially acknowledged a post.
-        var after = ReadLiveMasters(await tally.ExportMastersAsync(destination, cancellationToken)
-            .ConfigureAwait(false));
+        tally.RequireFreshErp9MasterAuthorityForExplicitExport();
+        var finalXml = await tally.ExportMastersAsync(destination, cancellationToken)
+            .ConfigureAwait(false);
+        var after = ReadLiveMasters(finalXml);
         foreach (var g in plan.Groups) RequireMaster(after, "Group", g.Name, g.Parent);
         foreach (var l in plan.CashLedgers) RequireMaster(after, "Ledger", l.Name, "Cash-in-Hand");
-        foreach (var v in plan.VoucherTypes) RequireMaster(after, "Voucher Type", v.Name, v.BaseType);
+        foreach (var v in plan.VoucherTypes)
+        {
+            RequireMaster(after, "Voucher Type", v.Name, v.BaseType);
+            RequireManualVoucherTypeNumbering(finalXml, v.Name);
+        }
         return new TallyBranchMasterImportResult(
             destination.CompanyKey, plan.Pan, plan.FinancialYear, plan.Groups.Count,
             createdGroups, createdCash, createdTypes,
@@ -427,6 +443,49 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         foreach (var group in plan.Groups.Where(g => !g.Create))
             RequireMaster(fresh, "Group", group.Name, group.Parent);
         return plan;
+    }
+
+    /// <summary>
+    /// The original full Tally Master XML is the only authority for type
+    /// numbering. Do not trust a locally generated child VOUCHERTYPE or a
+    /// cached name-only snapshot. Manual numbering avoids silently replacing
+    /// Tally-owned VOUCHERNUMBER during the original bound-MASTERID ALTER.
+    /// This check is read-only and never alters an existing master.
+    /// </summary>
+    internal static void RequireManualVoucherTypeNumbering(string liveMastersXml, string typeName)
+    {
+        var doc = TallyConsolidatedXmlTextSafety.ParseDocument(
+            liveMastersXml, "branch Voucher Type numbering readback");
+        var types = doc.Descendants().Where(x =>
+                x.Name.LocalName.Equals("VOUCHERTYPE", StringComparison.OrdinalIgnoreCase))
+            .Where(x =>
+            {
+                var name = x.Elements().FirstOrDefault(c =>
+                    c.Name.LocalName.Equals("NAME", StringComparison.OrdinalIgnoreCase))
+                    ?.Value.Trim() ??
+                    x.Attributes().FirstOrDefault(a =>
+                        a.Name.LocalName.Equals("NAME", StringComparison.OrdinalIgnoreCase))
+                        ?.Value.Trim() ?? "";
+                return name.Equals(typeName, StringComparison.OrdinalIgnoreCase);
+            }).ToArray();
+        if (types.Length == 0)
+            throw new InvalidOperationException(
+                "New branch Voucher Type '" + typeName +
+                "' is not present in fresh linked-Tally Master readback. No voucher ALTER.");
+        var methods = types.Select(x => x.Elements().FirstOrDefault(c =>
+                c.Name.LocalName.Equals("NUMBERINGMETHOD", StringComparison.OrdinalIgnoreCase))
+                ?.Value.Trim() ?? "")
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (methods.Length != 1 ||
+            !methods[0].Equals("Manual", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Branch Voucher Type '" + typeName +
+                "' does not have one verified Manual numbering method in fresh " +
+                "linked Tally (found: " +
+                (methods.Length == 0 ? "unavailable" : string.Join(", ", methods)) +
+                "). Existing voucher numbers must not be renumbered. " +
+                "No voucher CREATE/ALTER was sent.");
     }
 
     private static string SingleVoucherTypeXml(string batchXml, string company, string name)
