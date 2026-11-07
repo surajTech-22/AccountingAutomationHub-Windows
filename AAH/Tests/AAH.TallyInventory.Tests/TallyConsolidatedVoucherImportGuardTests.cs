@@ -962,7 +962,11 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             !importerSource.Contains(
                 "PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
             !importerSource.Contains(
-                "alterResponse.Altered != 1", StringComparison.Ordinal))
+                "FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "StageSourceBindingChange(", StringComparison.Ordinal) ||
+            !importerSource.Contains(
+                "responseRejected", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "Separate voucher type bypasses master-first or existing bound ALTER safety gate.");
         Console.WriteLine("PASS: optional branch voucher-type toggle uses same source MASTERID, " +
