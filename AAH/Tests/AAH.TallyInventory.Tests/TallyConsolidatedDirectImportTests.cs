@@ -23,6 +23,8 @@ internal static class TallyConsolidatedDirectImportTests
         var coordinator = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs");
         var wrapper = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyConsolidatedPreImportAuthorityWrapper.cs");
         var importer = Read(root!, "AccountingAutomationHub.Infrastructure/Tally/TallyConsolidatedVoucherImportService.cs");
+        var branchMasterImporter = Read(root!, "AccountingAutomationHub.Infrastructure/Tally/TallyBranchConsolidationImportService.cs");
+        var branchMasterPlanner = Read(root!, "AccountingAutomationHub.Infrastructure/Tally/TallyBranchConsolidationMasterPlanner.cs");
         var dashboardViewModel = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/DashboardViewModel.cs");
         var consolidatedImportPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedTallyImportViewModel.cs");
         var consolidatedDashboardPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedBranchDashboardViewModel.cs");
@@ -54,6 +56,38 @@ internal static class TallyConsolidatedDirectImportTests
               export.Contains("SaveConsolidatedExistingDiagnosticsAsync(", StringComparison.Ordinal) &&
               export.Contains("tallyAcknowledgedAlterCount", StringComparison.Ordinal),
               "master-first, ALTER and diagnostic flow must remain intact");
+
+        // v632 intentionally creates MISSING Voucher Type masters ONLY.
+        // Existing CL019 vouchers (645) must never be CREATEd, ALTERed or
+        // DELETEd because the separate-type checkbox was selected. The
+        // read-only source preview also must not emit importable voucher XML.
+        var selectedTypes = export.IndexOf("if (separateTypes)", StringComparison.Ordinal);
+        var masterOnlyReturn = export.IndexOf(
+            "return new TallyConsolidatedVoucherImportResult(", selectedTypes,
+            StringComparison.Ordinal);
+        Check(selectedTypes >= 0 && masterOnlyReturn > selectedTypes &&
+              masterOnlyReturn < prepare && call > prepare &&
+              export.Contains("0, masters.CreatedVoucherTypes", StringComparison.Ordinal) &&
+              main.Contains("createOnlyVoucherTypes: separateVoucherTypes", StringComparison.Ordinal) &&
+              main.Contains("if (separateTypes) produceManualImportFiles = false;", StringComparison.Ordinal),
+            "selected branch types must be CREATION-ONLY with zero Voucher CREATE/ALTER or manual import file");
+        var mastersOnly = branchMasterImporter.IndexOf(
+            "public async Task<TallyBranchMasterImportResult> ImportMastersAsync(",
+            StringComparison.Ordinal);
+        var mastersEnd = branchMasterImporter.IndexOf(
+            "public async Task<TallyBranchMasterPlan> PreviewPlanAsync(",
+            mastersOnly, StringComparison.Ordinal);
+        Check(mastersOnly >= 0 && mastersEnd > mastersOnly,
+            "original master-only import entry point missing");
+        var masterStage = branchMasterImporter[mastersOnly..mastersEnd];
+        Check(masterStage.Contains("bool createOnlyVoucherTypes = false", StringComparison.Ordinal) &&
+              masterStage.Contains("plan.Groups.Any(x => x.Create)", StringComparison.Ordinal) &&
+              masterStage.Contains("createOnlyVoucherTypes ? Array.Empty<MasterRecord>()", StringComparison.Ordinal) &&
+              masterStage.Contains("RequireNoneNumberingForNewVoucherType(", StringComparison.Ordinal) &&
+              !masterStage.Contains("RequireManualVoucherTypeNumbering(", StringComparison.Ordinal) &&
+              branchMasterPlanner.Contains("<NUMBERINGMETHOD>None</NUMBERINGMETHOD>", StringComparison.Ordinal),
+            "new branch type Masters must use None, reuse existing types, and never write Groups/Cash or vouchers in creation-only mode");
+        Console.WriteLine("PASS: v632 branch Voucher Type creation-only keeps existing Tally type numbering, all 645 voucher entries and original DR/CR untouched.");
 
         Check(coordinator.Contains("bool forceFullBaseline = true)", StringComparison.Ordinal) &&
               coordinator.Contains("forceFullBaseline: forceLinkedSynchronization && forceFullBaseline", StringComparison.Ordinal) &&
