@@ -148,13 +148,11 @@ internal static class TallyConsolidatedDirectImportTests
         // verified CREATE/ALTER/reconciliation readback. Never fabricate a
         // company-wide sync checkpoint in the consolidated importer.
         Check(importer.Split("tallyRepository.ReplaceVoucherIndexRange(",
-                  StringSplitOptions.None).Length - 1 == 3 &&
+                  StringSplitOptions.None).Length - 1 == 2 &&
               importer.Split("tallyRepository.UpsertVoucherXmlAuthority(",
-                  StringSplitOptions.None).Length - 1 == 3 &&
-              importer.Contains("afterAlter.Index", StringComparison.Ordinal) &&
-              importer.Contains("afterAlter.Full", StringComparison.Ordinal) &&
-              importer.Contains("after.Index", StringComparison.Ordinal) &&
-              importer.Contains("after.Full", StringComparison.Ordinal) &&
+                  StringSplitOptions.None).Length - 1 == 2 &&
+              importer.Contains("afterIndex", StringComparison.Ordinal) &&
+              importer.Contains("afterFull", StringComparison.Ordinal) &&
               !importer.Contains("UpsertBankSyncState(", StringComparison.Ordinal) &&
               wrapper.Contains("RefreshVoucherAuthorityFromOriginalLiveLinkAsync(", StringComparison.Ordinal) &&
               wrapper.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
@@ -166,6 +164,19 @@ internal static class TallyConsolidatedDirectImportTests
               main.Contains("await authorityWrapper.VerifyAsync(visible, stillLinked, company)", StringComparison.Ordinal) &&
               coordinator.Contains("internal async Task RunWithLinkedTallyOperationGateAsync(", StringComparison.Ordinal),
             "consolidated native readback must use original live link, recover stale SQLite index/full XML and avoid timestamp-only full baseline.");
+        Check(importer.Contains("var writePlan = source.Where(", StringComparison.Ordinal) &&
+              importer.Contains("GroupBy(item => (item.Date.Year, item.Date.Month))", StringComparison.Ordinal) &&
+              importer.Contains("Take(batchSize)", StringComparison.Ordinal) &&
+              importer.Contains("NextAdaptiveVoucherBatchSize(batchSize, watch.ElapsedMilliseconds)", StringComparison.Ordinal) &&
+              importer.Contains("TallyExcelParityXmlWriter.BeginErp9DataImport(", StringComparison.Ordinal) &&
+              importer.Contains("foreach (var record in records)", StringComparison.Ordinal) &&
+              importer.Contains("responseRejected", StringComparison.Ordinal) &&
+              importer.Contains("FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal) &&
+              importer.Contains("stopAfterReadFailure", StringComparison.Ordinal) &&
+              importer.Contains("knownOriginalMasterIds", StringComparison.Ordinal) &&
+              !importer.Contains("Voucher-ALTER-", StringComparison.Ordinal),
+            "v635 must prepare adaptive CREATE/ALTER envelopes, verify once after a failed or successful batch, reconcile per source without per-voucher POST.");
+        Console.WriteLine("PASS: v635 adaptive consolidated CREATE/ALTER/IGNORE, one envelope and one readback per bounded batch.");
         Console.WriteLine(
             "PASS: consolidated native readback reuses Live Tally Link and the individual full Voucher parser, with no mandatory fresh baseline.");
 
