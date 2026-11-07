@@ -139,6 +139,56 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         Console.WriteLine(
             "PASS: v635 shared adaptive voucher batch sizing is bounded 10-400 and reacts to Tally response time.");
 
+        // v636 regression reproduces the 645-voucher CL019 monthly
+        // distribution. Individual-style writes MUST continue across month
+        // boundaries and increase with each fast response. Only READBACK
+        // should be split by calendar month.
+        var monthlyReadback = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("MonthBoundedVoucherReadbackRanges",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "v636 month-bounded readback helper missing.");
+        IReadOnlyList<(DateTime From, DateTime To)> ReadbackFor(DateTime[] dates) =>
+            (IReadOnlyList<(DateTime From, DateTime To)>)monthlyReadback.Invoke(
+                null, new object[] { dates })!;
+        var v636MonthlyCounts = new[] { 9, 37, 51, 46, 40, 54, 60, 73, 66, 110, 60, 39 };
+        var v636Dates = v636MonthlyCounts
+            .SelectMany((count, index) => Enumerable.Repeat(
+                new DateTime(index < 9 ? 2025 : 2026, (index + 3) % 12 + 1, 10),
+                count)).ToArray();
+        var v636Sizes = new List<int>();
+        var v636Next = 80;
+        var v636Offset = 0;
+        while (v636Offset < v636Dates.Length)
+        {
+            var take = Math.Min(v636Next, v636Dates.Length - v636Offset);
+            v636Sizes.Add(take);
+            var slice = ReadbackFor(v636Dates.Skip(v636Offset).Take(take).ToArray());
+            if (slice.Count == 0 || slice.Any(range =>
+                range.From.Year != range.To.Year ||
+                range.From.Month != range.To.Month ||
+                range.From > range.To))
+                throw new InvalidOperationException(
+                    "v636 readback escaped Tally calendar-month bounds.");
+            if (v636Sizes.Count == 1 &&
+                (slice.Count != 3 ||
+                 slice[0].From.Month != 4 ||
+                 slice[1].From.Month != 5 ||
+                 slice[2].From.Month != 6))
+                throw new InvalidOperationException(
+                    "v636 80-voucher WRITE was still incorrectly restricted to April.");
+            v636Offset += take;
+            v636Next = BatchAfter(v636Next, 1500);
+        }
+        if (!v636Sizes.SequenceEqual(new[] { 80, 108, 146, 198, 113 }) ||
+            v636Sizes.Sum() != 645 || v636Next > 400)
+            throw new InvalidOperationException(
+                "v636 fast 645-voucher adaptive WRITE queue was reset at month boundaries.");
+        Console.WriteLine(
+            "PASS: v636 CL019 645 monthly vouchers write as 80/108/146/198/113 " +
+            "on fast Tally replies, while each native readback remains month bounded.");
+
         // v633 type-only voucher transition: only a verified original voucher
         // whose FULL native DR/CR, date, party, reference and GST fields are
         // unchanged may be moved into its branch subtype. Changes to source
