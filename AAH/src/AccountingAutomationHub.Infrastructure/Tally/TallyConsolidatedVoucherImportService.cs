@@ -1475,12 +1475,11 @@ public sealed class TallyConsolidatedVoucherImportService(
         var fullByMasterId = before.FullVouchers.ToDictionary(
             item => item.MasterId.Trim(), IgnoreCase);
         var claimedNewMasterIds = new HashSet<string>(IgnoreCase);
-        var batchSize = Math.Min(80, Math.Max(10, writePlan.Length));
+        var batchSize = Math.Min(160, Math.Max(10, writePlan.Length));
 
-        // Match the individual exporter: ONE continuous chronological write
-        // queue. Batch boundaries follow Tally's measured POST time, NOT the
-        // calendar. The READBACK alone remains month-bounded to avoid a
-        // huge full-FY native export (same normal Fix CL017 protection).
+        // Keep the individual exporter's continuous adaptive chronological
+        // CREATE/ALTER write queue, independent of months. Read back only the
+        // submitted batch's native MASTERIDs, never a calendar/month/FY scan.
         var items = writePlan.OrderBy(item => item.Date).ToArray();
         var batchEvidence = new List<string>();
         for (var offset = 0; offset < items.Length;)
@@ -1489,8 +1488,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                 var targetBatchSize = batchSize;
                 var batch = items.Skip(offset).Take(batchSize).ToArray();
                 offset += batch.Length;
-                var readbackRanges = MonthBoundedVoucherReadbackRanges(
-                    batch.Select(item => item.Date).ToArray());
+                var readbackFrom = batch.Min(item => item.Date.Date);
+                var readbackTo = batch.Max(item => item.Date.Date);
+                var highestKnownMasterId = indexByMasterId.Keys
+                    .Select(id => long.TryParse(id, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out var value) ? value : 0L)
+                    .DefaultIfEmpty(0L).Max();
                 var records = new List<(ExpectedVoucher Expected, bool Alter,
                     string MasterId, string Guid, XElement Payload)>();
 
@@ -1651,86 +1654,46 @@ public sealed class TallyConsolidatedVoucherImportService(
                         try { tallyAcknowledgedAlter?.Invoke(); } catch { }
                 }
 
-                // The individual importer separates WRITE batching from
-                // month-bounded READBACK. A single cross-month XML POST can
-                // contain 80-400 vouchers, but its native verification is
-                // exported in one safe, calendar-month-bounded request per
-                // affected month. Always read even on partial rejection or
-                // transport failure. Do not repeat any voucher mutation.
+                // One native batch-only readback; the Tally collection filters
+                // exact bound ALTER MASTERIDs and new CREATE MASTERIDs above the
+                // synchronized pre-write watermark. Its date bounds constrain the
+                // requested batch, but it NEVER scans all vouchers in those dates.
+                // A partial/uncertain Tally result must remain pending, never resent.
                 IReadOnlyList<TallyVoucherIndexRecord> afterIndex;
                 IReadOnlyList<TallyVoucherXmlSnapshot> afterFull;
                 try
                 {
-                    // Collect AND verify every month before replacing any
-                    // persisted authority. A missing/incomplete later month
-                    // must leave the entire ambiguous batch pending.
-                    var slices = new List<(DateTime From, DateTime To,
-                        IReadOnlyList<TallyVoucherIndexRecord> Index,
-                        IReadOnlyList<TallyVoucherXmlSnapshot> Full)>();
-                    foreach (var (verifyFrom, verifyTo) in readbackRanges)
-                    {
-                        using var readbackLimit = cancellationToken.IsCancellationRequested
-                            ? new CancellationTokenSource(TimeSpan.FromSeconds(60)) : null;
-                        var native = await tally.ExportVoucherAuthorityFreshAsync(
-                            destination, verifyFrom, verifyTo,
-                            readbackLimit?.Token ?? cancellationToken).ConfigureAwait(false);
-                        var nativeIds = native.Full.Select(item => item.MasterId.Trim())
-                            .ToHashSet(IgnoreCase);
-                        var returnedIds = native.Index.Select(item => item.MasterId.Trim())
-                            .ToHashSet(IgnoreCase);
-                        var oldIds = indexByMasterId.Values.Where(item =>
-                                item.VoucherDate?.Date >= verifyFrom &&
-                                item.VoucherDate?.Date <= verifyTo)
-                            .Select(item => item.MasterId.Trim());
-                        if (returnedIds.Count != native.Index.Count ||
-                            nativeIds.Count != native.Full.Count ||
-                            !returnedIds.SetEquals(nativeIds) ||
-                            oldIds.Any(id => !returnedIds.Contains(id)))
-                            throw new InvalidOperationException(
-                                "Adaptive Tally readback " +
-                                verifyFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) +
-                                ".." + verifyTo.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) +
-                                " returned incomplete or mismatched index/native " +
-                                "MASTERIDs. All affected sources remain pending; no retry.");
-                        slices.Add((verifyFrom, verifyTo, native.Index, native.Full));
-                    }
-                    afterIndex = slices.SelectMany(slice => slice.Index).ToArray();
-                    afterFull = slices.SelectMany(slice => slice.Full).ToArray();
-                    // Reject cross-month duplicate identities as uncertain;
-                    // Tally's individual MASTERID cannot identify two vouchers.
-                    if (afterIndex.GroupBy(item => item.MasterId.Trim(), IgnoreCase)
-                            .Any(group => group.Count() != 1) ||
-                        afterFull.GroupBy(item => item.MasterId.Trim(), IgnoreCase)
-                            .Any(group => group.Count() != 1))
-                        throw new InvalidOperationException(
-                            "Adaptive readback returned duplicate MASTERID across months. " +
-                            "The full batch stays pending; no retry.");
+                    using var readbackLimit = cancellationToken.IsCancellationRequested
+                        ? new CancellationTokenSource(TimeSpan.FromSeconds(60)) : null;
+                    var native = await tally.ExportVoucherAuthorityForImportBatchAsync(
+                        destination,
+                        records.Where(item => item.Alter).Select(item => item.MasterId).ToArray(),
+                        highestKnownMasterId,
+                        readbackFrom, readbackTo,
+                        readbackLimit?.Token ?? cancellationToken).ConfigureAwait(false);
+                    afterIndex = native.Index;
+                    afterFull = native.Full;
 
-                    // The original individual export stores native index and
-                    // complete XML per-month. Do it ONLY after all readbacks
-                    // passed, never replace a whole multi-month span with one
-                    // month's partial results.
-                    foreach (var slice in slices)
-                    {
-                        tallyRepository.ReplaceVoucherIndexRange(
-                            link.CompanyKey, financialYear,
-                            slice.From, slice.To, slice.Index);
-                        tallyRepository.UpsertVoucherXmlAuthority(
-                            link.CompanyKey, financialYear, slice.Full);
-                        var affectedIds = indexByMasterId.Values.Where(item =>
-                                item.VoucherDate?.Date >= slice.From &&
-                                item.VoucherDate?.Date <= slice.To)
-                            .Select(item => item.MasterId.Trim()).ToArray();
-                        foreach (var id in affectedIds)
-                        {
-                            indexByMasterId.Remove(id);
-                            fullByMasterId.Remove(id);
-                        }
-                        foreach (var item in slice.Index)
-                            indexByMasterId[item.MasterId.Trim()] = item;
-                        foreach (var item in slice.Full)
-                            fullByMasterId[item.MasterId.Trim()] = item;
-                    }
+                    // Tally returns aggregate counts only. If it reported more
+                    // CREATEs than the batch-only readback found, there is no
+                    // reliable identity evidence: leave the entire batch pending.
+                    if (response is not null && response.Created >
+                        afterIndex.Count(item => !knownOriginalMasterIds.Contains(item.MasterId)))
+                        throw new InvalidOperationException(
+                            "Batch-only native readback did not identify every CREATE " +
+                            "reported by Tally. No automatic resend is authorized.");
+
+                    // Partial filtered results cannot replace a date/month range.
+                    // Use the existing AAH delta upsert for ONLY confirmed live IDs,
+                    // retaining unrelated and older cached FY voucher identities.
+                    tallyRepository.UpsertVoucherIndexRecords(
+                        link.CompanyKey, financialYear, afterIndex);
+                    tallyRepository.UpsertVoucherXmlAuthority(
+                        link.CompanyKey, financialYear, afterFull);
+                    foreach (var item in afterIndex)
+                        indexByMasterId[item.MasterId.Trim()] = item;
+                    foreach (var item in afterFull)
+                        fullByMasterId[item.MasterId.Trim()] = item;
                 }
                 catch (Exception readbackFailure)
                 {
@@ -1879,7 +1842,10 @@ public sealed class TallyConsolidatedVoucherImportService(
                 // The original individual-client adaptive policy scales down
                 // on slow Tally responses, up on quick ones. Uncertain transport
                 // always decreases the next bounded batch and never retries.
-                batchSize = sendFailure is null
+                var batchAccepted = sendFailure is null && response is not null &&
+                    response.Errors == 0 && response.Exceptions == 0 &&
+                    string.IsNullOrWhiteSpace(response.LineError);
+                batchSize = batchAccepted
                     ? TallyAccountingVoucherExportService
                         .NextAdaptiveVoucherBatchSize(batchSize, watch.ElapsedMilliseconds)
                     : Math.Max(10, batchSize / 2);
@@ -1889,14 +1855,14 @@ public sealed class TallyConsolidatedVoucherImportService(
                     ", target=" + targetBatchSize.ToString(CultureInfo.InvariantCulture) +
                     ", requestMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) +
                     ", nextTarget=" + batchSize.ToString(CultureInfo.InvariantCulture) +
-                    ", monthsRead=" + readbackRanges.Count.ToString(CultureInfo.InvariantCulture));
+                    ", nativeReadback=BatchMasterIdsOnly");
                 if (cancellationToken.IsCancellationRequested)
                     break;
         }
         return new TallyConsolidatedVoucherImportResult(imported, createdMasters,
-            "Consolidated used the original individual Tally adaptive batch sizing " +
-            "(80 initially, maximum 400), continuous cross-month XML " +
-            "write queue, safe month-bounded native readbacks. Verified CREATE " +
+            "Consolidated used the shared individual adaptive Tally batch sizing " +
+            "(160 initially, maximum 400), continuous cross-month XML " +
+            "writes and batch-MASTERID-only native readbacks. Verified CREATE " +
             (imported - altered).ToString(CultureInfo.InvariantCulture) +
             ", verified bound ALTER " + altered.ToString(CultureInfo.InvariantCulture) +
             ", exact live IGNORE " + skipped.Count.ToString(CultureInfo.InvariantCulture) +
