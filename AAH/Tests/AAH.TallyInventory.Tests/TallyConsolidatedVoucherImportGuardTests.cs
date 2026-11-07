@@ -988,9 +988,10 @@ internal static class TallyConsolidatedVoucherImportGuardTests
         if (!importerSource.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) ||
             !importerSource.Contains("StageSourceBindingChange(", StringComparison.Ordinal) ||
             !importerSource.Contains("BuildBoundConsolidatedVoucherAlterXml(", StringComparison.Ordinal) ||
-            !importerSource.Contains("ConfirmedAlter", StringComparison.OrdinalIgnoreCase) ||
+            !importerSource.Contains("ConfirmSourceBindingVersion(", StringComparison.Ordinal) ||
             !importerSource.Contains("AcceptedAwaitingVerification", StringComparison.Ordinal) ||
-            !importerSource.Contains("alterResponse.Altered != 1", StringComparison.Ordinal))
+            !importerSource.Contains("record.Alter", StringComparison.Ordinal) ||
+            !importerSource.Contains("FullVoucherMatches(expected, item, afterFull)", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "Consolidated changed ledger bypasses normal previous-version/accepted/live verification.");
         Console.WriteLine("PASS: consolidated changed ledger uses original bound MASTERID ALTER " +
