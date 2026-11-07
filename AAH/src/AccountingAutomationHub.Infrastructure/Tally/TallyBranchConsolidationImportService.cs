@@ -561,8 +561,9 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         // by importing Tally's own generated MASTERID/GUID inside the object.
         // The MASTERID and GUID were verified in TWO fresh native exports
         // above and are verified again after the response. Adding those
-        // identity fields to the mutation made the 23:33 CL019 requests
-        // return Ignored=1 rather than a successful master ALTER.
+        // identity fields to the mutation differs from the documented
+        // old-name rename format. CL019 reported Ignored=1; preserve this
+        // diagnostic without assuming the missing request bytes prove cause.
         xml.AppendLine(new XElement("TALLYMESSAGE",
             new XElement("LEDGER",
                 new XAttribute("NAME", previousName),
