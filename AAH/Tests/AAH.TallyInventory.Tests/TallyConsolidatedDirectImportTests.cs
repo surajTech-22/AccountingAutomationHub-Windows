@@ -107,13 +107,18 @@ internal static class TallyConsolidatedDirectImportTests
               importer.Contains("after.Index", StringComparison.Ordinal) &&
               importer.Contains("after.Full", StringComparison.Ordinal) &&
               !importer.Contains("UpsertBankSyncState(", StringComparison.Ordinal) &&
-              wrapper.Contains("RequireFreshNormalBaseline(", StringComparison.Ordinal) &&
-              wrapper.Contains("current.LastFullSyncUtc <=", StringComparison.Ordinal) &&
-              main.Contains("TallyConsolidatedPreImportAuthorityWrapper.RequireFreshNormalBaseline(",
-                  StringComparison.Ordinal),
-            "consolidated readback must persist native individual index/full XML and refuse stale normal synchronization.");
+              wrapper.Contains("RefreshVoucherAuthorityFromOriginalLiveLinkAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("ExportVoucherAuthorityFreshAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("PersistVerifiedOriginalLiveVoucherAuthority(", StringComparison.Ordinal) &&
+              wrapper.Contains("RunWithLinkedTallyOperationGateAsync(", StringComparison.Ordinal) &&
+              wrapper.Contains("RequireSameVoucherIndex(", StringComparison.Ordinal) &&
+              wrapper.Contains("forceFullBaseline: false", StringComparison.Ordinal) &&
+              !wrapper.Contains("RequireFreshNormalBaseline(", StringComparison.Ordinal) &&
+              main.Contains("await authorityWrapper.VerifyAsync(visible, stillLinked, company)", StringComparison.Ordinal) &&
+              coordinator.Contains("internal async Task RunWithLinkedTallyOperationGateAsync(", StringComparison.Ordinal),
+            "consolidated native readback must use original live link, recover stale SQLite index/full XML and avoid timestamp-only full baseline.");
         Console.WriteLine(
-            "PASS: consolidated native readback persists current Voucher data like individual Tally and detects swallowed stale-sync failures.");
+            "PASS: consolidated native readback reuses Live Tally Link and the individual full Voucher parser, with no mandatory fresh baseline.");
 
         // Opening Tally Import is a PAGE NAVIGATION, never an implicit full
         // branch XML regeneration. The Dashboard already owns its shared source
