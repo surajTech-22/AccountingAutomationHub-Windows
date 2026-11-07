@@ -345,7 +345,8 @@ public sealed class TallyConsolidatedVoucherImportService(
             linked, cancellationToken,
             vouchers.Select(v => Value(v, "VOUCHERTYPENAME"))
                 .Where(prepared.VoucherTypeBaseByDestination.ContainsKey)
-                .Distinct(IgnoreCase).ToArray())
+                .Distinct(IgnoreCase).ToArray(),
+            allowMissingChildTypesInMasterFirstManualXml: true)
             .ConfigureAwait(false);
         RequireExistingDefaultCashForBankVouchers(vouchers, masters, available);
 
@@ -2135,7 +2136,8 @@ public sealed class TallyConsolidatedVoucherImportService(
 
     private async Task<Dictionary<string, XElement>> ReadMasterAuthorityAsync(
         TallyCompanyInfo destination, CancellationToken token,
-        IReadOnlyCollection<string>? requiredBranchVoucherTypes = null)
+        IReadOnlyCollection<string>? requiredBranchVoucherTypes = null,
+        bool allowMissingChildTypesInMasterFirstManualXml = false)
     {
         // This is the ORIGINAL consolidated Master reader, not a second
         // voucher-type importer. Verify any selected branch voucher types
@@ -2144,10 +2146,22 @@ public sealed class TallyConsolidatedVoucherImportService(
         if (requiredBranchVoucherTypes is { Count: > 0 })
             tally.RequireFreshErp9MasterAuthorityForExplicitExport();
         var masterXml = await tally.ExportMastersAsync(destination, token).ConfigureAwait(false);
-        if (requiredBranchVoucherTypes is not null)
-        foreach (var name in requiredBranchVoucherTypes)
-            TallyBranchConsolidationImportService.RequireManualVoucherTypeNumbering(
-                masterXml, name);
+        if (requiredBranchVoucherTypes is { Count: > 0 })
+        {
+            var liveTypeNames = TallyConsolidatedXmlTextSafety.ParseDocument(
+                    masterXml, "live Voucher Type numbering before consolidated import")
+                .Descendants().Where(x => Is(x, "VOUCHERTYPE"))
+                .Select(MasterName).ToHashSet(IgnoreCase);
+            foreach (var name in requiredBranchVoucherTypes)
+            {
+                if (allowMissingChildTypesInMasterFirstManualXml &&
+                    !liveTypeNames.Contains(name))
+                    continue; // Missing manual MASTER is in the identity-free
+                              // staged Masters XML, not already in Tally.
+                TallyBranchConsolidationImportService.RequireManualVoucherTypeNumbering(
+                    masterXml, name);
+            }
+        }
         var stockXml = await tally.ExportStockMastersAsync(destination, token).ConfigureAwait(false);
         var result = new Dictionary<string, XElement>(IgnoreCase);
         foreach (var raw in new[] { masterXml, stockXml })
