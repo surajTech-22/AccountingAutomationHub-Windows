@@ -1468,7 +1468,6 @@ public sealed class TallyConsolidatedVoucherImportService(
         var batchCount = 0;
         var transportErrors = 0;
         var readbackErrors = 0;
-        var stopAfterReadFailure = false;
         var knownOriginalMasterIds = before.Vouchers
             .Select(item => item.MasterId).ToHashSet(IgnoreCase);
         var indexByMasterId = before.Vouchers.ToDictionary(
@@ -1733,11 +1732,16 @@ public sealed class TallyConsolidatedVoucherImportService(
                             fullByMasterId[item.MasterId.Trim()] = item;
                     }
                 }
-                catch (Exception)
+                catch (Exception readbackFailure)
                 {
                     readbackErrors++;
                     held += records.Count;
-                    stopAfterReadFailure = true;
+                    batchEvidence.Add(
+                        "Batch " + batchCount.ToString(CultureInfo.InvariantCulture) +
+                        ": actual=" + records.Count.ToString(CultureInfo.InvariantCulture) +
+                        ", target=" + targetBatchSize.ToString(CultureInfo.InvariantCulture) +
+                        ", requestMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) +
+                        ", nativeReadbackFailed=" + readbackFailure.Message);
                     // A partial native readback, even after an apparent
                     // IMPORTRESULT success, is not enough to mark or retry
                     // any source in this batch. Preserve durable pending.
@@ -1887,10 +1891,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                     ", nextTarget=" + batchSize.ToString(CultureInfo.InvariantCulture) +
                     ", monthsRead=" + readbackRanges.Count.ToString(CultureInfo.InvariantCulture));
                 if (cancellationToken.IsCancellationRequested)
-                {
-                    stopAfterReadFailure = true;
                     break;
-                }
         }
         return new TallyConsolidatedVoucherImportResult(imported, createdMasters,
             "Consolidated used the original individual Tally adaptive batch sizing " +
