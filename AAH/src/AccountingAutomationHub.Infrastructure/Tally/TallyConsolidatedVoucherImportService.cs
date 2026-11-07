@@ -681,6 +681,13 @@ public sealed class TallyConsolidatedVoucherImportService(
                     "No voucher was resent, changed or deleted.");
             var confirmed = matches[0];
             _ = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
+            // Reuse the individual importer's fresh native readback persistence.
+            // This is a fully verified date slice, not a new Tally read or a
+            // fabricated company-wide ALTERID checkpoint.
+            tallyRepository.ReplaceVoucherIndexRange(
+                link.CompanyKey, financialYear, expected.Date, expected.Date, after.Index);
+            tallyRepository.UpsertVoucherXmlAuthority(
+                link.CompanyKey, financialYear, after.Full);
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 expected.SourceAnchor, expected.SourceAnchor,
@@ -1413,6 +1420,14 @@ public sealed class TallyConsolidatedVoucherImportService(
 
                 var confirmedAlter = verifiedAlter[0];
                 _ = RequireVerifiedLiveConsolidatedVersion(confirmedAlter, afterAlter.Full);
+                // Identical to the individual Tally post-write readback path:
+                // persist BOTH native index and complete signed Voucher XML.
+                // The normal coordinator alone advances the FY ALTERID marker
+                // after its own synchronized baseline/delta succeeds.
+                tallyRepository.ReplaceVoucherIndexRange(
+                    link.CompanyKey, financialYear, expected.Date, expected.Date, afterAlter.Index);
+                tallyRepository.UpsertVoucherXmlAuthority(
+                    link.CompanyKey, financialYear, afterAlter.Full);
                 tallyRepository.ConfirmSourceBindingVersion(
                     link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                     expected.SourceAnchor, expected.SourceAnchor,
@@ -1532,6 +1547,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                     "AcceptedAwaitingVerification state prevents resend.");
             var confirmed = verified[0];
             var confirmedVersion = RequireVerifiedLiveConsolidatedVersion(confirmed, after.Full);
+            // CREATE readback uses the same original index/full-XML cache as
+            // individual import. Do not advance the normal global marker here.
+            tallyRepository.ReplaceVoucherIndexRange(
+                link.CompanyKey, financialYear, expected.Date, expected.Date, after.Index);
+            tallyRepository.UpsertVoucherXmlAuthority(
+                link.CompanyKey, financialYear, after.Full);
 
             tallyRepository.ConfirmSourceBindingVersion(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
