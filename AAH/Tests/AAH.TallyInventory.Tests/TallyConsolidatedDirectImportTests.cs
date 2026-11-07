@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using AccountingAutomationHub.Infrastructure.Tally;
 
 internal static class TallyConsolidatedDirectImportTests
 {
@@ -28,6 +29,44 @@ internal static class TallyConsolidatedDirectImportTests
         var dashboardViewModel = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/DashboardViewModel.cs");
         var consolidatedImportPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedTallyImportViewModel.cs");
         var consolidatedDashboardPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedBranchDashboardViewModel.cs");
+
+        // v638: one original Tally Import panel on Dashboard and the dedicated
+        // import tab; all five module selections and both optional controls
+        // must survive Client/FY navigation and a full desktop restart.
+        var preferences = typeof(ConsolidatedTallyImportSelectionPreferences);
+        Check(ConsolidatedTallyImportSelectionPreferences.EncodeModules(
+                  true, false, true, false, true) == "10101" &&
+              ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(
+                  "10101", out var mixed) &&
+              mixed.Bank && !mixed.Purchase && mixed.Sales &&
+              !mixed.Cash && mixed.Journal &&
+              ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(
+                  "00000", out var uncheckedModules) &&
+              !uncheckedModules.Bank && !uncheckedModules.Purchase &&
+              !uncheckedModules.Sales && !uncheckedModules.Cash &&
+              !uncheckedModules.Journal &&
+              !ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(
+                  "", out _) &&
+              !ConsolidatedTallyImportSelectionPreferences.TryDecodeModules(
+                  "10x01", out _),
+            "consolidated module selections must preserve explicit none and reject invalid persisted values.");
+        Check(ConsolidatedTallyImportSelectionPreferences.ModulesKey("2025-26") ==
+                  "TallyExport.2025-26.ConsolidatedImport.Modules" &&
+              ConsolidatedTallyImportSelectionPreferences.ModulesKey("2025-26") !=
+                  ConsolidatedTallyImportSelectionPreferences.ModulesKey("2026-27") &&
+              ConsolidatedTallyImportSelectionPreferences.SeparateVoucherTypesKey("2025-26") !=
+                  ConsolidatedTallyImportSelectionPreferences.SeparateCashLedgersKey("2025-26") &&
+              dashboardViewModel.Contains("RestoreConsolidatedManualModuleSelection(", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("ConsolidatedTallyImportSelectionPreferences.ModulesKey(", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("QueueTallyPreferenceWrite(", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("_consolidatedManualSelectionClientId", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("_clientPreferences.Get(parentClientId,", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("_clientPreferences.Set(ParentClientId, settingKey,", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("ConsolidatedTallyImportSelectionPreferences.SeparateVoucherTypesKey(", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("ConsolidatedTallyImportSelectionPreferences.SeparateCashLedgersKey(", StringComparison.Ordinal) &&
+              main.Contains("_clientPreferenceRepository);", StringComparison.Ordinal),
+            "both original consolidated import surfaces must save/load only current Client/FY selections.");
+        Console.WriteLine("PASS: v638 consolidated modules + voucher/cash toggles persist per Client/FY, including all-unchecked; normal Tally preferences untouched.");
 
         Check(!dashboard.Contains("Content=\"Generate Consolidated XML\"", StringComparison.Ordinal) &&
               !dashboard.Contains("Command=\"{Binding PrepareConsolidatedXmlCommand}\"", StringComparison.Ordinal) &&
