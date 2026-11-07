@@ -71,10 +71,10 @@ internal static class TallyConsolidatedDirectImportTests
               importer.Contains("bool voucherTypeOnlyAlter = false", StringComparison.Ordinal) &&
               importer.Contains("MatchesTypeOnlyPreparedVoucher(", StringComparison.Ordinal) &&
               importer.Contains("PreviousConsolidatedVersionMatches(", StringComparison.Ordinal) &&
-              importer.Contains("var createCandidates = voucherTypeOnlyAlter", StringComparison.Ordinal) &&
-              importer.Contains("if (voucherTypeOnlyAlter) continue; // No ledger/master creation.", StringComparison.Ordinal) &&
-              importer.Contains("voucherTypeOnlyAlter &&", StringComparison.Ordinal) &&
-              importer.Contains("allowExistingNoneNumbering: voucherTypeOnlyAlter", StringComparison.Ordinal),
+              importer.Contains("var createCandidates = typeOnlyOperation", StringComparison.Ordinal) &&
+              importer.Contains("if (typeOnlyOperation) continue; // No ledger/master creation.", StringComparison.Ordinal) &&
+              importer.Contains("var restoreBranchTypes = !voucherTypeOnlyAlter", StringComparison.Ordinal) &&
+              importer.Contains("allowExistingNoneNumbering: typeOnlyOperation", StringComparison.Ordinal),
             "selected branch types must use original MASTERID bound type-only ALTER with zero voucher or master CREATE");
         var mastersOnly = branchMasterImporter.IndexOf(
             "public async Task<TallyBranchMasterImportResult> ImportMastersAsync(",
@@ -92,7 +92,15 @@ internal static class TallyConsolidatedDirectImportTests
               !masterStage.Contains("RequireManualVoucherTypeNumbering(", StringComparison.Ordinal) &&
               branchMasterPlanner.Contains("<NUMBERINGMETHOD>None</NUMBERINGMETHOD>", StringComparison.Ordinal),
             "new branch type Masters must use None, reuse existing types, and never write Groups/Cash or vouchers in creation-only mode");
-        Console.WriteLine("PASS: v633 creates only missing None-numbered Voucher Type masters then ALTERs previously bound vouchers without other CREATE or DR/CR edits.");
+        Check(importer.Contains("CanReconcileAcceptedTypeOnlyAlter(", StringComparison.Ordinal) &&
+              importer.Contains("PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(", StringComparison.Ordinal) &&
+              importer.Contains("IsVerifiedBranchSubtypeParent(", StringComparison.Ordinal) &&
+              importer.Contains("var restoreBranchTypes = !voucherTypeOnlyAlter", StringComparison.Ordinal) &&
+              importer.Contains("var typeOnlyOperation = voucherTypeOnlyAlter || restoreBranchTypes;", StringComparison.Ordinal) &&
+              !importer.Contains("Tally changed the voucher number while altering its type", StringComparison.Ordinal) &&
+              importer.Contains("reconciledTypeOnly++", StringComparison.Ordinal),
+            "v634 must allow Tally-owned number changes, reconcile accepted ALTER and restore parent type with zero voucher CREATE");
+        Console.WriteLine("PASS: v634: master-first type-only ALTER in both directions, Tally-owned numbering, accepted readback recovery, no voucher CREATE.");
 
         Check(coordinator.Contains("bool forceFullBaseline = true)", StringComparison.Ordinal) &&
               coordinator.Contains("forceFullBaseline: forceLinkedSynchronization && forceFullBaseline", StringComparison.Ordinal) &&

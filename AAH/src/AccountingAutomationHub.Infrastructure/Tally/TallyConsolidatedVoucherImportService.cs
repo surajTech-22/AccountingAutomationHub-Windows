@@ -872,7 +872,28 @@ public sealed class TallyConsolidatedVoucherImportService(
             link.ClientId, financialYear, link.CompanyKey,
             before.Vouchers.Select(v => v.MasterId));
 
+        // An unticked separate-types option must also return VERIFIED
+        // branch-type vouchers to their original parent type. Detect an
+        // existing child type on the exact bound MASTERID; never infer source
+        // ownership from the Tally-controlled VOUCHERNUMBER.
+        var restoreBranchTypes = !voucherTypeOnlyAlter && source.Any(planned =>
+        {
+            var binding = tallyRepository.GetSourceBindingVersionState(
+                link.ClientId, financialYear, link.CompanyKey,
+                SourceEntityType, planned.SourceAnchor);
+            if (binding is null ||
+                !(binding.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+                  binding.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase)) ||
+                binding.MasterId.Length == 0)
+                return false;
+            return before.Vouchers.Any(live =>
+                IgnoreCase.Equals(live.MasterId, binding.MasterId) &&
+                live.VoucherType.StartsWith(planned.Type + " - ",
+                    StringComparison.OrdinalIgnoreCase));
+        });
+        var typeOnlyOperation = voucherTypeOnlyAlter || restoreBranchTypes;
         var skipped = new HashSet<string>(IgnoreCase);
+        var reconciledTypeOnly = 0;
         // A previously verified consolidated source never re-enters CREATE.
         // Its destination MASTERID is already owned by the SAME normal
         // TallySourceBindings authority used for ordinary vouchers. Changes
@@ -911,9 +932,49 @@ public sealed class TallyConsolidatedVoucherImportService(
             var state = tallyRepository.GetSourceBindingVersionState(
                 link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
                 planned.SourceAnchor);
-            // Only previously VERIFIED bound source vouchers are eligible for
-            // a type-only ALTER. Never CREATE an unbound or pending row.
-            if (voucherTypeOnlyAlter &&
+            // Tally may already have accepted the ALTER and auto-renumbered
+            // its voucher before v633 stopped verifying it. Reconcile that
+            // immutable PENDING desired version against the exact live
+            // MASTERID, GUID and full signed DRCR; never resend the ALTER.
+            if (typeOnlyOperation && state is not null &&
+                state.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase))
+            {
+                var matches = before.Vouchers.Where(candidate =>
+                    IgnoreCase.Equals(candidate.MasterId, state.MasterId)).ToArray();
+                if (matches.Length != 1 ||
+                    !CanReconcileAcceptedTypeOnlyAlter(
+                        planned.Xml, planned.ContentHash, planned.DesiredVersion,
+                        state, matches[0], before.FullVouchers) ||
+                    !FullVoucherMatches(planned, matches[0], before.FullVouchers))
+                {
+                    preflightBoundConflicts.Add(
+                        planned.SourceAnchor +
+                        " | Tally-accepted pending ALTER lacks exact current " +
+                        "MASTERID, pending version, GUID or full DRCR proof. No resend.");
+                    continue;
+                }
+                var confirmed = matches[0];
+                _ = RequireVerifiedLiveConsolidatedVersion(confirmed, before.FullVouchers);
+                tallyRepository.ConfirmSourceBindingVersion(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    planned.SourceAnchor, planned.SourceAnchor,
+                    confirmed.MasterId, confirmed.Guid, planned.ContentHash,
+                    planned.DesiredVersion,
+                    long.Parse(confirmed.AlterId, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture),
+                    "Tally-accepted type-only ALTER read back without a new POST; " +
+                    "new Tally voucher number and ALTERID allowed.");
+                tallyRepository.RecordImportFingerprints(
+                    link.ClientId, financialYear, link.CompanyKey, SourceEntityType,
+                    new[] { (planned.SourceAnchor, planned.ContentHash) },
+                    "Imported", "Read-only recovery of accepted type-only ALTER.");
+                reconciledTypeOnly++;
+                skipped.Add(planned.SourceAnchor);
+                continue;
+            }
+            // Only VERIFIED bound vouchers are eligible for type-only ALTER.
+            // Unbound, deleted or other pending rows never CREATE here.
+            if (typeOnlyOperation &&
                 (state is null ||
                  !state.State.Equals("Verified", StringComparison.OrdinalIgnoreCase)))
             {
@@ -934,7 +995,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                         " lost its unique destination MASTERID " + state.MasterId +
                         ". Existing restore/rebind safety is required; no CREATE.");
                 var liveBound = bound[0];
-                if (voucherTypeOnlyAlter)
+                if (typeOnlyOperation)
                 {
                     // A branch type may replace only its verified original
                     // base type. All other source edits must use normal import.
@@ -943,13 +1004,20 @@ public sealed class TallyConsolidatedVoucherImportService(
                         skipped.Add(planned.SourceAnchor);
                         continue;
                     }
-                    if (!prepared.VoucherTypeBaseByDestination.TryGetValue(
-                            planned.Type, out var originalType) ||
-                        !IgnoreCase.Equals(originalType, liveBound.VoucherType) ||
+                    var originalType = restoreBranchTypes
+                        ? liveBound.VoucherType
+                        : prepared.VoucherTypeBaseByDestination.TryGetValue(
+                            planned.Type, out var mappedType) ? mappedType : "";
+                    var correctType = restoreBranchTypes
+                        ? liveBound.VoucherType.StartsWith(
+                            planned.Type + " - ", StringComparison.OrdinalIgnoreCase)
+                        : IgnoreCase.Equals(originalType, liveBound.VoucherType);
+                    if (!correctType ||
                         !MatchesTypeOnlyPreparedVoucher(
                             planned.Xml, liveBound, before.FullVouchers) ||
-                        !PreviousConsolidatedVersionMatches(
-                            liveBound, before.FullVouchers, state))
+                        !PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+                            liveBound, before.FullVouchers, state,
+                            planned.Xml, originalType))
                     {
                         preflightBoundConflicts.Add(
                             planned.SourceAnchor + " | MASTERID " + liveBound.MasterId +
@@ -1250,7 +1318,7 @@ public sealed class TallyConsolidatedVoucherImportService(
             vouchers.Select(v => Value(v, "VOUCHERTYPENAME"))
                 .Where(prepared.VoucherTypeBaseByDestination.ContainsKey)
                 .Distinct(IgnoreCase).ToArray(),
-            allowExistingNoneNumbering: voucherTypeOnlyAlter).ConfigureAwait(false);
+            allowExistingNoneNumbering: typeOnlyOperation).ConfigureAwait(false);
         // Same rule as the ORIGINAL normal Bank/Contra exporter: the built-in
         // Cash ledger remains under Cash-in-Hand when optional branch cash
         // ledgers are not selected. Cash Entry module may be empty while 21+
@@ -1278,6 +1346,19 @@ public sealed class TallyConsolidatedVoucherImportService(
                     "' has not been created and verified under '" + baseType +
                     "' in the linked destination company. No voucher CREATE/ALTER sent.");
         }
+        // Reverse change is allowed only for a verified live child master
+        // whose PARENT is exactly this voucher's original type. A suffix
+        // by itself is never enough authority to move a voucher.
+        if (restoreBranchTypes)
+        foreach (var planned in source.Where(v => alterTargets.ContainsKey(v.SourceAnchor)))
+        {
+            var childName = alterTargets[planned.SourceAnchor].VoucherType;
+            if (!IsVerifiedBranchSubtypeParent(available, childName, planned.Type))
+                throw new InvalidOperationException(
+                    "Cannot restore original type for " + planned.SourceAnchor +
+                    ": live Tally child '" + childName +
+                    "' has no verified original parent/master ID. No POST.");
+        }
         // The compulsory branch groups and optional voucher types must have
         // passed the existing separate master-first UI. Never recreate them here.
         foreach (var element in masters.Where(x => PriorMasters.Contains(x.Name.LocalName)))
@@ -1299,7 +1380,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 RequireCompatible(known, element);
                 continue;
             }
-            if (voucherTypeOnlyAlter) continue; // No ledger/master creation.
+            if (typeOnlyOperation) continue; // No ledger/master creation.
 
             // One object per CREATE, never a bulk-master replay. If Tally
             // accepts a request and the readback fails, halt without retry.
@@ -1318,7 +1399,7 @@ public sealed class TallyConsolidatedVoucherImportService(
 
         // All masters must be live and parent-verified before the first voucher.
         foreach (var master in masters.Where(x =>
-                     !voucherTypeOnlyAlter || PriorMasters.Contains(x.Name.LocalName)))
+                     !typeOnlyOperation || PriorMasters.Contains(x.Name.LocalName)))
             RequireMaster(available, master);
         // The normal synchronized index remains authoritative while Masters
         // were unchanged. If this import CREATED a Master, its own ALTERID
@@ -1349,7 +1430,7 @@ public sealed class TallyConsolidatedVoucherImportService(
                 "No CREATE or ALTER is safe; refresh the normal authority.");
         // Only truly unbound original sources can be CREATE candidates.
         // An altered source already owns a durable destination MASTERID.
-        var createCandidates = voucherTypeOnlyAlter
+        var createCandidates = typeOnlyOperation
             ? Array.Empty<ExpectedVoucher>()
             : source.Where(v =>
                 !skipped.Contains(v.SourceAnchor) &&
@@ -1377,7 +1458,7 @@ public sealed class TallyConsolidatedVoucherImportService(
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (skipped.Contains(expected.SourceAnchor) ||
-                (voucherTypeOnlyAlter &&
+                (typeOnlyOperation &&
                  !alterTargets.ContainsKey(expected.SourceAnchor)))
                 continue;
 
@@ -1398,8 +1479,13 @@ public sealed class TallyConsolidatedVoucherImportService(
                     !previous.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
                     !IgnoreCase.Equals(previous.MasterId, originalLive.MasterId) ||
                     sameId is null ||
-                    !PreviousConsolidatedVersionMatches(sameId, liveJustBefore.Full, previous) ||
-                    (voucherTypeOnlyAlter &&
+                    !(typeOnlyOperation
+                        ? PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+                            sameId, liveJustBefore.Full, previous, expected.Xml,
+                            originalLive.VoucherType)
+                        : PreviousConsolidatedVersionMatches(
+                            sameId, liveJustBefore.Full, previous)) ||
+                    (typeOnlyOperation &&
                      (!IgnoreCase.Equals(sameId.VoucherType, originalLive.VoucherType) ||
                       !MatchesTypeOnlyPreparedVoucher(
                           expected.Xml, sameId, liveJustBefore.Full))))
@@ -1488,12 +1574,11 @@ public sealed class TallyConsolidatedVoucherImportService(
                         "AcceptedAwaitingVerification prevents a second ALTER/CREATE.");
 
                 var confirmedAlter = verifiedAlter[0];
-                if (voucherTypeOnlyAlter &&
-                    !IgnoreCase.Equals(confirmedAlter.VoucherNumber, sameId.VoucherNumber))
-                    throw new InvalidOperationException(
-                        "Tally changed the voucher number while altering its type " +
-                        "at MASTERID " + sameId.MasterId +
-                        ". AcceptedAwaitingVerification prevents another ALTER.");
+                // Changing Voucher Type legitimately renumbers in Tally,
+                // even when returning to the original base series. The
+                // exact MASTERID + desired type + full native signed DRCR
+                // already passed above. Save the actual Tally-owned number
+                // and latest ALTERID; never require old number equality.
                 _ = RequireVerifiedLiveConsolidatedVersion(confirmedAlter, afterAlter.Full);
                 // Identical to the individual Tally post-write readback path:
                 // persist BOTH native index and complete signed Voucher XML.
@@ -1651,12 +1736,15 @@ public sealed class TallyConsolidatedVoucherImportService(
             catch { /* diagnostic-only callback */ }
         }
         return new TallyConsolidatedVoucherImportResult(imported, createdMasters,
-            voucherTypeOnlyAlter
+            typeOnlyOperation
                 ? "Voucher-type-only: verified bound MASTERID ALTER " +
                   altered.ToString(CultureInfo.InvariantCulture) +
                   ", unchanged/unbound vouchers left untouched " +
                   skipped.Count.ToString(CultureInfo.InvariantCulture) +
-                  ". No Voucher CREATE/DELETE or ledger/GST/DRCR recalculation."
+                  ", previously accepted ALTERs recovered read-only " +
+                  reconciledTypeOnly.ToString(CultureInfo.InvariantCulture) +
+                  ". Tally controls voucher numbering both ways. " +
+                  "No Voucher CREATE/DELETE or ledger/GST/DRCR recalculation."
                 : "Consolidated import used existing AAH source bindings: verified CREATE " +
             (imported - altered).ToString(CultureInfo.InvariantCulture) +
             ", verified PREVIOUS->DESIRED ALTER " + altered.ToString(CultureInfo.InvariantCulture) +
@@ -2134,6 +2222,91 @@ public sealed class TallyConsolidatedVoucherImportService(
         return planned.Postings.Any(expected =>
             actual.Any(p => IgnoreCase.Equals(p.Name, expected.Name) &&
                             p.Amount == expected.Amount));
+    }
+
+
+    // Only the verified PREVIOUS same-MASTERID accounting version may be
+    // altered. Tally's automatic voucher renumbering can advance ALTERID
+    // on other vouchers in the type's series; in this TYPE-ONLY route, an
+    // increased ALTERID is acceptable only after proving the FULL native
+    // content still equals the SAVED previous version. Normal accounting
+    // ALTER keeps its existing strict exact-ALTERID barrier.
+    internal static bool PreviousConsolidatedTypeOnlyWithTallyRenumberMatches(
+        TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        TallySourceBindingVersionState saved, XElement preparedVoucher,
+        string previousType)
+    {
+        if (saved is null ||
+            !saved.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
+            !IgnoreCase.Equals(saved.MasterId, live.MasterId) ||
+            (saved.Guid.Length > 0 && !IgnoreCase.Equals(saved.Guid, live.Guid)) ||
+            !IgnoreCase.Equals(previousType, live.VoucherType) ||
+            !MatchesTypeOnlyPreparedVoucher(preparedVoucher, live, fullAuthority))
+            return false;
+        if (PreviousConsolidatedVersionMatches(live, fullAuthority, saved))
+            return true;
+        // NEVER waive stale ALTERID for a different date/type, a changed
+        // reference/party/narration, ledger/GST field or signed DR/CR.
+        // A native Tally ALTERID must monotonically advance and the saved
+        // old source fingerprint must remain provably identical.
+        if (saved.LastVerifiedAlterId <= 0 ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var liveAlter) ||
+            liveAlter <= saved.LastVerifiedAlterId ||
+            live.VoucherDate is not DateTime originalDate ||
+            saved.VerifiedContentHash.Length == 0)
+            return false;
+        var readback = ReadVerifiedLiveConsolidatedVersion(live, fullAuthority);
+        return readback is not null &&
+            (IgnoreCase.Equals(saved.VerifiedContentHash, readback.Value.Hash) ||
+             SavedConsolidatedVersionProvesOwnFingerprint(
+                 saved.VerifiedVersion, saved.VerifiedContentHash,
+                 originalDate, live.VoucherType, live.Reference,
+                 readback.Value.Version));
+    }
+
+    // A previous v633 ALTER was accepted at Tally MASTERID 5, but was left
+    // pending because Tally renumbered it. Only the immutable same-source
+    // pending version plus exact live MASTERID, GUID, desired type and FULL
+    // signed original postings may complete it. Never POST the ALTER again.
+    internal static bool CanReconcileAcceptedTypeOnlyAlter(
+        XElement desired, string desiredHash, string desiredVersion,
+        TallySourceBindingVersionState pending, TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority)
+    {
+        if (pending is null ||
+            !pending.State.Equals("AcceptedAwaitingVerification", StringComparison.OrdinalIgnoreCase) ||
+            pending.MasterId.Length == 0 ||
+            !IgnoreCase.Equals(pending.MasterId, live.MasterId) ||
+            (pending.Guid.Length > 0 && !IgnoreCase.Equals(pending.Guid, live.Guid)) ||
+            pending.VerifiedContentHash.Length == 0 ||
+            pending.LastVerifiedAlterId <= 0 ||
+            !IgnoreCase.Equals(pending.PendingContentHash, desiredHash) ||
+            !string.Equals(pending.PendingVersion, desiredVersion, StringComparison.Ordinal) ||
+            !IgnoreCase.Equals(Value(desired, "VOUCHERTYPENAME"), live.VoucherType) ||
+            !long.TryParse(live.AlterId, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var actualAlterId) ||
+            actualAlterId <= pending.LastVerifiedAlterId)
+            return false;
+        return MatchesTypeOnlyPreparedVoucher(desired, live, fullAuthority) &&
+               ReadVerifiedLiveConsolidatedVersion(live, fullAuthority) is not null;
+    }
+
+    // A reverse transition must prove that the live former child is a
+    // genuine Tally VOUCHERTYPE master under the original base type.
+    internal static bool IsVerifiedBranchSubtypeParent(
+        IReadOnlyDictionary<string, XElement> liveMasters,
+        string childType, string parentType)
+    {
+        if (string.IsNullOrWhiteSpace(parentType) ||
+            !childType.StartsWith(parentType + " - ", StringComparison.OrdinalIgnoreCase) ||
+            !liveMasters.TryGetValue(MasterKey("VOUCHERTYPE", childType), out var child) ||
+            !IgnoreCase.Equals(Value(child, "PARENT"), parentType) ||
+            !long.TryParse(Value(child, "MASTERID"), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var masterId) || masterId <= 0)
+            return false;
+        return true;
     }
 
     // Type-only means no change to an original posting, date, reference,
