@@ -23,6 +23,9 @@ internal static class TallyConsolidatedDirectImportTests
         var coordinator = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyLiveConnectionCoordinator.cs");
         var wrapper = Read(root!, "AccountingAutomationHub.Desktop/Services/TallyConsolidatedPreImportAuthorityWrapper.cs");
         var importer = Read(root!, "AccountingAutomationHub.Infrastructure/Tally/TallyConsolidatedVoucherImportService.cs");
+        var dashboardViewModel = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/DashboardViewModel.cs");
+        var consolidatedImportPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedTallyImportViewModel.cs");
+        var consolidatedDashboardPage = Read(root!, "AccountingAutomationHub.Desktop/ViewModels/ConsolidatedBranchDashboardViewModel.cs");
 
         Check(!dashboard.Contains("Content=\"Generate Consolidated XML\"", StringComparison.Ordinal) &&
               !dashboard.Contains("Command=\"{Binding PrepareConsolidatedXmlCommand}\"", StringComparison.Ordinal) &&
@@ -89,6 +92,42 @@ internal static class TallyConsolidatedDirectImportTests
               importer.Contains("ReadSynchronizedVoucherAuthorityAsync(", StringComparison.Ordinal) &&
               importer.Contains("ReconcileMissingVoucherBindingAuthority(", StringComparison.Ordinal),
               "original bound MASTERID/ALTERID/DRCR/duplicate gates must remain intact");
+
+        // Opening Tally Import is a PAGE NAVIGATION, never an implicit full
+        // branch XML regeneration. The Dashboard already owns its shared source
+        // preview, so initiating it again when selecting Tally Import blocked
+        // the WPF dispatcher and could show Windows "Not Responding".
+        var importPrepareCase = main.IndexOf("case ConsolidatedTallyImportViewModel:", StringComparison.Ordinal);
+        var nextPrepareCase = main.IndexOf("case PurchaseImportViewModel:", importPrepareCase, StringComparison.Ordinal);
+        Check(importPrepareCase > 0 && nextPrepareCase > importPrepareCase &&
+              !main[importPrepareCase..nextPrepareCase].Contains(
+                  "QueueConsolidatedSourcePreviewWarm(client)", StringComparison.Ordinal) &&
+              main.Contains("case ConsolidatedBranchDashboardViewModel:" +
+                  Environment.NewLine + "                if (client is not null)" +
+                  Environment.NewLine + "                    QueueConsolidatedSourcePreviewWarm(client);",
+                  StringComparison.Ordinal) &&
+              main.Contains("CurrentPage is ConsolidatedBranchDashboardViewModel &&", StringComparison.Ordinal),
+              "Tally Import navigation must not run the expensive branch XML preview or start it on a link heartbeat");
+        Check(consolidatedImportPage.Contains("_ = Task.Run(() =>", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("dispatcher.BeginInvoke(", StringComparison.Ordinal) &&
+              consolidatedImportPage.Contains("generation == Volatile.Read(ref _progressRefreshGeneration)", StringComparison.Ordinal) &&
+              consolidatedDashboardPage.Contains("_ = Task.Run(() =>", StringComparison.Ordinal) &&
+              consolidatedDashboardPage.Contains("dispatcher.BeginInvoke(", StringComparison.Ordinal),
+              "consolidated progress SQLite read must never block WPF page construction or navigation");
+        Check(dashboardViewModel.Contains("_consolidatedManualModuleSelections", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("(true, true, true, true, true)", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("ApplyManualModuleSelection(", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("RememberConsolidatedManualModuleSelection();", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("_normalManualModuleSelectionBeforeConsolidated", StringComparison.Ordinal) &&
+              dashboardViewModel.Contains("if (_isConsolidatedTallyScope)", StringComparison.Ordinal),
+              "Bank, Purchase, Sales, Cash and Journal must default selected in consolidated Tally Import, preserve deliberate changes and restore normal export choices");
+        Check(dashboard.Contains("IsChecked=\"{Binding IncludeBankStatement, Mode=TwoWay}\"", StringComparison.Ordinal) &&
+              dashboard.Contains("IsChecked=\"{Binding IncludePurchases, Mode=TwoWay}\"", StringComparison.Ordinal) &&
+              dashboard.Contains("IsChecked=\"{Binding IncludeSales, Mode=TwoWay}\"", StringComparison.Ordinal) &&
+              dashboard.Contains("IsChecked=\"{Binding IncludeCashEntries, Mode=TwoWay}\"", StringComparison.Ordinal) &&
+              dashboard.Contains("IsChecked=\"{Binding IncludeJournals, Mode=TwoWay}\"", StringComparison.Ordinal),
+              "original five Tally Import module checkboxes must keep their existing two-way bindings");
+        Console.WriteLine("PASS: consolidated Tally Import opens without implicit source XML regeneration or blocking SQLite read; all five import modules default checked, normal import choices preserved.");
         Console.WriteLine("PASS: direct consolidated Tally import reuses original FY coordinator and voucher ALTER/CREATE; separate Generate button removed.");
     }
 }
