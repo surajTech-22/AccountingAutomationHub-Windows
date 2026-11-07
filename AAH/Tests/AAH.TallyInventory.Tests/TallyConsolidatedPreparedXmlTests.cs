@@ -242,19 +242,58 @@ internal static class TallyConsolidatedPreparedXmlTests
         var separateCashMasters = XDocument.Parse(separateCash.MastersXml);
         var separateCashVouchers = XDocument.Parse(separateCash.VouchersXml);
         Check(separateCashMasters.Descendants("LEDGER").Any(x =>
-                  (string?)x.Element("NAME") == "Cash (KA)" &&
+                  (string?)x.Element("NAME") == "Cash - Karnataka" &&
                   (string?)x.Element("PARENT") == "Cash-in-Hand") &&
               separateCashMasters.Descendants("LEDGER").Any(x =>
-                  (string?)x.Element("NAME") == "Cash (TN)" &&
+                  (string?)x.Element("NAME") == "Cash - Tamil Nadu" &&
                   (string?)x.Element("PARENT") == "Cash-in-Hand") &&
               separateCashVouchers.Descendants("LEDGERNAME")
-                  .Count(x => x.Value == "Cash (KA)") == 1 &&
+                  .Count(x => x.Value == "Cash - Karnataka") == 1 &&
               separateCashVouchers.Descendants("LEDGERNAME")
-                  .Count(x => x.Value == "Cash (TN)") == 1 &&
+                  .Count(x => x.Value == "Cash - Tamil Nadu") == 1 &&
               !separateCashVouchers.Descendants("LEDGERNAME")
                   .Any(x => x.Value == "Cash"),
             "Explicit optional separate-cash flow did not reuse the original " +
             "verified branch Cash master plan.");
+
+        // v640: human-readable branch cash names must not CREATE beside a
+        // hash-named real Tally ledger. Reuse exactly its prior MASTERID and
+        // perform one separately verified master ALTER before voucher import.
+        var oldCashName = "Cash (KA)";
+        var oldLedger = new MasterRecord
+        {
+            Type = "Ledger", Name = oldCashName, Parent = "Cash-in-Hand",
+            TallyMasterId = "455"
+        };
+        var renamePlan = TallyBranchConsolidationMasterPlanner.Build(
+            "Consolidated Books", "test-company", "2025-26",
+            [Karnataka, TamilNadu], [oldLedger], true, separateCashLedgers: true);
+        var rename = renamePlan.CashLedgers.Single(x => x.BranchId == "KA");
+        Check(!rename.Create &&
+              rename.Name == "Cash - Karnataka" &&
+              rename.PreviousName == oldCashName &&
+              rename.PreviousMasterId == "455" &&
+              XDocument.Parse(renamePlan.CashLedgerXml)
+                  .Descendants("LEDGER").Count() == 1 &&
+              XDocument.Parse(renamePlan.CashLedgerXml)
+                  .Descendants("LEDGER").Single().Element("NAME")?.Value ==
+                      "Cash - Tamil Nadu",
+            "old branch Cash ledger was recreated rather than migrated by MASTERID");
+        var ambiguousCash = new MasterRecord
+        {
+            Type = "Ledger", Name = "Cash - Karnataka", Parent = "Cash-in-Hand",
+            TallyMasterId = "456"
+        };
+        Reject(() => TallyBranchConsolidationMasterPlanner.Build(
+            "Consolidated Books", "test-company", "2025-26",
+            [Karnataka, TamilNadu], [oldLedger, ambiguousCash], true,
+            separateCashLedgers: true),
+            "two distinct Tally Cash MASTERIDs were silently merged under a friendly name");
+        Check(separateCash.BranchCashLedgerNamesById.TryGetValue("KA", out var nameKa) &&
+              nameKa == "Cash - Karnataka" &&
+              separateCash.BranchCashLedgerNamesById.TryGetValue("TN", out var nameTn) &&
+              nameTn == "Cash - Tamil Nadu",
+            "verified prepared source lost cash name and branch ID ownership map.");
 
         // Live Mitansh consolidated failure: all 67 actual source
         // ledgers carried placeholder <TAXCLASSIFICATIONNAME> Not Applicable.
@@ -902,9 +941,9 @@ internal static class TallyConsolidatedPreparedXmlTests
         var cashResult = TallyConsolidatedPreparedXmlBuilder.Build(withCash, [cashSource, b]);
         var cashMaster = XDocument.Parse(cashResult.MastersXml);
         Check(cashMaster.Descendants("LEDGER").Count(x =>
-                (string?)x.Element("NAME") == "Cash (KA)") == 1 &&
+                (string?)x.Element("NAME") == "Cash - Karnataka") == 1 &&
               XDocument.Parse(cashResult.VouchersXml).Descendants("LEDGERNAME")
-                  .Any(x => x.Value == "Cash (KA)"),
+                  .Any(x => x.Value == "Cash - Karnataka"),
               "Optional branch Cash was duplicated instead of reusing planned master.");
 
         var outgoing = Prepared(Karnataka,
