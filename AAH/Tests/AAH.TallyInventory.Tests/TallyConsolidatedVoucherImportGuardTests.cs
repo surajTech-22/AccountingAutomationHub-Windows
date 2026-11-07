@@ -140,9 +140,15 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 live.MasterId, "", live.VoucherType, live.VoucherDate!.Value,
                 originalForSubtype) { AlterId = live.AlterId }
         };
+        var typeOnlyCheck = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("MatchesTypeOnlyPreparedVoucher",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "Type-only verified native voucher guard missing.");
         bool SafeTypeOnly(System.Xml.Linq.XElement voucher) =>
-            TallyConsolidatedVoucherImportService.MatchesTypeOnlyPreparedVoucher(
-                voucher, live, nativeSubtypeSource);
+            (bool)typeOnlyCheck.Invoke(null,
+                new object[] { voucher, live, nativeSubtypeSource })!;
         if (!SafeTypeOnly(targetSubtype))
             throw new InvalidOperationException(
                 "A strictly identical original live voucher must allow type-only ALTER.");
