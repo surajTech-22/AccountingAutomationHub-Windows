@@ -1839,33 +1839,56 @@ public sealed class TallyConsolidatedVoucherImportService(
         var full = fullAuthority.Where(item =>
             IgnoreCase.Equals(item.MasterId, live.MasterId)).ToArray();
         if (full.Length != 1) return null;
+        var savedFull = full[0];
+        // The original normal Tally Link synchronization supplies BOTH the
+        // normalized Voucher index and this full native XML. Index scalars
+        // were parsed by TallyHttpService.ParseVoucherElements, which supports
+        // ERP9/Prime PARTYNAME, BASICNARRATION and other field aliases.
+        // Do not read a SECOND incompatible set of scalar fields here.
+        if ((savedFull.AlterId.Trim().Length > 0 &&
+             !IgnoreCase.Equals(savedFull.AlterId.Trim(), live.AlterId.Trim())) ||
+            (savedFull.Guid.Trim().Length > 0 &&
+             live.Guid.Trim().Length > 0 &&
+             !IgnoreCase.Equals(savedFull.Guid.Trim(), live.Guid.Trim())))
+            return null;
         var voucher = TallyConsolidatedXmlTextSafety.ParseDocument(
-            full[0].OriginalXml, "verified full destination voucher readback")
+            savedFull.OriginalXml, "verified full destination voucher readback")
             .Root?.DescendantsAndSelf().FirstOrDefault(x => Is(x, "VOUCHER"));
         if (voucher is null) return null;
+        var xmlMasterId = Value(voucher, "MASTERID");
+        var xmlAlterId = Value(voucher, "ALTERID");
+        var xmlGuid = Value(voucher, "GUID");
+        if ((xmlMasterId.Length > 0 &&
+             !IgnoreCase.Equals(xmlMasterId, live.MasterId)) ||
+            (xmlAlterId.Length > 0 &&
+             !IgnoreCase.Equals(xmlAlterId, live.AlterId)) ||
+            (xmlGuid.Length > 0 && live.Guid.Length > 0 &&
+             !IgnoreCase.Equals(xmlGuid, live.Guid)))
+            return null;
+        // Exactly the same native Ledger parser as individual Tally export;
+        // the complete signed postings must agree with the synchronized
+        // index before this is accepted as the old previous version.
         var postings = ReadNormalTallySignedPostings(voucher);
         if (postings.Count == 0 || live.LedgerPostings.Count != postings.Count ||
             !SamePostings(postings, live.LedgerPostings.Select(p =>
                 (p.LedgerName, p.SignedAmount)).ToArray()))
             return null;
-        var party = Value(voucher, "PARTYLEDGERNAME");
-        var reference = Value(voucher, "REFERENCE");
-        var type = Value(voucher, "VOUCHERTYPENAME");
-        if (!IgnoreCase.Equals(type, live.VoucherType) ||
-            !IgnoreCase.Equals(reference, live.Reference) ||
-            !IgnoreCase.Equals(party, live.PartyLedger))
-            return null;
+        // One normalized source of truth from the ORIGINAL individual Tally
+        // Link reader. Raw full XML may expose PARTYNAME rather than
+        // PARTYLEDGERNAME or BASICNARRATION rather than NARRATION; direct
+        // Value(...) checks falsely rejected unchanged bound Payment vouchers.
         var signed = string.Join("|", postings
             .OrderBy(entry => entry.Name, IgnoreCase).ThenBy(entry => entry.Amount)
             .Select(entry => entry.Name + ":" +
                 entry.Amount.ToString("0.00", CultureInfo.InvariantCulture)));
         var hash = TallyVoucherFingerprint.BuildContentHash(
-            date.Date, type, reference, party,
+            date.Date, live.VoucherType, live.Reference, live.PartyLedger,
             postings.Where(entry => entry.Amount < 0).Sum(entry => Math.Abs(entry.Amount)),
-            Value(voucher, "NARRATION") + "|" + signed);
+            live.Narration + "|" + signed);
         return (hash, "CONSOLIDATED|" +
             date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
-            "|" + type + "|" + reference + "|" + signed + "|" + hash);
+            "|" + live.VoucherType + "|" + live.Reference +
+            "|" + signed + "|" + hash);
     }
 
     private static (string Hash, string Version) RequireVerifiedLiveConsolidatedVersion(
