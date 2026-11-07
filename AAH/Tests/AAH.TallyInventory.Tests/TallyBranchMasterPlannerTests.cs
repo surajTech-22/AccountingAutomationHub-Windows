@@ -13,6 +13,15 @@ internal static class TallyBranchMasterPlannerTests
     ];
     private static readonly string[] VoucherTypes =
         ["Sales", "Purchase", "Payment", "Receipt", "Journal", "Debit Note", "Credit Note", "Contra"];
+    // A real linked Tally master list supplies positive MASTERIDs for the
+    // ORIGINAL base types before AAH can create any branch child. The old
+    // synthetic test used only a name catalog and was not representative.
+    private static readonly MasterRecord[] LiveBaseTypes =
+        VoucherTypes.Select((name, i) => new MasterRecord
+        {
+            Type = "Voucher Type", Name = name, Parent = name,
+            TallyMasterId = (700 + i).ToString()
+        }).ToArray();
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyCollection<string>> UsedTypes =
         new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase)
@@ -72,7 +81,7 @@ internal static class TallyBranchMasterPlannerTests
         Console.WriteLine("PASS: compulsory branch groups independent of optional voucher types or cash ledgers.");
 
         var optional = Build(voucherTypes: true, separateCash: true,
-            eligible: VoucherTypes, used: UsedTypes);
+            existing: LiveBaseTypes, eligible: VoucherTypes, used: UsedTypes);
         TallyBranchConsolidationMasterPlanner.ValidatePlanXml(optional);
         Check(optional.Groups.Count == required.Groups.Count &&
               optional.CashLedgers.Count == 2 &&
@@ -87,7 +96,8 @@ internal static class TallyBranchMasterPlannerTests
               XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE").Count() == 6 &&
               XDocument.Parse(optional.VoucherTypeXml).Descendants("VOUCHERTYPE")
                   .All(v => optional.VoucherTypes.Any(t => t.Name == (string?)v.Attribute("NAME") &&
-                      t.BaseType == (string?)v.Element("PARENT"))),
+                      t.BaseType == (string?)v.Element("PARENT") &&
+                      (string?)v.Element("NUMBERINGMETHOD") == "Manual")),
               "only used optional subtype masters under their real parents in the unchanged XML layout");
         Console.WriteLine("PASS: optional used-only branch voucher types and original parent hierarchy.");
         var xmlUsage = TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(
@@ -115,7 +125,8 @@ internal static class TallyBranchMasterPlannerTests
               "matched interbank source Payment/Receipt must not create unused subtypes");
         Reject(() => Build(voucherTypes: true, eligible: VoucherTypes),
             "full Tally catalog without source usage must not multiply voucher types");
-        Reject(() => Build(voucherTypes: true, eligible: VoucherTypes,
+        Reject(() => Build(voucherTypes: true, existing: LiveBaseTypes,
+            eligible: VoucherTypes,
             used: new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase)
             {
                 ["KA-1"] = ["Sales"],
