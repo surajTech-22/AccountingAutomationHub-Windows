@@ -90,7 +90,7 @@ internal static class TallyConsolidatedPreparedXmlTests
               requestedTypes.Length == 2 &&
               requestedTypes.All(t =>
                   t.Element("PARENT")?.Value == "Sales" &&
-                  t.Element("NUMBERINGMETHOD")?.Value == "Manual") &&
+                  t.Element("NUMBERINGMETHOD")?.Value == "None") &&
               requestedTypes.Select(t => t.Element("NAME")?.Value).ToHashSet(
                   StringComparer.OrdinalIgnoreCase)
                 .SetEquals(new[] { "Sales - Karnataka", "Sales - Tamil Nadu" }),
@@ -112,10 +112,10 @@ internal static class TallyConsolidatedPreparedXmlTests
         var liveSubtypeXml = "<AAHMASTEREXPORT><COLLECTION>" +
             "<VOUCHERTYPE><NAME>Sales - Karnataka</NAME>" +
             "<PARENT>Sales</PARENT><MASTERID>901</MASTERID>" +
-            "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD></VOUCHERTYPE>" +
+            "<NUMBERINGMETHOD>None</NUMBERINGMETHOD></VOUCHERTYPE>" +
             "</COLLECTION></AAHMASTEREXPORT>";
         var numberingCheck = typeof(TallyBranchConsolidationImportService).GetMethod(
-            "RequireManualVoucherTypeNumbering",
+            "RequireNoneNumberingForNewVoucherType",
             System.Reflection.BindingFlags.NonPublic |
             System.Reflection.BindingFlags.Static)
             ?? throw new InvalidOperationException(
@@ -134,14 +134,14 @@ internal static class TallyConsolidatedPreparedXmlTests
         }
         VerifyNumbering(numberingCheck, liveSubtypeXml, "Sales - Karnataka");
         Reject(() => VerifyNumbering(
-                numberingCheck, liveSubtypeXml.Replace("Manual", "Automatic"),
+                numberingCheck, liveSubtypeXml.Replace("None", "Automatic"),
                 "Sales - Karnataka"),
-            "automatic numbering must block subtype ALTER to prevent silent renumbering");
+            "a new type cannot silently use Automatic numbering when None was requested");
         Reject(() => VerifyNumbering(
                 numberingCheck, liveSubtypeXml.Replace(
-                    "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>", ""),
+                    "<NUMBERINGMETHOD>None</NUMBERINGMETHOD>", ""),
                 "Sales - Karnataka"),
-            "missing live numbering proof must block subtype ALTER");
+            "missing native numbering field means None/default for a newly created type");
         var unboundBaseType = new MasterRecord
         {
             Type = "Voucher Type", Name = "Sales",
@@ -156,7 +156,7 @@ internal static class TallyConsolidatedPreparedXmlTests
             "an unverified Tally base voucher type must not permit branch master creation");
         Console.WriteLine(
             "PASS: existing consolidated planner creates only used branch subtypes " +
-            "under verified parent Tally MASTERIDs, with safe Manual numbering, " +
+            "under verified parent Tally MASTERIDs, with requested None numbering, " +
             "original amounts and native readback validation.");
 
         var result = TallyConsolidatedPreparedXmlBuilder.Build(Plan(), [a, b]);
