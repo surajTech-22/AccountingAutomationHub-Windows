@@ -114,16 +114,31 @@ internal static class TallyConsolidatedPreparedXmlTests
             "<PARENT>Sales</PARENT><MASTERID>901</MASTERID>" +
             "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD></VOUCHERTYPE>" +
             "</COLLECTION></AAHMASTEREXPORT>";
-        TallyBranchConsolidationImportService.RequireManualVoucherTypeNumbering(
-            liveSubtypeXml, "Sales - Karnataka");
-        Reject(() => TallyBranchConsolidationImportService
-            .RequireManualVoucherTypeNumbering(
-                liveSubtypeXml.Replace("Manual", "Automatic"),
+        var numberingCheck = typeof(TallyBranchConsolidationImportService).GetMethod(
+            "RequireManualVoucherTypeNumbering",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "Original live Voucher Type numbering verifier is unavailable");
+        static void VerifyNumbering(
+            System.Reflection.MethodInfo verifier, string xml, string type)
+        {
+            try { verifier.Invoke(null, new object[] { xml, type }); }
+            catch (System.Reflection.TargetInvocationException exception)
+                when (exception.InnerException is InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    "Live voucher numbering verification rejected: " +
+                    exception.InnerException.Message);
+            }
+        }
+        VerifyNumbering(numberingCheck, liveSubtypeXml, "Sales - Karnataka");
+        Reject(() => VerifyNumbering(
+                numberingCheck, liveSubtypeXml.Replace("Manual", "Automatic"),
                 "Sales - Karnataka"),
             "automatic numbering must block subtype ALTER to prevent silent renumbering");
-        Reject(() => TallyBranchConsolidationImportService
-            .RequireManualVoucherTypeNumbering(
-                liveSubtypeXml.Replace(
+        Reject(() => VerifyNumbering(
+                numberingCheck, liveSubtypeXml.Replace(
                     "<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>", ""),
                 "Sales - Karnataka"),
             "missing live numbering proof must block subtype ALTER");
