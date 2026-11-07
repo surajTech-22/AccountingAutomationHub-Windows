@@ -688,14 +688,18 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             MasterId = "35", AlterId = "675", Guid = "book-35",
             VoucherType = "Purchase", VoucherNumber = "19"
         };
-        if (!TallyConsolidatedVoucherImportService.IsVerifiedUnchangedBoundSource(
-                typedBinding, currentOriginal, "original-purchase-hash", "Purchase") ||
-            TallyConsolidatedVoucherImportService.IsVerifiedUnchangedBoundSource(
-                typedBinding, currentOriginal, "original-purchase-hash",
-                "Purchase - Karnataka") ||
-            TallyConsolidatedVoucherImportService.IsVerifiedUnchangedBoundSource(
-                typedBinding, currentOriginal, "new-branch-type-hash",
-                "Purchase - Karnataka"))
+        var unchangedTypeGate =
+            typeof(TallyConsolidatedVoucherImportService).GetMethod(
+                "IsVerifiedUnchangedBoundSource",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("Previous-version type skip guard is missing");
+        bool CanSkipType(string hash, string selectedType) =>
+            (bool)unchangedTypeGate.Invoke(
+                null, new object[] { typedBinding, currentOriginal, hash, selectedType })!;
+        if (!CanSkipType("original-purchase-hash", "Purchase") ||
+            CanSkipType("original-purchase-hash", "Purchase - Karnataka") ||
+            CanSkipType("new-branch-type-hash", "Purchase - Karnataka"))
             throw new InvalidOperationException(
                 "Type-only changes incorrectly SKIP a bound Tally voucher instead " +
                 "of entering the saved previous-version same-MASTERID ALTER gate.");
