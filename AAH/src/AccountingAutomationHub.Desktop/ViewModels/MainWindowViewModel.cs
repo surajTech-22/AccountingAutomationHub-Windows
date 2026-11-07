@@ -2462,9 +2462,15 @@ public sealed class MainWindowViewModel :
                     child => _branchXmlPreparationService.ComputeOfflineConsolidationSourceFingerprint(child));
                 usedTypes = TallyBranchConsolidationMasterPlanner.ReadUsedVoucherTypes(prepared);
             }
+            // For now, selecting branch voucher types is CREATE-MISSING-TYPE
+            // ONLY. Never create Groups/Cash or modify existing vouchers/type
+            // settings through this option. The original master planner still
+            // verifies the required branch Groups and linked Tally identity.
             var imported = await _consolidatedMasterImporter.ImportMastersAsync(
-                link, destination, identities, separateVoucherTypes, separateCashLedgers,
-                accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes);
+                link, destination, identities, separateVoucherTypes,
+                separateVoucherTypes ? false : separateCashLedgers,
+                accountingFinancialYear: financialYear, usedVoucherTypesByBranch: usedTypes,
+                createOnlyVoucherTypes: separateVoucherTypes);
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 parent, destination, "Consolidated branch master verification: " + imported.Status,
                 0, 0);
@@ -2489,6 +2495,10 @@ public sealed class MainWindowViewModel :
         long parentId, string financialYear, bool separateTypes, bool separateCash,
         bool produceManualImportFiles = true, bool displayOnlyWarm = false)
     {
+        // This update is branch VOUCHER TYPE MASTER creation only. The existing
+        // branch vouchers must remain unchanged. Do not emit any manually
+        // importable Voucher CREATE/ALTER XML while this option is selected.
+        if (separateTypes) produceManualImportFiles = false;
         if (displayOnlyWarm && produceManualImportFiles)
             throw new InvalidOperationException("Automatic preview must not generate importable XML files.");
         var current = _clientContext.CurrentClient;
@@ -3068,14 +3078,22 @@ public sealed class MainWindowViewModel :
     private async Task<TallyConsolidatedVoucherImportResult> ExportConsolidatedVouchersAsync(
         long parentId, string financialYear, bool separateTypes, bool separateCash)
     {
-        // Opting into branch-specific destination voucher types is a
-        // MASTER-FIRST transition. Reuse the existing master importer and
-        // its independent Tally MASTERID/parent readbacks BEFORE preparing
-        // the desired vouchers or issuing any bound ALTER. Already-created
-        // types are idempotently verified, not recreated.
+        // TEMPORARY CREATION-ONLY SCOPE requested for branch Voucher Types.
+        // Even if the user selects the existing "Export" button, it must
+        // only create absent Voucher Type MASTERS via the same existing
+        // linked-Tally master importer. No Voucher CREATE/ALTER/DELETE, no
+        // GST/DRCR/numbering changes, and no duplicate source bindings.
         if (separateTypes)
-            await ImportConsolidatedMastersAsync(
-                parentId, financialYear, separateTypes, separateCash);
+        {
+            var masters = await ImportConsolidatedMastersAsync(
+                parentId, financialYear, separateVoucherTypes: true,
+                separateCashLedgers: false);
+            return new TallyConsolidatedVoucherImportResult(
+                0, masters.CreatedVoucherTypes,
+                "Voucher Type master creation only. Existing branch types " +
+                "were reused unchanged; no existing or new voucher was posted. " +
+                masters.Status);
+        }
         var prepared = await GenerateConsolidatedPreparedXmlAsync(
             parentId, financialYear, separateTypes, separateCash,
             produceManualImportFiles: false);
