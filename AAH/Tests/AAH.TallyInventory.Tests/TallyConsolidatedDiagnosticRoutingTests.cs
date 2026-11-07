@@ -231,8 +231,8 @@ internal static class TallyConsolidatedDiagnosticRoutingTests
         Check(coordinator.Contains(
                   "Final consolidated voucher outcomes (after live Tally matching and readback):",
                   StringComparison.Ordinal) &&
-              coordinator.Contains("\\"Created: \\" + result.TallyCreated", StringComparison.Ordinal) &&
-              coordinator.Contains("\\"Altered: \\" + result.TallyAltered", StringComparison.Ordinal) &&
+              coordinator.Contains("\"Created: \" + result.TallyCreated", StringComparison.Ordinal) &&
+              coordinator.Contains("\"Altered: \" + result.TallyAltered", StringComparison.Ordinal) &&
               coordinator.Contains("Skipped (existing / unchanged): ", StringComparison.Ordinal) &&
               coordinator.Contains("(result.Selected - result.Imported)", StringComparison.Ordinal) &&
               coordinator.Contains("result.Imported == result.TallyCreated + result.TallyAltered", StringComparison.Ordinal) &&
