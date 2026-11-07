@@ -236,6 +236,10 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
         RequireSameSavedLink(client, link);
         var before = await existingTally.GetVoucherChangeMarkerAsync(
             company, cancellationToken);
+        if (before.CompanyName.Length > 0 &&
+            !before.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The native Tally refresh did not identify the linked destination company.");
         var current = existingRepository.GetBankSyncState(
             client.Id, client.FinancialYear, link.CompanyKey)
             ?? throw new InvalidOperationException(
@@ -268,6 +272,10 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             company, range.From, range.To, cancellationToken);
         var after = await existingTally.GetVoucherChangeMarkerAsync(
             company, cancellationToken);
+        if (after.CompanyName.Length > 0 &&
+            !after.CompanyName.Equals(company.Name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "The linked Tally destination changed during native voucher readback.");
         if (before.HasReliableAlterId && after.HasReliableAlterId &&
             (before.LastAlterId != after.LastAlterId ||
              !string.Equals(before.Token, after.Token, StringComparison.Ordinal)))
@@ -331,6 +339,9 @@ public sealed class TallyConsolidatedPreImportAuthorityWrapper(
             rows.Any(row => !fullById.TryGetValue(row.MasterId.Trim(), out var snapshots) ||
                 snapshots.Length != 1 ||
                 snapshots[0].OriginalXml.Trim().Length == 0 ||
+                (row.Guid.Trim().Length > 0 && snapshots[0].Guid.Trim().Length > 0 &&
+                 !string.Equals(snapshots[0].Guid.Trim(), row.Guid.Trim(),
+                     StringComparison.OrdinalIgnoreCase)) ||
                 !string.Equals(snapshots[0].AlterId.Trim(), row.AlterId.Trim(),
                     StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException(
