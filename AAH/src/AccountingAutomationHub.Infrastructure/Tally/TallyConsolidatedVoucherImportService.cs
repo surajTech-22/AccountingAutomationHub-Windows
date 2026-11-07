@@ -1810,6 +1810,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                         held++;
                     }
                 }
+                // Each subsequent batch may claim only vouchers that are
+                // NEW since the previous verified batch. An unverified earlier
+                // CREATE must never be misbound as a later source by a shared
+                // B2C reference and identical DR/CR.
+                knownOriginalMasterIds.UnionWith(
+                    afterIndex.Select(item => item.MasterId));
                 // The original individual-client adaptive policy scales down
                 // on slow Tally responses, up on quick ones. Uncertain transport
                 // always decreases the next bounded batch and never retries.
