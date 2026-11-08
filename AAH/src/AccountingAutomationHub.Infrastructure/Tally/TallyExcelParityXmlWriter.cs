@@ -11,11 +11,20 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 internal static class TallyExcelParityXmlWriter
 {
-    // The default is intentionally DUPIGNORE: ordinary branch/master CREATE
-    // must never overwrite an existing destination master by name. ONLY the
-    // separately verified legacy Cash ledger RENAME may opt into DUPMODIFY.
-    internal static void BeginAllMastersImport(
-        StringBuilder builder, string companyName, bool verifiedRenameExistingMaster = false)
+    // Preserve the ORIGINAL public/internal method name and exact signature.
+    // Other AAH modules and safety tests reuse this two-argument API.
+    internal static void BeginAllMastersImport(StringBuilder builder, string companyName) =>
+        BeginMastersImport(builder, companyName, verifiedRenameExistingMaster: false);
+
+    // Only the verified same-MASTERID legacy Cash ledger rename can use
+    // MODIFY rather than the ordinary DUPIGNORE. Never change all other
+    // master-import requests simply to repair an optional Cash ledger name.
+    internal static void BeginVerifiedMasterAlterImport(
+        StringBuilder builder, string companyName) =>
+        BeginMastersImport(builder, companyName, verifiedRenameExistingMaster: true);
+
+    private static void BeginMastersImport(
+        StringBuilder builder, string companyName, bool verifiedRenameExistingMaster)
     {
         builder.AppendLine("<ENVELOPE>");
         builder.AppendLine("  <HEADER>");
