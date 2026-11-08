@@ -463,7 +463,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 VerifiedContentHash = version.Hash, VerifiedVersion = version.Version
             };
         }
-        bool ToggleCash(XElement desired, TallyVoucherIndexRecord current,
+        bool ToggleCash(System.Xml.Linq.XElement desired, TallyVoucherIndexRecord current,
             TallyVoucherXmlSnapshot[] snapshots,
             TallySourceBindingVersionState saved,
             IReadOnlyDictionary<string,string>? mapping = null) =>
