@@ -45,6 +45,14 @@ internal static class Gstr1ReportWorksheetNormalizer
         var values = new List<InvoiceLine>();
         for (var row = headers.Row + 1; row <= report.MaxRow; row++)
         {
+            // GST portal workbooks have footer totals with placeholder values
+            // such as '24' in the Invoice No. column. They are not invoices.
+            var leadingCell = report.GetCell(row, 1).Trim();
+            if (leadingCell.Equals("Total", StringComparison.OrdinalIgnoreCase) ||
+                leadingCell.StartsWith("Subtotal", StringComparison.OrdinalIgnoreCase) ||
+                leadingCell.StartsWith("Grand Total", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             string Cell(params string[] names)
             {
                 foreach (var name in names)
