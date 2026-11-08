@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.641)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.642)"
         required: true
-        default: "v4.0.0.641"
+        default: "v4.0.0.642"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,14 +40,14 @@ concurrency:
 
 jobs:
   build-channel:
-# v4.0.0.641: consolidated adaptive voucher CREATE/ALTER writes, then one final batch-only native readback.
+# v4.0.0.642: consolidated adaptive voucher CREATE/ALTER writes, then one final batch-only native readback.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.641]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.642]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.641' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.642' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -290,7 +290,7 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.641: Fix the existing consolidated branch Cash ledger rename path after CL019 diagnostic showed two Tally Ignored=1 results on 7-Nov-2026 23:33. Tally's documented ledger rename XML uses the original ledger NAME attribute plus the desired NAME child; generated Tally MASTERID and GUID are now excluded from the transmitted ledger master XML. The updater STILL verifies identical original Tally MASTERID/GUID/ALTERID and Cash-in-Hand parent in two live exports before the request, and independently verifies the SAME MASTERID after it; ignored or failed Tally responses always halt without automatic resend or duplicate CREATE. Human-readable Cash - Karnataka / Cash - Gujarat naming from v640, existing 645 voucher bindings, one ALTER per voucher, adaptive batches and one final batch readback are preserved. All 16 regressions, consolidated Tally master contract and Windows CI publish passed."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.642: Consolidated Separate Branch Cash Ledgers selection now adjusts existing bound vouchers in BOTH directions: checked uses Cash - Karnataka/Gujarat; unchecked uses the standard Cash ledger. Every verified source receives at most ONE same-MASTERID voucher ALTER combining optional Cash and voucher-type changes, while unrelated sources share the original adaptive CREATE/ALTER batches and one final native readback. No selection change means no voucher ALTER. Full previous native signed DRCR, GUID, ALTERID, branch ownership, parent Cash-in-Hand and Tally master identity remain strict. The legacy Cash (B-ID) -> Cash - Branch master rename now narrowly uses Tally duplicate MODIFY instead of the default duplicate IGNORE; ordinary CREATE masters still use ignore and the established writer API is unchanged. CL019 cash ON/OFF, wrong branch and amount regressions passed, all 16 component checks, Tally import contract and Windows publish passed. No user Tally data is changed by GitHub release; live import requires installation and verification."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -320,7 +320,7 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.641: Fix the existing consolidated branch Cash ledger rename path after CL019 diagnostic showed two Tally Ignored=1 results on 7-Nov-2026 23:33. Tally's documented ledger rename XML uses the original ledger NAME attribute plus the desired NAME child; generated Tally MASTERID and GUID are now excluded from the transmitted ledger master XML. The updater STILL verifies identical original Tally MASTERID/GUID/ALTERID and Cash-in-Hand parent in two live exports before the request, and independently verifies the SAME MASTERID after it; ignored or failed Tally responses always halt without automatic resend or duplicate CREATE. Human-readable Cash - Karnataka / Cash - Gujarat naming from v640, existing 645 voucher bindings, one ALTER per voucher, adaptive batches and one final batch readback are preserved. All 16 regressions, consolidated Tally master contract and Windows CI publish passed."
+          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.642: Consolidated Separate Branch Cash Ledgers selection now adjusts existing bound vouchers in BOTH directions: checked uses Cash - Karnataka/Gujarat; unchecked uses the standard Cash ledger. Every verified source receives at most ONE same-MASTERID voucher ALTER combining optional Cash and voucher-type changes, while unrelated sources share the original adaptive CREATE/ALTER batches and one final native readback. No selection change means no voucher ALTER. Full previous native signed DRCR, GUID, ALTERID, branch ownership, parent Cash-in-Hand and Tally master identity remain strict. The legacy Cash (B-ID) -> Cash - Branch master rename now narrowly uses Tally duplicate MODIFY instead of the default duplicate IGNORE; ordinary CREATE masters still use ignore and the established writer API is unchanged. CL019 cash ON/OFF, wrong branch and amount regressions passed, all 16 component checks, Tally import contract and Windows publish passed. No user Tally data is changed by GitHub release; live import requires installation and verification."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
