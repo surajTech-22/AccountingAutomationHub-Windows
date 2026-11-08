@@ -1547,27 +1547,12 @@ public sealed class SalesImportViewModel :
                 automaticSourcePath,
                 reimportMonth.HasValue ? "Automatic GST Reimport" : "Automatic GST Import");
 
-            if (reimportMonth.HasValue)
-            {
-                // Fix13: the selected Sales month has committed and the refresh coordinator
-                // has rebuilt the dependent Journal/GSTR-3B books. The common committed-import
-                // bridge above invalidates/prepares the Sales stream; reload the merged saved FY
-                // so the other eleven months retain their IDs and edits.
-
-                LoadSavedRows(
-                    client.Id,
-                    result.FinancialYear,
-                    result.Issues);
-            }
-            else
-            {
-                ReplaceResultRows(
-                    result.Records,
-                    result.Issues);
-
-                RecordDashboardActivity(
-                    result);
-            }
+            // A verified source set may cover only some FY months. After the
+            // period-scoped repository replacement, display all saved Sales
+            // rows (including months safely retained from older imports).
+            LoadSavedRows(client.Id, result.FinancialYear, result.Issues);
+            if (!reimportMonth.HasValue)
+                RecordDashboardActivity(result);
 
             ProgressPercent = 100;
             StatusText = reimportMonth.HasValue
