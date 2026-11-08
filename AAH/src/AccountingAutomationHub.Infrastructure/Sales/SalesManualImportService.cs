@@ -30,6 +30,10 @@ public sealed class SalesManualImportService : ISalesManualImportService
         ArgumentNullException.ThrowIfNull(workbook);
         using var headerMappingScope = ImportHeaderMappingRuntime.BeginSource(sourcePath);
         var path = sourcePath;
+        // Exact GST portal Excel layout: import invoice rows from "GSTR1 Report"
+        // only, never duplicate their summaries from the other workbook tabs.
+        if (Gstr1ReportWorksheetNormalizer.TryNormalize(workbook, out var invoiceWorkbook))
+            workbook = invoiceWorkbook;
         if (TryBuildTallySalesRegisterRateSummaryInspection(workbook, path, out var rateSummaryInspection))
             return rateSummaryInspection;
 
@@ -96,6 +100,16 @@ public sealed class SalesManualImportService : ISalesManualImportService
         ArgumentNullException.ThrowIfNull(workbook);
         using var headerMappingScope = ImportHeaderMappingRuntime.BeginSource(sourcePath);
         var path = sourcePath;
+        // This affects Excel Manual Sales only: validate the active branch and FY
+        // and preserve the original source IGST/CGST/SGST split, independently
+        // of the generic manual Sales "LOCAL"/"INTER" conversion selection.
+        if (Gstr1ReportWorksheetNormalizer.TryNormalize(
+                workbook, out var invoiceWorkbook, clientGstin, financialYear))
+        {
+            workbook = invoiceWorkbook;
+            gstTreatment = string.Empty;
+            taxColumnMode = string.Empty;
+        }
         var records = new List<SalesImportRecord>();
         var issues = new List<SalesImportIssue>();
         var itemSequence = 0;
