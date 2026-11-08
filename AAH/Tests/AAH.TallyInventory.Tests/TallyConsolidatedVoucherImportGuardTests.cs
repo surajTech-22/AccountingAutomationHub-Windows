@@ -391,8 +391,13 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "Combined Books", "Cash (" + ownBranch + ")",
             "Cash - Karnataka", "477", bankGuid
         })!;
-        var renameElement = System.Xml.Linq.XDocument.Parse(renameXml)
-            .Descendants("LEDGER").Single();
+        var renameDoc = System.Xml.Linq.XDocument.Parse(renameXml);
+        var renameElement = renameDoc.Descendants("LEDGER").Single();
+        // CL019 08-Nov: ordinary XML must keep DUPIGNORE but the
+        // narrowly verified rename must request modify-existing.
+        if (renameDoc.Descendants("IMPORTDUPS").Single().Value != "@@DUPMODIFY")
+            throw new InvalidOperationException(
+                "v642 name-only Cash Ledger ALTER was ignored by @@DUPIGNORE.");
         if (renameElement.Attribute("ACTION")?.Value != "Alter" ||
             renameElement.Attribute("NAME")?.Value != "Cash (" + ownBranch + ")" ||
             renameElement.Attribute("RESERVEDNAME")?.Value != "" ||
