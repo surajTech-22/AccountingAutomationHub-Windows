@@ -11,7 +11,11 @@ namespace AccountingAutomationHub.Infrastructure.Tally;
 /// </summary>
 internal static class TallyExcelParityXmlWriter
 {
-    internal static void BeginAllMastersImport(StringBuilder builder, string companyName)
+    // The default is intentionally DUPIGNORE: ordinary branch/master CREATE
+    // must never overwrite an existing destination master by name. ONLY the
+    // separately verified legacy Cash ledger RENAME may opt into DUPMODIFY.
+    internal static void BeginAllMastersImport(
+        StringBuilder builder, string companyName, bool verifiedRenameExistingMaster = false)
     {
         builder.AppendLine("<ENVELOPE>");
         builder.AppendLine("  <HEADER>");
@@ -23,7 +27,9 @@ internal static class TallyExcelParityXmlWriter
         builder.AppendLine("        <REPORTNAME>All Masters</REPORTNAME>");
         builder.AppendLine("        <STATICVARIABLES>");
         builder.Append("          <SVCURRENTCOMPANY>").Append(Xml(companyName)).AppendLine("</SVCURRENTCOMPANY>");
-        builder.AppendLine("          <IMPORTDUPS>@@DUPIGNORE</IMPORTDUPS>");
+        builder.AppendLine(verifiedRenameExistingMaster
+            ? "          <IMPORTDUPS>@@DUPMODIFY</IMPORTDUPS>"
+            : "          <IMPORTDUPS>@@DUPIGNORE</IMPORTDUPS>");
         builder.AppendLine("        </STATICVARIABLES>");
         builder.AppendLine("      </REQUESTDESC>");
         builder.AppendLine("      <REQUESTDATA>");
