@@ -232,7 +232,7 @@ public sealed class SalesAutoImportService :
 
         var summary = BuildSummary(
             records,
-            issues.Count);
+            issues.Count(issue => !issue.Section.Equals("JSON recovery", StringComparison.OrdinalIgnoreCase)));
 
         var warnings = BuildWarnings(
             request,
@@ -240,6 +240,13 @@ public sealed class SalesAutoImportService :
             customerMaster,
             twoBNames,
             summary);
+        warnings.AddRange(issues
+            .Where(issue => issue.Section.Equals("JSON recovery", StringComparison.OrdinalIgnoreCase) ||
+                            issue.Section.Equals("JSON/ZIP", StringComparison.OrdinalIgnoreCase) ||
+                            issue.Section.Equals("ZIP JSON", StringComparison.OrdinalIgnoreCase))
+            .Select(issue => $"{issue.SourceFile}: {issue.Message}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8));
 
         progress?.Report(
             new SalesImportProgress(
@@ -2388,8 +2395,7 @@ public sealed class SalesAutoImportService :
                     FileShare.ReadWrite |
                     FileShare.Delete);
 
-                var node = JsonNode.Parse(
-                    stream);
+                var node = ParseGstr1JsonWithEmptyHsnRecovery(stream, file.FullName, issues);
 
                 if (node is JsonObject payload)
                 {
@@ -2432,8 +2438,7 @@ public sealed class SalesAutoImportService :
                 try
                 {
                     using var stream = entry.Open();
-                    var node = JsonNode.Parse(
-                        stream);
+                    var node = ParseGstr1JsonWithEmptyHsnRecovery(stream, file.FullName + ": " + entry.FullName, issues);
 
                     if (node is JsonObject payload)
                     {
@@ -2463,6 +2468,64 @@ public sealed class SalesAutoImportService :
         }
 
         return rows;
+    }
+
+    // A few GST portal "Get All Invoices" responses use the invalid token
+    // "hsn":, when the optional HSN section has no records. Recover ONLY this
+    // exact missing optional value in memory, and only if the resulting entire
+    // JSON document parses successfully. Never rewrite the original source or
+    // suppress other syntax errors (invoices/taxes must remain byte-for-byte).
+    private static JsonObject? ParseGstr1JsonWithEmptyHsnRecovery(
+        Stream stream, string source, ICollection<SalesImportIssue> issues)
+    {
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var json = reader.ReadToEnd();
+        try
+        {
+            return JsonNode.Parse(json) as JsonObject;
+        }
+        catch (JsonException originalError)
+        {
+            var repaired = Regex.Replace(
+                json,
+                @"""hsn""\s*:\s*(?=[,}])",
+                @"""hsn"":null",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (repaired.Equals(json, StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    $"Invalid JSON in {Path.GetFileName(source)}: {originalError.Message}. Re-download the source file.",
+                    originalError);
+
+            JsonObject? parsed;
+            try
+            {
+                parsed = JsonNode.Parse(repaired) as JsonObject;
+            }
+            catch (JsonException)
+            {
+                throw new InvalidDataException(
+                    $"Invalid JSON in {Path.GetFileName(source)}: the empty HSN field was not the only syntax error. Re-download the source file.",
+                    originalError);
+            }
+
+            if (parsed is null)
+                throw new InvalidDataException(
+                    $"Invalid JSON in {Path.GetFileName(source)}: the recovered response has no JSON object.",
+                    originalError);
+
+            // The recovery must apply only to an actual GSTR-1 response.
+            var request = parsed["winreq"] as JsonObject;
+            var response = parsed["resp"] as JsonObject;
+            var form = request?["reqid"]?.ToString() ?? request?["FormName"]?.ToString() ?? string.Empty;
+            if (response is null || !form.Contains("GSTR1", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    "The malformed optional HSN field cannot be recovered outside a verified GSTR-1 response.",
+                    originalError);
+
+            issues.Add(NewIssue(source, "JSON recovery",
+                "GSTR-1 source contains an empty optional hsn value. Read as null in memory; all invoice/tax fields and the original file are unchanged. Re-download if other errors occur."));
+            return parsed;
+        }
     }
 
     private static IEnumerable<FileInfo> EnumerateSourceFiles(
