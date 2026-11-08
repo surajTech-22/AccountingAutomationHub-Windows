@@ -1364,10 +1364,15 @@ public sealed class TallyConsolidatedVoucherImportService(
                      alterTargets.ContainsKey(item.SourceAnchor)))
         {
             var previous = alterTargets[planned.SourceAnchor];
-            var targets = planned.Postings
-                .Where(post => IsOwnBranchCashLedger(post.Name, planned.Number,
+            // Check BOTH sides of a checkbox transition. With the option
+            // OFF, the desired posting is default Cash, but the previously
+            // verified branch Cash master must still be owned by this branch
+            // and must exist under Cash-in-Hand before the bound ALTER.
+            var targets = planned.Postings.Select(post => post.Name)
+                .Concat(previous.LedgerPostings.Select(post => post.LedgerName))
+                .Where(name => IsOwnBranchCashLedger(name, planned.Number,
                     prepared.BranchCashLedgerNamesById))
-                .Select(post => post.Name).Distinct(IgnoreCase);
+                .Distinct(IgnoreCase);
             foreach (var name in targets)
             {
                 if (!available.TryGetValue(MasterKey("LEDGER", name), out var cash) ||
