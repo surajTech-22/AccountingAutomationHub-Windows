@@ -1458,9 +1458,7 @@ public sealed class SalesImportViewModel :
             ClientGstin = result.ClientGstin;
             FinancialYear = result.FinancialYear;
             Summary = result.Summary;
-            WarningText = string.Join(
-                Environment.NewLine,
-                result.Warnings);
+            WarningText = SalesAutoImportDiagnosticFormatter.Build(result);
             SourceVerificationText =
                 BuildSourceVerificationText(
                     result.Verification);
@@ -1487,6 +1485,7 @@ public sealed class SalesImportViewModel :
             if (reimportMonth.HasValue &&
                 !HasSalesSourceCoverageForMonth(result.Verification, reimportMonth.Value))
             {
+                WarningText = SalesAutoImportDiagnosticFormatter.Build(result, reimportMonth.Value);
                 LoadSavedRows(
                     client.Id,
                     result.FinancialYear,
@@ -1614,6 +1613,7 @@ public sealed class SalesImportViewModel :
         _cancellationSource = cancellation;
         var imported = 0;
         var skipped = new List<string>();
+        var sourceDiagnostics = new List<string>();
         try
         {
             var registrations = new[] { client.Gstin }.Concat(client.AdditionalGstins ?? [])
@@ -1646,6 +1646,9 @@ public sealed class SalesImportViewModel :
                     (reimportMonth.HasValue && !HasSalesSourceCoverageForMonth(result.Verification, reimportMonth.Value)))
                 {
                     skipped.Add(gstin + " (no matching source)");
+                    var missingDetails = SalesAutoImportDiagnosticFormatter.Build(result, reimportMonth);
+                    if (!string.IsNullOrWhiteSpace(missingDetails))
+                        sourceDiagnostics.Add(missingDetails);
                     continue;
                 }
                 result.SourceFingerprint = BuildSourceFingerprint(result);
@@ -1660,13 +1663,17 @@ public sealed class SalesImportViewModel :
                     : _salesRecordRepository.ReplaceAutomaticImport(
                         client.Id, client.FinancialYear, result);
                 imported += result.PersistedRows;
+                var warnings = SalesAutoImportDiagnosticFormatter.Build(result);
+                if (!string.IsNullOrWhiteSpace(warnings))
+                    sourceDiagnostics.Add(warnings);
             }
             await _refreshCoordinator.RefreshAsync(client, cancellation.Token);
             LoadSavedRows(client.Id, client.FinancialYear, []);
             PublishCommittedImport(client.Id, client.FinancialYear, "Sales",
                 imported, EReturnsRootPath, "Registered GSTIN Auto Import");
             ProgressPercent = 100;
-            WarningText = string.Join("; ", skipped);
+            WarningText = string.Join(Environment.NewLine + Environment.NewLine,
+                sourceDiagnostics.Distinct(StringComparer.OrdinalIgnoreCase));
             StatusText = $"Sales registration import complete: {AllRows.Count:N0} combined saved row(s) across " +
                 $"{registrations.Length} GSTIN(s). " +
                 (skipped.Count > 0 ? $"Source unavailable for: {string.Join(", ", skipped)}." : "");
