@@ -3139,6 +3139,7 @@ public sealed class MainWindowViewModel :
             _tallyRepository, () => tallyAcknowledgedCreateCount++,
             () => tallyAcknowledgedAlterCount++,
             consolidatedVerifiedMarkerReader: authorityWrapper.ReadVerifiedMarkerAsync);
+        var postImportCheckpointConfirmed = false;
         try
         {
             // Consolidated-only wrapper around the ORIGINAL, unchanged
@@ -3163,6 +3164,63 @@ public sealed class MainWindowViewModel :
             var result = await importer.ImportAsync(link, company, prepared,
                 accountingFinancialYear: financialYear,
                 voucherTypeOnlyAlter: separateTypes);
+
+            // CL019: v642's batch-only readback verified 645 vouchers with
+            // ALTERIDs 7881..8525, but the 09:04 diagnostic captured the
+            // ORIGINAL normal checkpoint 7879. The normal Sync was in FINALLY,
+            // i.e. AFTER the diagnostic file was already written. Consume
+            // the original linked Master+Voucher ALTERID delta NOW, before
+            // generating the diagnostic, with no second voucher POST.
+            // If the sync is unavailable, the real accepted vouchers stay
+            // VERIFIED, the diagnostics explicitly say PENDING, and the
+            // existing finally retry remains read-only.
+            if (result.ImportedVouchers > 0 &&
+                _clientContext.CurrentClient?.Id == parentId &&
+                _tallyCoordinator.GetCurrentClientLink() is { } checkpointLink &&
+                checkpointLink.ClientId == parentId &&
+                checkpointLink.CompanyKey.Equals(link.CompanyKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await _tallyCoordinator.RefreshNowAsync(
+                        forceLinkedSynchronization: true, forceFullBaseline: false);
+                    var synced = _tallyRepository.GetBankSyncState(
+                        parentId, financialYear, link.CompanyKey);
+                    var fyRange = TallyLiveConnectionCoordinator.FinancialYearDates(financialYear);
+                    var index = _tallyRepository.GetVoucherIndexRange(
+                        link.CompanyKey, financialYear, fyRange.From, fyRange.To);
+                    var highestNativeAlterId = index
+                        .Select(v => long.TryParse(v.AlterId,
+                            System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var alter) ? alter : 0)
+                        .DefaultIfEmpty(0L).Max();
+                    if (synced is null ||
+                        synced.LastFyVoucherCount != index.Count ||
+                        !(_tallyRepository.HasCompleteVoucherXmlAuthority(
+                            link.CompanyKey, financialYear, index.Count)) ||
+                        synced.LastAlterId < highestNativeAlterId)
+                        throw new InvalidOperationException(
+                            "Native voucher readback is newer than the normal " +
+                            "Master+Voucher synchronization checkpoint. " +
+                            "The accepted vouchers are preserved; no resend.");
+                    postImportCheckpointConfirmed = true;
+                    evidence["PostImport-Sync-Checkpoint.txt"] =
+                        "PASS: original Tally Link checkpoint advanced to " +
+                        synced.LastAlterId + "; FY native verified maximum ALTERID " +
+                        highestNativeAlterId + "; FY vouchers " + index.Count +
+                        ". No extra voucher write or full-month import readback.";
+                }
+                catch (Exception syncError) when (syncError is not OperationCanceledException)
+                {
+                    evidence["PostImport-Sync-Checkpoint.txt"] =
+                        "PENDING: original Tally Link authority synchronization: " +
+                        syncError.Message + ". Verified voucher postings are retained. " +
+                        "No automatic import resend.";
+                    ApplicationState = evidence["PostImport-Sync-Checkpoint.txt"];
+                }
+            }
             var diagnostic = await SaveConsolidatedExistingDiagnosticsAsync(
                 current, company, "Consolidated voucher import: " + result.Status,
                 prepared.FinalVouchers, result.ImportedVouchers, evidence,
@@ -3186,7 +3244,8 @@ public sealed class MainWindowViewModel :
             // coordinator's synchronized read cache. Request ONE existing
             // read-only linked synchronization AFTER the write loop (including
             // partial acceptance), never another voucher POST or retry.
-            if ((tallyAcknowledgedCreateCount > 0 || tallyAcknowledgedAlterCount > 0) &&
+            if (!postImportCheckpointConfirmed &&
+                (tallyAcknowledgedCreateCount > 0 || tallyAcknowledgedAlterCount > 0) &&
                 _clientContext.CurrentClient is { } visible &&
                 visible.Id == parentId &&
                 visible.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
