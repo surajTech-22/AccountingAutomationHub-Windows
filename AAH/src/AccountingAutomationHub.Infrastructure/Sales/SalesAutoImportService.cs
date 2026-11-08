@@ -120,95 +120,53 @@ public sealed class SalesAutoImportService :
             issues,
             cancellationToken);
 
-        var sourceResolution = cachedSalesSources.Count > 0
-            ? new SalesSourceResolution(
-                LatestPerPeriod(cachedSalesSources),
-                new SalesSourceVerification
-                {
-                    EReturnsRoot = root?.FullName ?? request.EReturnsRootPath,
-                    SourceOrigin = "GSTIN Cache",
-                    SourceBranch = "Shared Sales/Purchase Watcher",
-                    Status = "Cached Monthly GSTR-1 Selected",
-                    SelectedSources = cachedSalesSources.Select(source => source.SourcePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    SelectedPeriods = cachedSalesSources.Select(source => source.Period).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToArray()
-                })
-            : root is null
-                ? new SalesSourceResolution(
-                    [],
-                    new SalesSourceVerification
-                    {
-                        EReturnsRoot = request.EReturnsRootPath,
-                        SourceOrigin = "E-returns",
-                        Status = "E-returns Not Available"
-                    })
-                : ResolveSalesSources(
-                    root,
-                    gstin,
-                    financialYear,
-                    issues,
-                    cancellationToken);
-
-        var selectedSources = sourceResolution.Sources;
-
-        if (selectedSources.Count == 0 && automationRoots.Length > 0)
+        // Do not let an already-populated watcher cache mask a later month.
+        // Every source is still checked against this exact GSTIN and FY by the
+        // existing JSON/ZIP classifier. Select only one authoritative payload
+        // per return period after collecting all verified source locations.
+        var discoveredSources = new List<SalesSourceCandidate>(cachedSalesSources);
+        if (root is not null)
         {
-            progress?.Report(new SalesImportProgress(18, "Checking linked Automation Folder GSTR-1 sources"));
-            selectedSources = ReadAutomationFolderSalesSources(
-                automationRoots, gstin, financialYear, issues, cancellationToken);
-            if (selectedSources.Count > 0)
-            {
-                sourceResolution = new SalesSourceResolution(
-                    selectedSources,
-                    new SalesSourceVerification
-                    {
-                        EReturnsRoot = root?.FullName ?? request.EReturnsRootPath,
-                        SourceOrigin = "Automation Folder",
-                        SourceBranch = "Linked Client/FY",
-                        ClientRoot = string.Join("; ", automationRoots.Select(item => item.FullName)),
-                        Status = "Linked Monthly GSTR-1 Selected",
-                        SelectedSources = selectedSources.Select(source => source.SourcePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                        SelectedPeriods = selectedSources.Select(source => source.Period).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToArray()
-                    });
-            }
+            progress?.Report(new SalesImportProgress(13, "Checking current E-returns monthly GSTR-1 files"));
+            discoveredSources.AddRange(ResolveSalesSources(
+                root, gstin, financialYear, issues, cancellationToken).Sources);
         }
 
-        if (selectedSources.Count == 0 &&
-            request.SearchWindowsDownloads)
+        if (automationRoots.Length > 0)
         {
-            progress?.Report(
-                new SalesImportProgress(
-                    23,
-                    "Checking Windows Downloads fallback"));
-
-            selectedSources = ReadDownloadsSalesSources(
-                gstin,
-                financialYear,
-                issues,
-                cancellationToken);
-
-            if (selectedSources.Count > 0)
-            {
-                sourceResolution =
-                    new SalesSourceResolution(
-                        selectedSources,
-                        new SalesSourceVerification
-                        {
-                            EReturnsRoot = root?.FullName ?? request.EReturnsRootPath,
-                            SourceOrigin = "Legacy",
-                            SourceBranch = "Windows Downloads",
-                            Status = "Legacy Fallback",
-                            SelectedSources = selectedSources
-                                .Select(source => source.SourcePath)
-                                .Distinct(StringComparer.OrdinalIgnoreCase)
-                                .ToArray(),
-                            SelectedPeriods = selectedSources
-                                .Select(source => source.Period)
-                                .Distinct(StringComparer.OrdinalIgnoreCase)
-                                .OrderBy(value => value)
-                                .ToArray()
-                        });
-            }
+            progress?.Report(new SalesImportProgress(18, "Checking linked Automation Folder GSTR-1 months"));
+            discoveredSources.AddRange(ReadAutomationFolderSalesSources(
+                automationRoots, gstin, financialYear, issues, cancellationToken));
         }
+
+        // Downloads is a legacy source location, but a newly-downloaded month
+        // must not be hidden just because January/February were already cached.
+        // Restrict this scan to incomplete FY coverage to avoid unnecessary
+        // full-tree work when all twelve periods are already verified.
+        if (request.SearchWindowsDownloads &&
+            discoveredSources.Select(source => source.Period).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 12)
+        {
+            progress?.Report(new SalesImportProgress(23, "Checking Downloads for missing monthly GSTR-1 sources"));
+            discoveredSources.AddRange(ReadDownloadsSalesSources(
+                gstin, financialYear, issues, cancellationToken));
+        }
+
+        var selectedSources = LatestPerPeriod(discoveredSources);
+        var verification = new SalesSourceVerification
+        {
+            EReturnsRoot = root?.FullName ?? request.EReturnsRootPath,
+            SourceOrigin = "Verified Monthly Sources",
+            SourceBranch = "GSTIN Cache / E-returns / Automation Folder / Downloads",
+            ClientRoot = string.Join("; ", automationRoots.Select(item => item.FullName)),
+            Status = selectedSources.Count > 0
+                ? "Merged Monthly GSTR-1 Selected"
+                : "No verified GSTR-1 source",
+            SelectedSources = selectedSources.Select(source => source.SourcePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            SelectedPeriods = selectedSources.Select(source => source.Period)
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(period => period).ToArray()
+        };
+        var sourceResolution = new SalesSourceResolution(selectedSources, verification);
 
         progress?.Report(
             new SalesImportProgress(
@@ -327,71 +285,29 @@ public sealed class SalesAutoImportService :
                 });
         }
 
-        foreach (var branchName in new[]
-                 {
-                     "imported",
-                     "downloaded"
-                 })
+        var candidates = new List<SalesSourceCandidate>();
+        foreach (var branchName in new[] { "imported", "downloaded" })
         {
-            var branchRoot = FindChildDirectory(
-                financialYearRoot,
-                branchName);
-
+            var branchRoot = FindChildDirectory(financialYearRoot, branchName);
             var clientRoot = branchRoot is null
                 ? null
-                : FindChildDirectory(
-                    branchRoot,
-                    gstin);
-
-            if (clientRoot is null)
-            {
-                continue;
-            }
-
-            var candidates = CollectSalesCandidates(
-                clientRoot,
-                gstin,
-                financialYear,
-                branchName,
-                issues,
-                cancellationToken);
-
-            if (candidates.Count == 0)
-            {
-                continue;
-            }
-
-            var selected = LatestPerPeriod(
-                candidates);
-
-            return new SalesSourceResolution(
-                selected,
-                new SalesSourceVerification
-                {
-                    EReturnsRoot = eReturnsRoot?.FullName ?? string.Empty,
-                    SourceOrigin = "E-returns",
-                    SourceBranch = branchName,
-                    ClientRoot = clientRoot.FullName,
-                    Status = "Monthly GSTR-1 Selected",
-                    SelectedSources = selected
-                        .Select(source => source.SourcePath)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray(),
-                    SelectedPeriods = selected
-                        .Select(source => source.Period)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(value => value)
-                        .ToArray()
-                });
+                : FindChildDirectory(branchRoot, gstin);
+            if (clientRoot is null) continue;
+            candidates.AddRange(CollectSalesCandidates(
+                clientRoot, gstin, financialYear, branchName, issues, cancellationToken));
         }
 
+        var selected = LatestPerPeriod(candidates);
         return new SalesSourceResolution(
-            [],
+            selected,
             new SalesSourceVerification
             {
-                EReturnsRoot = eReturnsRoot?.FullName ?? string.Empty,
+                EReturnsRoot = eReturnsRoot.FullName,
                 SourceOrigin = "E-returns",
-                Status = "No GSTR-1 Found in E-returns"
+                SourceBranch = "imported / downloaded",
+                Status = selected.Count > 0 ? "Monthly GSTR-1 Selected" : "No GSTR-1 Found in E-returns",
+                SelectedSources = selected.Select(source => source.SourcePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                SelectedPeriods = selected.Select(source => source.Period).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(period => period).ToArray()
             });
     }
 
