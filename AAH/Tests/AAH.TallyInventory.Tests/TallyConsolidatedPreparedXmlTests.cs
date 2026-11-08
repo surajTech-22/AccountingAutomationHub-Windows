@@ -221,6 +221,14 @@ internal static class TallyConsolidatedPreparedXmlTests
             [kaCashContra, tnCashContra]);
         var normalCashMasters = XDocument.Parse(normalCash.MastersXml);
         var normalCashVouchers = XDocument.Parse(normalCash.VouchersXml);
+        Check(normalCash.BranchCashLedgerNamesById.TryGetValue("KA", out var kaName) &&
+              kaName == "Cash - Karnataka" &&
+              normalCash.BranchCashLedgerNamesById.TryGetValue("TN", out var tnName) &&
+              tnName == "Cash - Tamil Nadu",
+            "Cash checkbox OFF lost original branch ownership mapping for reverse ALTER.");
+        Check(XDocument.Parse(Plan().GroupXml).Descendants("IMPORTDUPS")
+                  .Single().Value == "@@DUPIGNORE",
+            "Ordinary branch Group CREATE must retain existing DUPIGNORE protection.");
         Check(normalCash.FinalVouchers == 2 &&
               !normalCashMasters.Descendants("LEDGER").Any(x =>
                   (string?)x.Element("NAME") == "Cash") &&

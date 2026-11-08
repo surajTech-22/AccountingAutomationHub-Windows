@@ -391,8 +391,13 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             "Combined Books", "Cash (" + ownBranch + ")",
             "Cash - Karnataka", "477", bankGuid
         })!;
-        var renameElement = System.Xml.Linq.XDocument.Parse(renameXml)
-            .Descendants("LEDGER").Single();
+        var renameDoc = System.Xml.Linq.XDocument.Parse(renameXml);
+        var renameElement = renameDoc.Descendants("LEDGER").Single();
+        // CL019 08-Nov: ordinary XML must keep DUPIGNORE but the
+        // narrowly verified rename must request modify-existing.
+        if (renameDoc.Descendants("IMPORTDUPS").Single().Value != "@@DUPMODIFY")
+            throw new InvalidOperationException(
+                "v642 name-only Cash Ledger ALTER was ignored by @@DUPIGNORE.");
         if (renameElement.Attribute("ACTION")?.Value != "Alter" ||
             renameElement.Attribute("NAME")?.Value != "Cash (" + ownBranch + ")" ||
             renameElement.Attribute("RESERVEDNAME")?.Value != "" ||
@@ -424,6 +429,96 @@ internal static class TallyConsolidatedVoucherImportGuardTests
                 "v641 must require the original ledger GUID for master ALTER");
         Console.WriteLine("PASS: v641 readable Cash - Karnataka; old-name Tally ALTER with " +
             "no generated IDs on wire, strict source scope and unchanged signed DR/CR.");
+
+        // v642: the optional Separate Branch Cash Ledgers checkbox may
+        // change WITHOUT any voucher type change. Both directions must use
+        // one verified bound ALTER per source; do not revert to blind CREATE,
+        // bypass old signed DRCR, or confuse a different branch's Cash name.
+        var cashToggleProof = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("IsVerifiedCashSelectionTransition",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("v642 cash checkbox ALTER proof missing.");
+        var readCashVersion = typeof(TallyConsolidatedVoucherImportService)
+            .GetMethod("ReadVerifiedLiveConsolidatedVersion",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("v642 previous native Cash version reader missing.");
+        (string Hash, string Version) NativeCashVersion(
+            TallyVoucherIndexRecord current, TallyVoucherXmlSnapshot[] snapshots)
+        {
+            var val = readCashVersion.Invoke(null, new object[] { current, snapshots });
+            if (val is not ValueTuple<string, string> value)
+                throw new InvalidOperationException("v642 native Cash voucher version is not verified");
+            return value;
+        }
+        TallySourceBindingVersionState SavedCash(
+            TallyVoucherIndexRecord current, TallyVoucherXmlSnapshot[] snapshots)
+        {
+            var version = NativeCashVersion(current, snapshots);
+            return new TallySourceBindingVersionState
+            {
+                State = "Verified", MasterId = current.MasterId, Guid = current.Guid,
+                LastVerifiedAlterId = long.Parse(current.AlterId),
+                VerifiedContentHash = version.Hash, VerifiedVersion = version.Version
+            };
+        }
+        bool ToggleCash(System.Xml.Linq.XElement desired, TallyVoucherIndexRecord current,
+            TallyVoucherXmlSnapshot[] snapshots,
+            TallySourceBindingVersionState saved,
+            IReadOnlyDictionary<string,string>? mapping = null) =>
+            (bool)cashToggleProof.Invoke(null, new object[] {
+                desired, current, snapshots, saved, mapping ?? cashNames
+            })!;
+        var onlyCashOn = new System.Xml.Linq.XElement(desiredBankXml);
+        onlyCashOn.Element("VOUCHERTYPENAME")!.Value = "Contra - Karnataka";
+        onlyCashOn.Descendants("LEDGERNAME").Last().Value = "Cash - Karnataka";
+        var savedPlainCash = SavedCash(oldBank, cl019OldCashNative);
+        if (!ToggleCash(onlyCashOn, oldBank, cl019OldCashNative, savedPlainCash))
+            throw new InvalidOperationException(
+                "v642 Separate Cash ON did not select same-MASTERID Cash-only ALTER.");
+        var onlyCashOnOther = new System.Xml.Linq.XElement(onlyCashOn);
+        onlyCashOnOther.Descendants("LEDGERNAME").Last().Value = "Cash - Gujarat";
+        if (ToggleCash(onlyCashOnOther, oldBank, cl019OldCashNative, savedPlainCash))
+            throw new InvalidOperationException(
+                "v642 Cash ON could send posting to another branch Cash ledger.");
+        var onlyCashOnAmount = new System.Xml.Linq.XElement(onlyCashOn);
+        onlyCashOnAmount.Descendants("AMOUNT").Last().Value = "500001";
+        if (ToggleCash(onlyCashOnAmount, oldBank, cl019OldCashNative, savedPlainCash))
+            throw new InvalidOperationException("v642 Cash ON changed debit or credit amount.");
+        var reversedIndex = new TallyVoucherIndexRecord
+        {
+            MasterId = oldBank.MasterId, AlterId = oldBank.AlterId, Guid = oldBank.Guid,
+            VoucherDate = oldBank.VoucherDate, VoucherType = oldBank.VoucherType,
+            VoucherNumber = oldBank.VoucherNumber, Reference = oldBank.Reference,
+            Narration = oldBank.Narration,
+            LedgerPostings = new TallyLedgerPostingRecord[] {
+                new() { LedgerName = bankName, SignedAmount = -500000m },
+                new() { LedgerName = "Cash - Karnataka", SignedAmount = 500000m }
+            }
+        };
+        var reverseNative = previousBankXml.ToString().Replace(
+            "<LEDGERNAME>Cash</LEDGERNAME>",
+            "<LEDGERNAME>Cash - Karnataka</LEDGERNAME>", StringComparison.Ordinal);
+        var reversedFull = new[] {
+            new TallyVoucherXmlSnapshot("355", bankGuid, "Contra - Karnataka",
+                oldBank.VoucherDate!.Value, reverseNative) { AlterId = "5944" }
+        };
+        var onlyCashOff = new System.Xml.Linq.XElement(onlyCashOn);
+        onlyCashOff.Descendants("LEDGERNAME").Last().Value = "Cash";
+        var savedBranchCash = SavedCash(reversedIndex, reversedFull);
+        if (!ToggleCash(onlyCashOff, reversedIndex, reversedFull, savedBranchCash))
+            throw new InvalidOperationException(
+                "v642 Separate Cash OFF must restore ordinary Cash on SAME MASTERID.");
+        if (ToggleCash(onlyCashOn, reversedIndex, reversedFull, savedBranchCash))
+            throw new InvalidOperationException(
+                "v642 unchanged Cash checkbox must not resend an ALTER.");
+        var wrongIdSaved = SavedCash(reversedIndex, reversedFull);
+        wrongIdSaved.MasterId = "999";
+        if (ToggleCash(onlyCashOff, reversedIndex, reversedFull, wrongIdSaved))
+            throw new InvalidOperationException("v642 Cash OFF changed bound MASTERID.");
+        Console.WriteLine("PASS: v642 cash selection ON/OFF reverses posting via one verified " +
+            "same-type, same-MASTERID ALTER; unchanged skips; foreign/amount/ID rejected.");
 
         // CL019 2026-11-07: NORMAL Tally Link already normalizes PARTYNAME
         // as PartyLedger and BASICNARRATION as Narration in its saved index.
