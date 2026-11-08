@@ -901,6 +901,10 @@ public sealed class TallyConsolidatedVoucherImportService(
         // in an original branch ledger must go through Previous->Desired ALTER.
         var preflightBoundConflicts = new List<string>();
         var alterTargets = new Dictionary<string, TallyVoucherIndexRecord>(IgnoreCase);
+        // Per-source, not global: changing the optional Cash selection does
+        // not turn an otherwise ordinary mixed CREATE/ALTER run into a
+        // type-only batch. One affected source -> one bound voucher ALTER.
+        var cashSelectionAlterSources = new HashSet<string>(IgnoreCase);
         var claimedAlterMasterIds = new HashSet<string>(IgnoreCase);
         // A normal Tally company can auto-number the voucher and drop the
         // branch-scoped B-{hash} number. An unchanged shared B2C REFERENCE
@@ -1036,6 +1040,23 @@ public sealed class TallyConsolidatedVoucherImportService(
                         throw new InvalidOperationException(
                             "Multiple consolidated sources claim MASTERID " +
                             liveBound.MasterId + "; no type-only ALTER.");
+                    alterTargets.Add(planned.SourceAnchor, liveBound);
+                    continue;
+                }
+                // Selecting or deselecting optional branch Cash is one
+                // SAME-MASTERID voucher ALTER, even if voucher type stays
+                // Contra/Payment/Receipt and there is no type-only operation.
+                // This is deliberately per-voucher: other source changes
+                // still use the ordinary individual CREATE/ALTER classifier.
+                if (IsVerifiedCashSelectionTransition(
+                        planned.Xml, liveBound, before.FullVouchers, state,
+                        prepared.BranchCashLedgerNamesById))
+                {
+                    if (!claimedAlterMasterIds.Add(liveBound.MasterId))
+                        throw new InvalidOperationException(
+                            "Two consolidated Cash-selection sources claim Tally MASTERID " +
+                            liveBound.MasterId + ". No duplicate ALTER.");
+                    cashSelectionAlterSources.Add(planned.SourceAnchor);
                     alterTargets.Add(planned.SourceAnchor, liveBound);
                     continue;
                 }
@@ -1562,6 +1583,8 @@ public sealed class TallyConsolidatedVoucherImportService(
                             link.ClientId, financialYear, link.CompanyKey,
                             SourceEntityType, expected.SourceAnchor);
                         masterId = originalLive!.MasterId;
+                        var cashSelectionOnly =
+                            cashSelectionAlterSources.Contains(expected.SourceAnchor);
                         if (!indexByMasterId.TryGetValue(masterId.Trim(), out var live) ||
                             previous is null ||
                             !previous.State.Equals("Verified", StringComparison.OrdinalIgnoreCase) ||
@@ -1572,8 +1595,12 @@ public sealed class TallyConsolidatedVoucherImportService(
                                     live, fullAuthority, previous,
                                     expected.Xml, originalLive.VoucherType,
                                     prepared.BranchCashLedgerNamesById)
-                                : PreviousConsolidatedVersionMatches(
-                                    live, fullAuthority, previous)) ||
+                                : cashSelectionOnly
+                                    ? IsVerifiedCashSelectionTransition(
+                                        expected.Xml, live, fullAuthority, previous,
+                                        prepared.BranchCashLedgerNamesById)
+                                    : PreviousConsolidatedVersionMatches(
+                                        live, fullAuthority, previous)) ||
                             (typeOnlyOperation &&
                              !MatchesTypeOrBranchCashPreparedVoucherWithPlan(
                                  expected.Xml, live, fullAuthority,
@@ -2549,6 +2576,29 @@ public sealed class TallyConsolidatedVoucherImportService(
                 return false;
         }
         return true;
+    }
+
+    // Both directions of the OPTIONAL Cash checkbox are allowed while the
+    // voucher type remains unchanged: Cash -> Cash - Karnataka on selection,
+    // Cash - Karnataka -> Cash on deselection. It must be the exact source
+    // branch's ledger, with ONE Cash posting, unchanged signed amount and
+    // EVERY other native posting, date, party, GST and reference unchanged.
+    // Do NOT use this proof for new source vouchers or changed source data.
+    internal static bool IsVerifiedCashSelectionTransition(
+        XElement preparedVoucher, TallyVoucherIndexRecord live,
+        IReadOnlyList<TallyVoucherXmlSnapshot> fullAuthority,
+        TallySourceBindingVersionState saved,
+        IReadOnlyDictionary<string, string> branchCashNames)
+    {
+        if (!IgnoreCase.Equals(Value(preparedVoucher, "VOUCHERTYPENAME"),
+                live.VoucherType) ||
+            MatchesTypeOnlyPreparedVoucher(preparedVoucher, live, fullAuthority) ||
+            !MatchesTypeOrBranchCashPreparedVoucherWithPlan(
+                preparedVoucher, live, fullAuthority, branchCashNames))
+            return false;
+        return PreviousConsolidatedTypeOnlyWithTallyRenumberMatchesWithPlan(
+            live, fullAuthority, saved, preparedVoucher,
+            live.VoucherType, branchCashNames);
     }
 
     // The consolidated importer has only ONE bound ALTER writer per source.
