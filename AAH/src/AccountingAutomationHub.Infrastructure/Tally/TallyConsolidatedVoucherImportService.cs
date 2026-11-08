@@ -1425,6 +1425,12 @@ public sealed class TallyConsolidatedVoucherImportService(
         foreach (var planned in source.Where(v => alterTargets.ContainsKey(v.SourceAnchor)))
         {
             var childName = alterTargets[planned.SourceAnchor].VoucherType;
+            // This voucher may already be the parent type but still need
+            // its independent branch Cash selection changed in the SAME
+            // adaptive run. Only a genuine child->parent move needs a
+            // verified Voucher Type master parent.
+            if (IgnoreCase.Equals(childName, planned.Type))
+                continue;
             if (!IsVerifiedBranchSubtypeParent(available, childName, planned.Type))
                 throw new InvalidOperationException(
                     "Cannot restore original type for " + planned.SourceAnchor +
