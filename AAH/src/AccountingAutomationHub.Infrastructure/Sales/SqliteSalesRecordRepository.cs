@@ -1107,31 +1107,43 @@ public sealed class SqliteSalesRecordRepository :
         var b2cNameOverrides = GetB2CCustomerNameOverrides(clientId, financialYear);
         var recordsToPersist = RemoveAutomaticRateTemplatePlaceholders(result.Records).ToList();
 
+        // The source watcher may have only a subset of the FY. A valid monthly
+        // source authorizes replacement of that return MONTH, not deletion of
+        // unrelated months that were previously imported from other sources.
+        var verifiedMonths = new HashSet<DateTime>();
+        foreach (var period in result.Verification.SelectedPeriods)
+        {
+            if (!PurchaseImportUtilities.TryParseReturnPeriod(period, out var date))
+                throw new InvalidOperationException($"Unrecognized verified GSTR-1 return period '{period}'.");
+            verifiedMonths.Add(new DateTime(date.Year, date.Month, 1));
+        }
+        if (verifiedMonths.Count == 0)
+            throw new InvalidOperationException("Automatic Sales import cannot replace records without verified monthly GSTR-1 coverage.");
+
+        var recordsToDelete = GetAutomaticRecords(clientId, financialYear)
+            .Where(record => record.ClientGstin.Equals(targetGstin, StringComparison.OrdinalIgnoreCase) &&
+                             verifiedMonths.Any(month => IsRecordInReimportMonth(record, month)) &&
+                             record.PersistentId > 0)
+            .Select(record => record.PersistentId)
+            .Distinct()
+            .ToArray();
+
         using var connection = OpenConnection();
         using var transaction = connection.BeginTransaction();
 
-        using (var delete = connection.CreateCommand())
+        foreach (var id in recordsToDelete)
         {
+            using var delete = connection.CreateCommand();
             delete.Transaction = transaction;
-            delete.CommandText =
-                """
+            delete.CommandText = """
                 DELETE FROM SalesRecords
-                WHERE
-                    ClientId = $ClientId
-                    AND FinancialYear = $FinancialYear
-                    AND ImportMode = 'Auto Import'
-                    AND ClientGstin = $TargetGstin COLLATE NOCASE;
+                WHERE Id=$Id AND ClientId=$ClientId AND FinancialYear=$FinancialYear
+                  AND ClientGstin=$TargetGstin COLLATE NOCASE AND ImportMode='Auto Import';
                 """;
-
-            delete.Parameters.AddWithValue(
-                "$ClientId",
-                clientId);
-
-            delete.Parameters.AddWithValue(
-                "$FinancialYear",
-                financialYear.Trim());
+            delete.Parameters.AddWithValue("$Id", id);
+            delete.Parameters.AddWithValue("$ClientId", clientId);
+            delete.Parameters.AddWithValue("$FinancialYear", financialYear.Trim());
             delete.Parameters.AddWithValue("$TargetGstin", targetGstin);
-
             delete.ExecuteNonQuery();
         }
 
