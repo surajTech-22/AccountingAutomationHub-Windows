@@ -30,6 +30,10 @@ public sealed class SalesManualImportService : ISalesManualImportService
         ArgumentNullException.ThrowIfNull(workbook);
         using var headerMappingScope = ImportHeaderMappingRuntime.BeginSource(sourcePath);
         var path = sourcePath;
+        // A portal GSTR1 Report workbook has many supplementary tabs. Import only
+        // its invoice register and normalize its misleading Cess column safely.
+        if (Gstr1ReportWorksheetNormalizer.TryNormalize(workbook, out var gstr1Workbook))
+            workbook = gstr1Workbook;
         if (TryBuildTallySalesRegisterRateSummaryInspection(workbook, path, out var rateSummaryInspection))
             return rateSummaryInspection;
 
@@ -96,6 +100,11 @@ public sealed class SalesManualImportService : ISalesManualImportService
         ArgumentNullException.ThrowIfNull(workbook);
         using var headerMappingScope = ImportHeaderMappingRuntime.BeginSource(sourcePath);
         var path = sourcePath;
+        // Enforce the active branch GSTIN/FY before importing any portal invoice.
+        // The existing generic manual sales workbook path remains unchanged.
+        if (Gstr1ReportWorksheetNormalizer.TryNormalize(
+                workbook, out var gstr1Workbook, clientGstin, financialYear))
+            workbook = gstr1Workbook;
         var records = new List<SalesImportRecord>();
         var issues = new List<SalesImportIssue>();
         var itemSequence = 0;
