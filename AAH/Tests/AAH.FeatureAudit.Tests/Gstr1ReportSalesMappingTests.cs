@@ -31,7 +31,12 @@ internal static class Gstr1ReportSalesMappingTests
             [13] = Indexed(
                 "24", "Customer B", "Sale", "MTIPL-2", "24/04/2025",
                 "1000", "18", "0", "247.46", "0", "22.27", "22.27", "0", "Karnataka"),
-            [14] = new Dictionary<int, string> { [1] = "Total", [6] = "2000" }
+            // Verify that the generic UI's LOCAL setting does not rewrite an
+            // interstate IGST invoice into local CGST/SGST.
+            [14] = Indexed(
+                "24", "Customer C", "Sale", "MTIPL-3", "25/04/2025",
+                "1180", "18", "0", "1000", "180", "0", "0", "0", "23"),
+            [15] = new Dictionary<int, string> { [1] = "Total", [6] = "3180" }
         };
         var workbook = new OpenXmlWorkbookData
         {
@@ -41,7 +46,7 @@ internal static class Gstr1ReportSalesMappingTests
             {
                 ["GSTR1 Report"] = new OpenXmlWorksheetData
                 {
-                    Name = "GSTR1 Report", State = "visible", MaxRow = 14, Rows = rows
+                    Name = "GSTR1 Report", State = "visible", MaxRow = 15, Rows = rows
                 },
                 // Must NOT be imported as a second Sales document stream.
                 ["b2cs"] = new OpenXmlWorksheetData
@@ -64,9 +69,9 @@ internal static class Gstr1ReportSalesMappingTests
 
         var result = service.Import(workbook, workbook.FilePath, 1,
             registration, "Fixture Co", "2025-26",
-            new Dictionary<string, string>(), string.Empty, string.Empty, "fixturehash");
+            new Dictionary<string, string>(), "LOCAL", "SINGLE", "fixturehash");
 
-        Check(result.Records.Count == 2, "Repeated invoice/secondary tabs created duplicate vouchers.");
+        Check(result.Records.Count == 3, "Repeated invoice/secondary tabs created duplicate vouchers.");
         var first = result.Records.Single(record => record.DocumentNumber == "MTIPL-1");
         Check(first.Cess == 0m && first.TaxableValue == 847.46m &&
               first.Cgst == 76.27m && first.Sgst == 76.27m &&
@@ -77,6 +82,11 @@ internal static class Gstr1ReportSalesMappingTests
         Check(second.TaxableValue == 847.46m && second.Cgst == 76.27m &&
               second.Sgst == 76.27m && second.DocumentValue == 1000m,
             "Repeated tax rows were not folded into one original invoice value.");
+
+        var interstate = result.Records.Single(record => record.DocumentNumber == "MTIPL-3");
+        Check(interstate.Igst == 180m && interstate.Cgst == 0m && interstate.Sgst == 0m &&
+              interstate.PlaceOfSupply == "23",
+              "Portal's inter-state IGST or numeric POS was overwritten by the generic local tax setting.");
 
         var refused = false;
         try
