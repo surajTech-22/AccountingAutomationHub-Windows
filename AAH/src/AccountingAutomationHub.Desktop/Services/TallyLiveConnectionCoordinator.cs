@@ -3244,6 +3244,29 @@ Tally-style report availability
                                state is null || state.LastFullSyncUtc == DateTime.MinValue || state.LastAlterId <= 0 ||
                                countReduced || !fullVoucherAuthorityReady || !ledgerMasterIdentityReady || !stockMasterIdentityReady;
 
+            // CL019 v643: a consolidated adaptive import can have 645
+            // individually verified native Voucher INDEX+full-XML rows after
+            // ALTERIDs 7879 -> 8525, while ERP9's tiny global $LastAlterID
+            // pulse still reports an unavailable/stale marker. Treat this as
+            // an UNCONSUMED normal Master+Voucher delta, not an idle heartbeat.
+            // The shared coordinator remains the ONLY checkpoint owner.
+            var postImportIndex = Array.Empty<TallyVoucherIndexRecord>();
+            var postImportNativeAlterId = 0L;
+            if (!needBaseline && state is not null)
+            {
+                var nativeIndex = _repository.GetVoucherIndexRange(
+                    company.CompanyKey, client.FinancialYear, fromDate, toDate);
+                var nativeFull = _repository.GetVoucherXmlAuthorityByMasterIds(
+                    company.CompanyKey, client.FinancialYear,
+                    nativeIndex.Select(x => x.MasterId.Trim()).ToHashSet(
+                        StringComparer.OrdinalIgnoreCase));
+                postImportNativeAlterId =
+                    TallyNativeAlterIdCheckpointPolicy.GetUnconsumedVerifiedFyAlterId(
+                        state, nativeIndex, nativeFull);
+                if (postImportNativeAlterId > state.LastAlterId)
+                    postImportIndex = nativeIndex.ToArray();
+            }
+
             if (needBaseline)
             {
                 LastOperationStatus = forceFullBaseline
@@ -3338,7 +3361,8 @@ Tally-style report availability
                         $"{reason}: live Tally Voucher authority synchronized");
                 LastOperationStatus = $"{reason}: complete baseline ready • ALTERID {baselineAlterId:N0} • {vouchers.Count:N0} FY Voucher indexes + {fullVouchers.Count:N0} complete Voucher object(s) • missing bound {missingVoucherBindings.Missing:N0} (delete-candidate {missingVoucherBindings.MissingCandidates:N0}, rebind {missingVoucherBindings.RebindRequired:N0}).";
             }
-            else if (!marker.HasReliableAlterId || marker.LastAlterId <= state!.LastAlterId)
+            else if ((!marker.HasReliableAlterId || marker.LastAlterId <= state!.LastAlterId) &&
+                     postImportNativeAlterId <= (state?.LastAlterId ?? 0))
             {
                 // FIXED41: a pulse token/count may never be acknowledged unless the local
                 // Master + active-FY Voucher authority is already proved complete. This
@@ -3368,8 +3392,17 @@ Tally-style report availability
             {
                 ConnectionStatus = "Tally connected • merging ALTERID delta";
                 LastOperationStatus = $"{reason}: reading changes after ALTERID {state.LastAlterId:N0}…";
+                var previousCheckpoint = state.LastAlterId;
                 var delta = await _httpService.ExportAuthorityChangesAfterAlterIdAsync(
-                    company, fromDate, toDate, state.LastAlterId);
+                    company, fromDate, toDate, previousCheckpoint);
+                // Never elevate a native FY voucher readback to GLOBAL Tally
+                // authority by itself: require the existing master+voucher
+                // delta to contain every locally proven higher-ALTERID voucher.
+                // In particular a new Cash master may have ALTERID 7880,
+                // while the 645 verified vouchers begin at 7881.
+                if (postImportNativeAlterId > previousCheckpoint)
+                    TallyNativeAlterIdCheckpointPolicy.RequireDeltaCoversUnconsumedVouchers(
+                        postImportIndex, delta.Vouchers, previousCheckpoint);
                 var masterDelta = await Task.Run(() => _masterSyncService.SynchronizeDelta(
                     delta.Xml, client.Id, client.FinancialYear, company.Name));
                 _repository.UpsertVoucherIndexRecords(company.CompanyKey, client.FinancialYear, delta.Vouchers);
@@ -3379,7 +3412,9 @@ Tally-style report availability
                     throw new InvalidOperationException("Tally ALTERID delta left the full FY Voucher authority incomplete. The checkpoint was not advanced.");
                 if (!HasCompleteLiveAccountingMasterAuthority(client, marker))
                     throw new InvalidOperationException("Tally ALTERID delta did not restore the complete Ledger/Group Master authority. The checkpoint was not advanced; the next 5-second pulse will repair from baseline.");
-                var nextAlterId = Math.Max(marker.LastAlterId, delta.MaxAlterId);
+                var nextAlterId = Math.Max(Math.Max(
+                    marker.LastAlterId, delta.MaxAlterId),
+                    Math.Max(state.LastAlterId, postImportNativeAlterId));
                 state.LastTallyChangeToken = marker.Token;
                 state.LastVoucherCount = marker.VoucherCount;
                 state.LastFyVoucherCount = localFyVoucherCount;
