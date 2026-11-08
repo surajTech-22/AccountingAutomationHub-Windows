@@ -560,8 +560,7 @@ public sealed class TallyBranchConsolidationImportService(TallyHttpService tally
         // caused Tally to return Ignored=1 on the 08-Nov CL019 rename even
         // though ACTION=Alter was present. ONLY the already-verified, exact
         // same-MASTERID Cash name migration uses DUPMODIFY.
-        TallyExcelParityXmlWriter.BeginAllMastersImport(
-            xml, companyName, verifiedRenameExistingMaster: true);
+        TallyExcelParityXmlWriter.BeginVerifiedMasterAlterImport(xml, companyName);
         // Tally's documented master rename imports by ORIGINAL NAME, not
         // by importing Tally's own generated MASTERID/GUID inside the object.
         // The MASTERID and GUID were verified in TWO fresh native exports
