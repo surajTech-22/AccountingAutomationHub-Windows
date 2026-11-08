@@ -28,8 +28,7 @@ internal static class Gstr1ReportWorksheetNormalizer
             sheet.Name.Trim().Equals("GSTR1 Report", StringComparison.OrdinalIgnoreCase));
         if (report is null) return false;
 
-        var headers = FindHeader(report);
-        if (headers is null)
+        var headers = FindHeader(report) ??
             throw new InvalidDataException("GSTR1 Report worksheet was found but its invoice/date/tax headers are not complete.");
 
         var reportGstin = FindReportGstin(report);
@@ -46,6 +45,14 @@ internal static class Gstr1ReportWorksheetNormalizer
         var values = new List<InvoiceLine>();
         for (var row = headers.Row + 1; row <= report.MaxRow; row++)
         {
+            string Cell(params string[] names)
+            {
+                foreach (var name in names)
+                    if (headers.Columns.TryGetValue(name, out var column))
+                        return report.GetCell(row, column).Trim();
+                return string.Empty;
+            }
+
             var invoice = Cell("INVOICENO", "INVOICENUMBER");
             if (invoice.Length == 0 || invoice.Equals("Total", StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -87,15 +94,6 @@ internal static class Gstr1ReportWorksheetNormalizer
                 invoice, date, Cell("PARTYNAME"), customerGstin, type,
                 invoiceValue, Amount(Cell("RATE")), taxable,
                 igst, cgst, sgst, cess, pos));
-            continue;
-
-            string Cell(params string[] names)
-            {
-                foreach (var name in names)
-                    if (headers.Columns.TryGetValue(name, out var column))
-                        return report.GetCell(row, column).Trim();
-                return string.Empty;
-            }
         }
 
         // Merge repeated rate lines of the SAME invoice. The portal repeats the
