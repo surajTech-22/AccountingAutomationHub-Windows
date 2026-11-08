@@ -36,7 +36,7 @@ internal static class Gstr1ReportSalesMappingTests
             [14] = Indexed(
                 "24", "Customer C", "Sale", "MTIPL-3", "25/04/2025",
                 "1180", "18", "0", "1000", "180", "0", "0", "0", "23"),
-            [15] = new Dictionary<int, string> { [1] = "Total", [6] = "3180" }
+            [15] = new Dictionary<int, string> { [1] = "Total", [4] = "24", [5] = "24", [6] = "3180" }
         };
         var workbook = new OpenXmlWorkbookData
         {
