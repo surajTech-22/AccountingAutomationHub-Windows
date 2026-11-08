@@ -470,19 +470,19 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             (bool)cashToggleProof.Invoke(null, new object[] {
                 desired, current, snapshots, saved, mapping ?? cashNames
             })!;
-        var onlyCashOn = new XElement(desiredBankXml);
+        var onlyCashOn = new System.Xml.Linq.XElement(desiredBankXml);
         onlyCashOn.Element("VOUCHERTYPENAME")!.Value = "Contra - Karnataka";
         onlyCashOn.Descendants("LEDGERNAME").Last().Value = "Cash - Karnataka";
         var savedPlainCash = SavedCash(oldBank, cl019OldCashNative);
         if (!ToggleCash(onlyCashOn, oldBank, cl019OldCashNative, savedPlainCash))
             throw new InvalidOperationException(
                 "v642 Separate Cash ON did not select same-MASTERID Cash-only ALTER.");
-        var onlyCashOnOther = new XElement(onlyCashOn);
+        var onlyCashOnOther = new System.Xml.Linq.XElement(onlyCashOn);
         onlyCashOnOther.Descendants("LEDGERNAME").Last().Value = "Cash - Gujarat";
         if (ToggleCash(onlyCashOnOther, oldBank, cl019OldCashNative, savedPlainCash))
             throw new InvalidOperationException(
                 "v642 Cash ON could send posting to another branch Cash ledger.");
-        var onlyCashOnAmount = new XElement(onlyCashOn);
+        var onlyCashOnAmount = new System.Xml.Linq.XElement(onlyCashOn);
         onlyCashOnAmount.Descendants("AMOUNT").Last().Value = "500001";
         if (ToggleCash(onlyCashOnAmount, oldBank, cl019OldCashNative, savedPlainCash))
             throw new InvalidOperationException("v642 Cash ON changed debit or credit amount.");
@@ -504,7 +504,7 @@ internal static class TallyConsolidatedVoucherImportGuardTests
             new TallyVoucherXmlSnapshot("355", bankGuid, "Contra - Karnataka",
                 oldBank.VoucherDate!.Value, reverseNative) { AlterId = "5944" }
         };
-        var onlyCashOff = new XElement(onlyCashOn);
+        var onlyCashOff = new System.Xml.Linq.XElement(onlyCashOn);
         onlyCashOff.Descendants("LEDGERNAME").Last().Value = "Cash";
         var savedBranchCash = SavedCash(reversedIndex, reversedFull);
         if (!ToggleCash(onlyCashOff, reversedIndex, reversedFull, savedBranchCash))
