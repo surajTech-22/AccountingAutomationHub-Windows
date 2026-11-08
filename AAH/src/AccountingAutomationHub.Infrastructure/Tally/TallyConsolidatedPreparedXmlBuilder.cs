@@ -594,8 +594,13 @@ public static class TallyConsolidatedPreparedXmlBuilder
             // This AAH-only identity map never goes to Tally. It proves
             // "Cash - Karnataka" belongs to the exact B-... voucher scope
             // when an original Cash line is changed in one bound ALTER.
-            BranchCashLedgerNamesById = plan.CashLedgers.ToDictionary(
-                item => item.BranchId, item => item.Name,
+            // Keep the OWNERSHIP map even when Separate Branch Cash is OFF.
+            // A later Cash - Karnataka -> Cash reverse selection must know
+            // the existing live ledger belongs to that exact B-... branch.
+            // This stays AAH-only and does NOT CREATE any Cash master.
+            BranchCashLedgerNamesById = prepared.ToDictionary(
+                item => item.Branch.BranchId,
+                item => "Cash - " + item.Branch.DisplayName.Trim(),
                 StringComparer.OrdinalIgnoreCase)
         };
     }
