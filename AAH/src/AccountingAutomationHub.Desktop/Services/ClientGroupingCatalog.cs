@@ -176,12 +176,18 @@ public static class ClientGroupFolderTypes
     public const string Auditor = "Auditor";
     public const string CompanyGroup = "Company Group";
 
+    // Ownership accounting is opt-in and separate from normal CA/Auditor/Company groups.
+    // Individual is a normal folder for a person's records; it has no automatic
+    // accounting effect unless placed inside an Owner Group.
+    public const string OwnerGroup = "Owner Group";
+    public const string Individual = "Individual";
+
     // Compatibility aliases for older source gates/callers. These are now ordinary creatable
     // Group types, not synthetic fixed roots.
     public const string RootFirm = Firm;
     public const string RootCompany = Company;
 
-    public static IReadOnlyList<string> CreatableTypes { get; } = [Firm, Company, Ca, Auditor, CompanyGroup];
+    public static IReadOnlyList<string> CreatableTypes { get; } = [Firm, Company, Ca, Auditor, CompanyGroup, OwnerGroup, Individual];
     public static IReadOnlyList<string> ChildTypes { get; } = CreatableTypes;
 
     // There are no fixed Group records in R20. A blank ParentId means topmost.
@@ -195,6 +201,8 @@ public static class ClientGroupFolderTypes
         if (text.Equals(Ca, StringComparison.OrdinalIgnoreCase)) return Ca;
         if (text.Equals(Auditor, StringComparison.OrdinalIgnoreCase)) return Auditor;
         if (text.Equals(CompanyGroup, StringComparison.OrdinalIgnoreCase)) return CompanyGroup;
+        if (text.Equals(OwnerGroup, StringComparison.OrdinalIgnoreCase)) return OwnerGroup;
+        if (text.Equals(Individual, StringComparison.OrdinalIgnoreCase)) return Individual;
         return CompanyGroup;
     }
 }

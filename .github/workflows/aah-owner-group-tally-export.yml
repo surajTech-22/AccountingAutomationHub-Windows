@@ -1,0 +1,44 @@
+name: AAH Owner Group Sample Tally XML Export Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AAH/Tests/AAH.BankXmlValidator.Tests/**'
+      - 'AAH/src/AccountingAutomationHub.Infrastructure/Tally/TallyBankXmlContractValidator.cs'
+      - 'AAH/src/AccountingAutomationHub.Infrastructure/Tally/TallyErp9ExactBankVoucherXmlBuilder.cs'
+      - 'AAH/src/AccountingAutomationHub.Infrastructure/Tally/TallyExcelParityXmlWriter.cs'
+      - '.github/workflows/aah-owner-group-tally-export.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-tally-xml:
+    name: Validate and publish synthetic multi-company Tally XML files
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run production writer and pre-send XML validator on synthetic group
+        shell: pwsh
+        env:
+          AAH_SAMPLE_OUTPUT_DIR: AAH-Sample-Tally-Exports
+        run: |
+          dotnet run --project AAH/Tests/AAH.BankXmlValidator.Tests/AAH.BankXmlValidator.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic Group Tally XML generation/validation failed.' }
+          $xmlFiles = @(Get-ChildItem "$env:AAH_SAMPLE_OUTPUT_DIR" -Filter '*.xml')
+          $expected = 8
+          if ($xmlFiles.Count -ne $expected) { throw "Expected $expected XML exports, found $($xmlFiles.Count)." }
+          if (-not (Test-Path "$env:AAH_SAMPLE_OUTPUT_DIR/validation_manifest.json")) { throw 'Validation manifest missing.' }
+      - name: Retain sample XML and structured test manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-OwnerGroup-Synthetic-Tally-XML
+          path: AAH-Sample-Tally-Exports/**
+          if-no-files-found: error
+          retention-days: 14
