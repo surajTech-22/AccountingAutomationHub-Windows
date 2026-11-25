@@ -59,6 +59,15 @@ public sealed class SqliteFinanceControlRepository
             CREATE INDEX IF NOT EXISTS IX_FinanceAudit_ClientFyUtc
             ON FinanceAuditEvents(ClientId,FinancialYear,ChangedUtc DESC);
 
+            CREATE INDEX IF NOT EXISTS IX_FinanceAudit_ClientFyId
+            ON FinanceAuditEvents(ClientId,FinancialYear,Id DESC);
+
+            CREATE TABLE IF NOT EXISTS FinanceMaintenanceState
+            (
+                RepairKey       TEXT PRIMARY KEY,
+                CompletedUtc    TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS AccountingPeriodLocks
             (
                 Id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1022,7 +1031,12 @@ public sealed class SqliteFinanceControlRepository
 
     private static void CreateAuditTriggers(SqliteConnection connection)
     {
-        var specs=new[]{
+        var needsTriggerUpgrade = true;
+        if (HasFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-TRIGGERS-NOOP-GUARD-V1"))
+            needsTriggerUpgrade = false;
+
+        var specs = new[]
+        {
             (Table:"BankTransactions",Module:"Banking",Key:"COALESCE(NEW.TransactionId,CAST(NEW.Id AS TEXT))",Old:"COALESCE(OLD.LedgerName,'')||'|'||COALESCE(OLD.MappingStatus,'')",New:"COALESCE(NEW.LedgerName,'')||'|'||COALESCE(NEW.MappingStatus,'')"),
             (Table:"CashEntries",Module:"Cash Entry",Key:"COALESCE(NEW.EntryId,CAST(NEW.Id AS TEXT))",Old:"COALESCE(OLD.EntryLedger,'')||'|'||COALESCE(OLD.MappedMasterLedger,'')",New:"COALESCE(NEW.EntryLedger,'')||'|'||COALESCE(NEW.MappedMasterLedger,'')"),
             (Table:"SalesRecords",Module:"Sales",Key:"COALESCE(NEW.DocumentNumber,CAST(NEW.Id AS TEXT))",Old:"COALESCE(OLD.CustomerName,'')||'|'||OLD.DocumentValue",New:"COALESCE(NEW.CustomerName,'')||'|'||NEW.DocumentValue"),
@@ -1031,19 +1045,340 @@ public sealed class SqliteFinanceControlRepository
             (Table:"StockItems",Module:"Stock Master",Key:"COALESCE(NEW.Name,CAST(NEW.Id AS TEXT))",Old:"COALESCE(OLD.Name,'')||'|'||COALESCE(OLD.StockGroup,'')",New:"COALESCE(NEW.Name,'')||'|'||COALESCE(NEW.StockGroup,'')"),
             (Table:"JournalVouchers",Module:"Journal",Key:"CAST(NEW.Id AS TEXT)",Old:"COALESCE(OLD.Narration,'')",New:"COALESCE(NEW.Narration,'')")
         };
-        foreach(var s in specs)
+        foreach (var s in specs)
         {
-            using var command=connection.CreateCommand();
-            command.CommandText=$"""
+            using var command = connection.CreateCommand();
+            var dropOldUpdate = needsTriggerUpgrade ? $"DROP TRIGGER IF EXISTS TR_Audit_{s.Table}_AU;\n" : string.Empty;
+            command.CommandText = $"""
             CREATE TRIGGER IF NOT EXISTS TR_Audit_{s.Table}_AI AFTER INSERT ON {s.Table}
             BEGIN INSERT INTO FinanceAuditEvents(ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,ChangedUtc) VALUES(NEW.ClientId,NEW.FinancialYear,'{s.Module}','{s.Table}',{s.Key},'Insert','',{s.New},strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
-            CREATE TRIGGER IF NOT EXISTS TR_Audit_{s.Table}_AU AFTER UPDATE ON {s.Table}
+            {dropOldUpdate}CREATE TRIGGER IF NOT EXISTS TR_Audit_{s.Table}_AU AFTER UPDATE ON {s.Table}
+            WHEN ({s.Old}) <> ({s.New})
             BEGIN INSERT INTO FinanceAuditEvents(ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,ChangedUtc) VALUES(NEW.ClientId,NEW.FinancialYear,'{s.Module}','{s.Table}',{s.Key},'Update',{s.Old},{s.New},strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
             CREATE TRIGGER IF NOT EXISTS TR_Audit_{s.Table}_BD BEFORE DELETE ON {s.Table}
             BEGIN INSERT INTO FinanceAuditEvents(ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,ChangedUtc) VALUES(OLD.ClientId,OLD.FinancialYear,'{s.Module}','{s.Table}',CAST(OLD.Id AS TEXT),'Delete',{s.Old},'',strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
             """;
-            try{command.ExecuteNonQuery();}catch(SqliteException){/* older database missing optional table/column: feature remains isolated */}
+            try { command.ExecuteNonQuery(); } catch (SqliteException) { /* older database missing optional table/column: feature remains isolated */ }
         }
+
+        if (needsTriggerUpgrade)
+            TrySetFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-TRIGGERS-NOOP-GUARD-V1");
+    }
+
+    public sealed record FinanceAuditCompactionResult(
+        int TriggerCountUpdated,
+        long DeletedOrCompactedRows,
+        long BytesBefore,
+        long BytesAfter,
+        bool Vacuumed,
+        string Status);
+
+    public static FinanceAuditCompactionResult RunStartupAuditCompactionIfNeeded(string? databasePath = null)
+    {
+        var dbPath = string.IsNullOrWhiteSpace(databasePath)
+            ? ApplicationDataPaths.DatabasePath
+            : Path.GetFullPath(databasePath);
+        if (!File.Exists(dbPath))
+            return new FinanceAuditCompactionResult(0, 0, 0, 0, false, "Database not present.");
+
+        var bytesBefore = new FileInfo(dbPath).Length;
+        SqliteConnection? connection = null;
+        try
+        {
+            connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false,
+                DefaultTimeout = 15
+            }.ToString());
+            connection.Open();
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=15000;";
+                pragma.ExecuteNonQuery();
+            }
+
+            if (!TableExists(connection, "FinanceAuditEvents"))
+                return new FinanceAuditCompactionResult(0, 0, bytesBefore, bytesBefore, false, "FinanceAuditEvents table not initialized yet.");
+
+            EnsureFinanceMaintenanceStateTable(connection);
+
+            var triggerCountUpdated = 0;
+            if (!HasFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-TRIGGERS-NOOP-GUARD-V1"))
+            {
+                CreateAuditTriggers(connection);
+                triggerCountUpdated = 7;
+            }
+
+            long removedRows = 0;
+            if (!HasFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-NOOP-COMPACT-V1"))
+            {
+                removedRows = CompactAuditEventsTable(connection, maxRetainedRows: 100000);
+                TrySetFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-NOOP-COMPACT-V1");
+            }
+
+            var vacuumed = false;
+            if (!HasFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-VACUUM-V1"))
+            {
+                var (didVacuum, canMarkDone) = TryVacuumFreelistIfNeeded(connection, dbPath);
+                vacuumed = didVacuum;
+                if (canMarkDone)
+                    TrySetFinanceMaintenanceMarker(connection, "FIX-FINANCE-AUDIT-VACUUM-V1");
+            }
+
+            var bytesAfter = File.Exists(dbPath) ? new FileInfo(dbPath).Length : bytesBefore;
+            return new FinanceAuditCompactionResult(
+                triggerCountUpdated,
+                removedRows,
+                bytesBefore,
+                bytesAfter,
+                vacuumed,
+                $"Startup audit compaction completed (removed={removedRows:N0}, vacuumed={vacuumed}, bytes={bytesBefore:N0}->{bytesAfter:N0}).");
+        }
+        catch (Exception exception)
+        {
+            TryWriteStorageMaintenanceLog($"RunStartupAuditCompactionIfNeeded error: {exception.Message}");
+            var currentBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : bytesBefore;
+            return new FinanceAuditCompactionResult(0, 0, bytesBefore, currentBytes, false, exception.Message);
+        }
+        finally
+        {
+            if (connection is not null)
+            {
+                try { connection.Close(); } catch { }
+                try { SqliteConnection.ClearPool(connection); } catch { }
+                connection.Dispose();
+            }
+        }
+    }
+
+    public static int PruneExcessAuditEventsSafe(string? databasePath = null, int maxRetainedRows = 100000)
+    {
+        if (maxRetainedRows < 1000) maxRetainedRows = 1000;
+        var dbPath = string.IsNullOrWhiteSpace(databasePath)
+            ? ApplicationDataPaths.DatabasePath
+            : Path.GetFullPath(databasePath);
+        if (!File.Exists(dbPath)) return 0;
+
+        SqliteConnection? connection = null;
+        try
+        {
+            connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false,
+                DefaultTimeout = 5
+            }.ToString());
+            connection.Open();
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=5000;";
+                pragma.ExecuteNonQuery();
+            }
+
+            if (!TableExists(connection, "FinanceAuditEvents")) return 0;
+
+            using var countCmd = connection.CreateCommand();
+            countCmd.CommandText = "SELECT COUNT(*) FROM FinanceAuditEvents;";
+            var total = Convert.ToInt64(countCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            if (total <= maxRetainedRows + 20000) return 0;
+
+            using var cutoffCmd = connection.CreateCommand();
+            cutoffCmd.CommandText = "SELECT Id FROM FinanceAuditEvents ORDER BY Id DESC LIMIT 1 OFFSET $Offset;";
+            cutoffCmd.Parameters.AddWithValue("$Offset", maxRetainedRows);
+            var cutoffScalar = cutoffCmd.ExecuteScalar();
+            if (cutoffScalar is null || cutoffScalar is DBNull) return 0;
+            var cutoffId = Convert.ToInt64(cutoffScalar, CultureInfo.InvariantCulture);
+
+            using var tx = connection.BeginTransaction();
+            using var delCmd = connection.CreateCommand();
+            delCmd.Transaction = tx;
+            delCmd.CommandText = "DELETE FROM FinanceAuditEvents WHERE Id < $CutoffId OR (Operation='Update' AND OldValue=NewValue);";
+            delCmd.Parameters.AddWithValue("$CutoffId", cutoffId);
+            var deleted = delCmd.ExecuteNonQuery();
+            tx.Commit();
+
+            if (deleted > 0)
+            {
+                using var vacCmd = connection.CreateCommand();
+                vacCmd.CommandText = "PRAGMA incremental_vacuum(2000);";
+                vacCmd.ExecuteNonQuery();
+            }
+            return deleted;
+        }
+        catch
+        {
+            return 0;
+        }
+        finally
+        {
+            if (connection is not null)
+            {
+                try { connection.Close(); } catch { }
+                try { SqliteConnection.ClearPool(connection); } catch { }
+                connection.Dispose();
+            }
+        }
+    }
+
+    private static bool TableExists(SqliteConnection connection, string tableName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=$Name LIMIT 1);";
+        cmd.Parameters.AddWithValue("$Name", tableName);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static void EnsureFinanceMaintenanceStateTable(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "CREATE TABLE IF NOT EXISTS FinanceMaintenanceState (RepairKey TEXT PRIMARY KEY, CompletedUtc TEXT NOT NULL);";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static bool HasFinanceMaintenanceMarker(SqliteConnection connection, string key)
+    {
+        if (!TableExists(connection, "FinanceMaintenanceState")) return false;
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM FinanceMaintenanceState WHERE RepairKey=$Key LIMIT 1);";
+        cmd.Parameters.AddWithValue("$Key", key);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static void TrySetFinanceMaintenanceMarker(SqliteConnection connection, string key)
+    {
+        if (!TableExists(connection, "FinanceMaintenanceState")) return;
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "INSERT INTO FinanceMaintenanceState(RepairKey,CompletedUtc) VALUES($Key,$Utc) " +
+            "ON CONFLICT(RepairKey) DO UPDATE SET CompletedUtc=excluded.CompletedUtc;";
+        cmd.Parameters.AddWithValue("$Key", key);
+        cmd.Parameters.AddWithValue("$Utc", DateTime.UtcNow.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static long CompactAuditEventsTable(SqliteConnection connection, int maxRetainedRows)
+    {
+        long beforeCount;
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM FinanceAuditEvents;";
+            beforeCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        if (beforeCount == 0) return 0;
+
+        bool hasNoop;
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM FinanceAuditEvents WHERE Operation='Update' AND OldValue=NewValue LIMIT 1);";
+            hasNoop = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+        }
+
+        if (!hasNoop && beforeCount <= maxRetainedRows)
+            return 0;
+
+        using var tx = connection.BeginTransaction();
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandTimeout = 300;
+            cmd.CommandText = $"""
+                DROP TABLE IF EXISTS temp.FinanceAuditEvents_Keep;
+                CREATE TEMP TABLE FinanceAuditEvents_Keep AS
+                SELECT Id,ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,Source,ChangedUtc
+                FROM FinanceAuditEvents
+                WHERE NOT (Operation='Update' AND OldValue=NewValue)
+                ORDER BY Id DESC
+                LIMIT {maxRetainedRows};
+                DROP TABLE FinanceAuditEvents;
+                CREATE TABLE FinanceAuditEvents
+                (
+                    Id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ClientId        INTEGER NOT NULL DEFAULT 0,
+                    FinancialYear   TEXT NOT NULL DEFAULT '',
+                    Module          TEXT NOT NULL DEFAULT '',
+                    EntityType      TEXT NOT NULL DEFAULT '',
+                    EntityKey       TEXT NOT NULL DEFAULT '',
+                    Operation       TEXT NOT NULL DEFAULT '',
+                    OldValue        TEXT NOT NULL DEFAULT '',
+                    NewValue        TEXT NOT NULL DEFAULT '',
+                    Source          TEXT NOT NULL DEFAULT 'Database Trigger',
+                    ChangedUtc      TEXT NOT NULL
+                );
+                INSERT INTO FinanceAuditEvents(Id,ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,Source,ChangedUtc)
+                SELECT Id,ClientId,FinancialYear,Module,EntityType,EntityKey,Operation,OldValue,NewValue,Source,ChangedUtc
+                FROM temp.FinanceAuditEvents_Keep
+                ORDER BY Id ASC;
+                DROP TABLE temp.FinanceAuditEvents_Keep;
+                CREATE INDEX IF NOT EXISTS IX_FinanceAudit_ClientFyUtc ON FinanceAuditEvents(ClientId,FinancialYear,ChangedUtc DESC);
+                CREATE INDEX IF NOT EXISTS IX_FinanceAudit_ClientFyId ON FinanceAuditEvents(ClientId,FinancialYear,Id DESC);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+
+        using var afterCmd = connection.CreateCommand();
+        afterCmd.CommandText = "SELECT COUNT(*) FROM FinanceAuditEvents;";
+        var afterCount = Convert.ToInt64(afterCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        return Math.Max(0, beforeCount - afterCount);
+    }
+
+    private static (bool Vacuumed, bool CanMarkDone) TryVacuumFreelistIfNeeded(SqliteConnection connection, string dbPath)
+    {
+        long pageSize, pageCount, freelistCount;
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA page_size;";
+            pageSize = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            cmd.CommandText = "PRAGMA page_count;";
+            pageCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            cmd.CommandText = "PRAGMA freelist_count;";
+            freelistCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        var freedBytes = freelistCount * pageSize;
+        if (freedBytes < 64L * 1024 * 1024) return (false, true);
+
+        var liveBytes = Math.Max(0L, pageCount - freelistCount) * pageSize;
+        var root = Path.GetPathRoot(Path.GetFullPath(dbPath));
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            var available = new DriveInfo(root).AvailableFreeSpace;
+            var required = Math.Max(liveBytes * 2L, 512L * 1024 * 1024) + 512L * 1024 * 1024;
+            if (available < required)
+            {
+                TryWriteStorageMaintenanceLog(
+                    $"Skipping VACUUM on {dbPath}: available free space {available:N0} bytes < required {required:N0} bytes.");
+                return (false, false);
+            }
+        }
+
+        using (var vac = connection.CreateCommand())
+        {
+            vac.CommandTimeout = 300;
+            vac.CommandText = "PRAGMA auto_vacuum = INCREMENTAL; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);";
+            vac.ExecuteNonQuery();
+        }
+        return (true, true);
+    }
+
+    private static void TryWriteStorageMaintenanceLog(string message)
+    {
+        try
+        {
+            var logFolder = Path.Combine(ApplicationDataPaths.RootFolder, "Logs");
+            Directory.CreateDirectory(logFolder);
+            File.AppendAllText(
+                Path.Combine(logFolder, "storage-maintenance.log"),
+                $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private static void CreatePeriodLockTriggers(SqliteConnection connection)

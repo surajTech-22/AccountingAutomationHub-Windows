@@ -607,8 +607,6 @@ public sealed class TallyAccountingVoucherExportService
             return result;
         }
 
-        const int minBatchSize = 10;
-        const int maxBatchSize = 400;
         var batchSize = Math.Min(160, prepared.Count);
         var recoveryBatches = new Stack<PreparedVoucher[]>();
         var knownLiveIds = liveBefore.Select(item => item.MasterId).ToHashSet(StringComparer.OrdinalIgnoreCase);

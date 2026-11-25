@@ -45,7 +45,7 @@ public sealed class FinancialStatementsViewModel : PageViewModel
     private string _previousYearDataMode = "Actual Previous Year Data";
     private IReadOnlyList<FinancialStatementMappingOption> _mappingCatalog = [];
     private CancellationTokenSource? _nceTallyRefreshCancellation;
-    private long _nceTallyRefreshGeneration;
+    private long _nceTallyRefreshGeneration = 0;
     private TallyLiveConnectionCoordinator? _tallyCoordinator;
     private string _preparationStatusText = "Financial Statements preparation waiting for data.";
     private bool _preparationRefreshQueued;

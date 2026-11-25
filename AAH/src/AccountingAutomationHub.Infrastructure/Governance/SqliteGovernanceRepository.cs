@@ -1516,6 +1516,14 @@ public sealed class SqliteGovernanceRepository
     {
         // Completion 19: Client/FY authority belongs to the AAH user, not to a Windows/Android device.
         // Preserve existing allowed device assignments by promoting them once to user scope.
+        using (var hasColumn = connection.CreateCommand())
+        {
+            hasColumn.CommandText =
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('LanDevices') WHERE name='UserName' COLLATE NOCASE LIMIT 1);";
+            if (Convert.ToInt32(hasColumn.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                return;
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO UserClientAccess(WindowsUserName,ClientId,FinancialYear,IsAllowed,UpdatedUtc,ExpiresUtc)

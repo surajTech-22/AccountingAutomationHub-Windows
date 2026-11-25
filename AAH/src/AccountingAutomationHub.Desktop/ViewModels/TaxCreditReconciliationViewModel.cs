@@ -6,6 +6,7 @@ using System.Windows;
 using Microsoft.Win32;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Services;
+using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Domain.Masters;
 using AccountingAutomationHub.Domain.Tax;
 using AccountingAutomationHub.Infrastructure.Journals;
@@ -736,7 +737,10 @@ public sealed class TaxCreditReconciliationViewModel : PageViewModel
                row.BooksReference.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                row.BooksParty.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                row.StatementAmount.ToString("N2", CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
-               row.StatementTds.ToString("N2", CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase);
+               row.StatementTds.ToString("N2", CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
+               FlexibleFilterMatcher.MatchesAmount(row.StatementAmount, search) ||
+               FlexibleFilterMatcher.MatchesAmount(row.StatementTds, search) ||
+               FlexibleFilterMatcher.MatchesAmount(row.StatementDeposited, search);
     }
 
     private void ApplyVisibleSummary(IReadOnlyCollection<TaxCreditReconciliationRow> visible)

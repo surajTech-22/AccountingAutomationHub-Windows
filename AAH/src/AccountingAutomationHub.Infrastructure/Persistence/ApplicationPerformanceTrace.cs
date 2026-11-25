@@ -15,11 +15,14 @@ public static class ApplicationPerformanceTrace
     public static IDisposable Measure(string operation, string detail = "") =>
         new Measurement(operation, detail);
 
+    private const long MaxTraceBytes = 5L * 1024 * 1024;
+    private const int MaxRotatedArchives = 2;
+
     public static void Record(string operation, double durationMs, string detail = "")
     {
         try
         {
-            var process = Process.GetCurrentProcess();
+            using var process = Process.GetCurrentProcess();
             var line = string.Join(",", new[]
             {
                 Csv(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)),
@@ -61,6 +64,7 @@ public static class ApplicationPerformanceTrace
         {
             var folder = Path.GetDirectoryName(LogPath)!;
             Directory.CreateDirectory(folder);
+            RotateIfNeeded(folder, LogPath);
             var newFile = !File.Exists(LogPath);
             var builder = new StringBuilder();
             if (newFile) builder.AppendLine("Timestamp,Operation,DurationMs,ThreadId,WorkingSetBytes,PrivateBytes,ProcessThreads,Detail");
@@ -68,6 +72,22 @@ public static class ApplicationPerformanceTrace
             if (builder.Length > 0) File.AppendAllText(LogPath, builder.ToString(), new UTF8Encoding(false));
         }
         catch { }
+    }
+
+    public static void RotateIfNeeded(string folder, string logPath)
+    {
+        if (!File.Exists(logPath)) return;
+        var info = new FileInfo(logPath);
+        if (info.Length < MaxTraceBytes) return;
+
+        var archive = Path.Combine(folder, $"performance-trace-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
+        File.Move(logPath, archive, true);
+        foreach (var stale in Directory.EnumerateFiles(folder, "performance-trace-*.csv")
+                     .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+                     .Skip(MaxRotatedArchives))
+        {
+            try { File.Delete(stale); } catch { }
+        }
     }
 
     private static string Csv(string value)

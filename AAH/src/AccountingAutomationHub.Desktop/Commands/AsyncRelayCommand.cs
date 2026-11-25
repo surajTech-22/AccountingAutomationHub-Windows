@@ -37,8 +37,16 @@ public sealed class AsyncRelayCommand(
         }
     }
 
-    public void RaiseCanExecuteChanged() =>
-        CanExecuteChanged?.Invoke(
-            this,
-            EventArgs.Empty);
+    public void RaiseCanExecuteChanged()
+    {
+        var handler = CanExecuteChanged;
+        if (handler is null) return;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            handler(this, EventArgs.Empty);
+        else
+            _ = dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.DataBind,
+                new Action(() => CanExecuteChanged?.Invoke(this, EventArgs.Empty)));
+    }
 }

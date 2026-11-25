@@ -222,6 +222,8 @@ public partial class App : System.Windows.Application
                         MessageBoxButton.OK,
                         MessageBoxImage.Error);
                 }
+
+                await Task.Run(() => SqliteFinanceControlRepository.RunStartupAuditCompactionIfNeeded());
             }
 
             // Keep only bounded AAH-owned reproducible storage. This runs off the UI thread and

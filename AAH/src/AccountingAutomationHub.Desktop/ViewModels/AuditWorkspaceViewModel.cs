@@ -12,6 +12,7 @@ using AccountingAutomationHub.Desktop.Models;
 using AccountingAutomationHub.Desktop.Views;
 using AccountingAutomationHub.Domain.Audit;
 using AccountingAutomationHub.Domain.Banking;
+using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Audit;
 using AccountingAutomationHub.Infrastructure.Banking;
@@ -3417,7 +3418,15 @@ public sealed class AuditWorkspaceViewModel : ViewModelBase, IDisposable
             row.Debit.ToString("0.00"), row.Credit.ToString("0.00"), row.Amount.ToString("0.00"),
             row.TaxableValue.ToString("0.00"), row.GstAmount.ToString("0.00"), row.GstRate.ToString("0.####")
         });
-        return tokens.All(token => haystack.Contains(token, StringComparison.OrdinalIgnoreCase));
+        var hasParsedDate = FlexibleFilterMatcher.TryParseFlexibleDate(row.DateText, out var parsedRowDate);
+        return tokens.All(token =>
+            haystack.Contains(token, StringComparison.OrdinalIgnoreCase) ||
+            (hasParsedDate && FlexibleFilterMatcher.MatchesDate(parsedRowDate, token)) ||
+            FlexibleFilterMatcher.MatchesAmount(row.Debit, token) ||
+            FlexibleFilterMatcher.MatchesAmount(row.Credit, token) ||
+            FlexibleFilterMatcher.MatchesAmount(row.Amount, token) ||
+            FlexibleFilterMatcher.MatchesAmount(row.TaxableValue, token) ||
+            FlexibleFilterMatcher.MatchesAmount(row.GstAmount, token));
     }
 
     private string CurrentAccountingWorkbenchFilterText()
@@ -6166,7 +6175,15 @@ public sealed class AuditWorkspaceViewModel : ViewModelBase, IDisposable
                 row.Debit.ToString("0.00"), row.Credit.ToString("0.00"), row.Amount.ToString("0.00"),
                 row.TaxableValue.ToString("0.00"), row.GstAmount.ToString("0.00"), row.GstRate.ToString("0.####")
             });
-            return tokens.All(token => haystack.Contains(token, StringComparison.OrdinalIgnoreCase));
+            var hasParsedDate = FlexibleFilterMatcher.TryParseFlexibleDate(row.DateText, out var parsedRowDate);
+            return tokens.All(token =>
+                haystack.Contains(token, StringComparison.OrdinalIgnoreCase) ||
+                (hasParsedDate && FlexibleFilterMatcher.MatchesDate(parsedRowDate, token)) ||
+                FlexibleFilterMatcher.MatchesAmount(row.Debit, token) ||
+                FlexibleFilterMatcher.MatchesAmount(row.Credit, token) ||
+                FlexibleFilterMatcher.MatchesAmount(row.Amount, token) ||
+                FlexibleFilterMatcher.MatchesAmount(row.TaxableValue, token) ||
+                FlexibleFilterMatcher.MatchesAmount(row.GstAmount, token));
         }
 
         bool MatchesLedgerVisibility(AuditRecordRow row)

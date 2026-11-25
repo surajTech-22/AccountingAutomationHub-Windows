@@ -19,6 +19,7 @@ public static class ApplicationStorageMaintenanceService
         try { PruneDiagnostics(); } catch { }
         try { PruneLogs(); } catch { }
         try { PruneAahTemp(); } catch { }
+        try { Finance.SqliteFinanceControlRepository.PruneExcessAuditEventsSafe(); } catch { }
     }
 
     private static void PruneUpdateBackups()

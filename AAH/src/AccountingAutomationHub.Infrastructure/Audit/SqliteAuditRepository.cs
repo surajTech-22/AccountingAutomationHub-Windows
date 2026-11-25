@@ -1120,19 +1120,11 @@ public sealed class SqliteAuditRepository
         return result;
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var connection = new SqliteConnection(_auditConnectionString);
-        connection.Open();
-        return connection;
-    }
+    private SqliteConnection OpenConnection() =>
+        SqliteConnectionPolicy.Open(_auditConnectionString);
 
-    private SqliteConnection OpenAccountingConnection()
-    {
-        var connection = new SqliteConnection(_accountingConnectionString);
-        connection.Open();
-        return connection;
-    }
+    private SqliteConnection OpenAccountingConnection() =>
+        SqliteConnectionPolicy.Open(_accountingConnectionString);
 
     private static AuditClientProfile ReadClient(SqliteDataReader reader) => new()
     {

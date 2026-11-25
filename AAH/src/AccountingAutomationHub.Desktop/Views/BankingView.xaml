@@ -348,12 +348,6 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate><TextBlock Text="{Binding Mode, Mode=OneWay}" Padding="4,2"/></DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
-                                <DataGridTemplateColumn.CellEditingTemplate>
-                                    <DataTemplate>
-                                        <ComboBox ItemsSource="{Binding DataContext.BankModes, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                  SelectedItem="{Binding Mode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Ledger" IsReadOnly="True" Width="220" MinWidth="190" MaxWidth="360">
                                 <DataGridTemplateColumn.CellTemplate>

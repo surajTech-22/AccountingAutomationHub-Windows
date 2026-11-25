@@ -2030,7 +2030,8 @@ public sealed class TallyConsolidatedVoucherImportService(
         var originalType = destinationTypeBaseMap.TryGetValue(
             (voucherType ?? string.Empty).Trim(), out var baseType) &&
             !string.IsNullOrWhiteSpace(baseType)
-            ? baseType.Trim() : voucherType;
+            ? baseType.Trim()
+            : (voucherType ?? string.Empty);
         return BuildConsolidatedSourceAnchor(originalType, preparedNumber);
     }
 

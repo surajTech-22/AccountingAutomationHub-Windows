@@ -3391,8 +3391,9 @@ Tally-style report availability
             else
             {
                 ConnectionStatus = "Tally connected • merging ALTERID delta";
-                LastOperationStatus = $"{reason}: reading changes after ALTERID {state.LastAlterId:N0}…";
-                var previousCheckpoint = state.LastAlterId;
+                var currentState = state!;
+                LastOperationStatus = $"{reason}: reading changes after ALTERID {currentState.LastAlterId:N0}…";
+                var previousCheckpoint = currentState.LastAlterId;
                 var delta = await _httpService.ExportAuthorityChangesAfterAlterIdAsync(
                     company, fromDate, toDate, previousCheckpoint);
                 // Never elevate a native FY voucher readback to GLOBAL Tally
@@ -3414,33 +3415,33 @@ Tally-style report availability
                     throw new InvalidOperationException("Tally ALTERID delta did not restore the complete Ledger/Group Master authority. The checkpoint was not advanced; the next 5-second pulse will repair from baseline.");
                 var nextAlterId = Math.Max(Math.Max(
                     marker.LastAlterId, delta.MaxAlterId),
-                    Math.Max(state.LastAlterId, postImportNativeAlterId));
-                state.LastTallyChangeToken = marker.Token;
-                state.LastVoucherCount = marker.VoucherCount;
-                state.LastFyVoucherCount = localFyVoucherCount;
-                state.LastAlterId = nextAlterId;
-                state.LastIncrementalSyncUtc = DateTime.UtcNow;
+                    Math.Max(currentState.LastAlterId, postImportNativeAlterId));
+                currentState.LastTallyChangeToken = marker.Token;
+                currentState.LastVoucherCount = marker.VoucherCount;
+                currentState.LastFyVoucherCount = localFyVoucherCount;
+                currentState.LastAlterId = nextAlterId;
+                currentState.LastIncrementalSyncUtc = DateTime.UtcNow;
                 if (masterDelta.StockItemCount > 0 || marker.StockItemCount > 0)
                 {
-                    state.LastStockItemCount = _stockMasterRepository.GetStockItems(
+                    currentState.LastStockItemCount = _stockMasterRepository.GetStockItems(
                             client.Id, client.FinancialYear, includeArchived: false)
                         .Count(item => item.Source.Equals("Live Tally", StringComparison.OrdinalIgnoreCase) &&
                                        item.TallyMasterId.Trim().Length > 0);
-                    state.LastStockAuthorityUtc = DateTime.UtcNow;
+                    currentState.LastStockAuthorityUtc = DateTime.UtcNow;
                 }
-                state.LastStatus = $"{reason}: merged {masterDelta.UpsertedObjects:N0} master change(s) and {delta.Vouchers.Count:N0} complete voucher change(s) through ALTERID {nextAlterId:N0}.";
-                _repository.UpsertBankSyncState(state);
-                _repository.UpdateAuthorityCheckpoint(client.Id, company, marker, state.LastStatus);
+                currentState.LastStatus = $"{reason}: merged {masterDelta.UpsertedObjects:N0} master change(s) and {delta.Vouchers.Count:N0} complete voucher change(s) through ALTERID {nextAlterId:N0}.";
+                _repository.UpsertBankSyncState(currentState);
+                _repository.UpdateAuthorityCheckpoint(client.Id, company, marker, currentState.LastStatus);
                 if (masterDelta.UpsertedObjects > 0)
                 {
                     await _accountingRefreshCoordinator.RefreshAsync(client);
-                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Masters, state.LastStatus);
+                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Masters, currentState.LastStatus);
                     if (masterDelta.StockItemCount > 0 || masterDelta.UnitCount > 0 || masterDelta.GodownCount > 0)
-                        _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.StockMasters, state.LastStatus);
+                        _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.StockMasters, currentState.LastStatus);
                 }
                 if (delta.Vouchers.Count > 0 || delta.FullVouchers.Count > 0)
-                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Journal, state.LastStatus);
-                LastOperationStatus = state.LastStatus;
+                    _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Journal, currentState.LastStatus);
+                LastOperationStatus = currentState.LastStatus;
             }
 
             // Fix52: after the one normal baseline/delta has refreshed the shared

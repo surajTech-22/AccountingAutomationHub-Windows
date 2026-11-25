@@ -21,7 +21,7 @@ internal static class BankPdfDocumentClassifier
                 // Full-page scanner rasters remain scans even with a hidden OCR text layer.
                 double pageArea = (double)page.Width * (double)page.Height;
                 bool scannerRaster = pageArea > 0 && page.GetImages().Any(image =>
-                    (double)image.Bounds.Width * (double)image.Bounds.Height >= 0.55 * pageArea);
+                    (double)image.BoundingBox.Width * (double)image.BoundingBox.Height >= 0.55 * pageArea);
                 if (!scannerRaster && page.Text.Count(char.IsLetterOrDigit) >= 40)
                     textPages++;
                 else

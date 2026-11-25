@@ -267,6 +267,7 @@
                                 Binding="{Binding RoundOff, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat=N2}"
                                 Width="90" />
             <DataGridTemplateColumn Header="Purchase / Cost Ledger" SortMemberPath="PurchaseLedger"
+                                    IsReadOnly="True"
                                     Width="215">
                 <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
@@ -288,26 +289,6 @@
                                                      Background="White" />
                     </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
-                <DataGridTemplateColumn.CellEditingTemplate>
-                    <DataTemplate>
-                        <controls:SearchableComboBox x:Name="PurchaseLedgerEditor"
-                                                     IsEnabled="{Binding DataContext.CanEditPurchase, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                     SourceItems="{Binding DataContext.IndirectExpenseLedgerNames, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
-                                                     Text="{Binding PurchaseLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                     AllowCustomText="True"
-                                                     OpenOnFocus="True"
-                                                     HandleEnterKey="False"
-                                                     EnableMouseWheelSelection="False"
-                                                     GotKeyboardFocus="CostLedger_GotKeyboardFocus"
-                                                     DropDownClosed="CostLedger_DropDownClosed"
-                                                     LostKeyboardFocus="CostLedger_LostKeyboardFocus"
-                                                     ToolTip="Choose an Indirect Expenses ledger. Entering a new Purchase / Cost Ledger name creates it under Indirect Expenses."
-                                                     MinWidth="190"
-                                                     Padding="5,2"
-                                                     BorderBrush="{DynamicResource BorderBrush}"
-                                                     Background="White" />
-                    </DataTemplate>
-                </DataGridTemplateColumn.CellEditingTemplate>
             </DataGridTemplateColumn>
             <DataGridTextColumn Header="IGST Ledger"
                                 Binding="{Binding IgstLedger, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"

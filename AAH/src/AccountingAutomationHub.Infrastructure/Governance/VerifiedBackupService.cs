@@ -31,7 +31,30 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
 
     public void Start()
     {
-        _timer ??= new Timer(_ => _ = RunScheduledBackupAsync(), null, TimeSpan.FromSeconds(20), TimeSpan.FromHours(6));
+        _timer ??= new Timer(_ => _ = RunScheduledBackupSafeAsync(), null, TimeSpan.FromSeconds(20), TimeSpan.FromHours(6));
+    }
+
+    private async Task RunScheduledBackupSafeAsync()
+    {
+        try
+        {
+            await RunScheduledBackupAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                var logFolder = Path.Combine(ApplicationDataPaths.RootFolder, "Logs");
+                Directory.CreateDirectory(logFolder);
+                File.AppendAllText(
+                    Path.Combine(logFolder, "verified-backup.log"),
+                    $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} Scheduled backup error: {exception}{Environment.NewLine}");
+            }
+            catch { }
+        }
     }
 
     public async Task<VerifiedBackupRecord?> RunScheduledBackupAsync(CancellationToken cancellationToken = default)
@@ -152,16 +175,28 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
             var extracted = Path.Combine(tempRoot, "accounting-hub.db");
             database.ExtractToFile(extracted, true);
 
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            SqliteConnection? connection = null;
+            try
             {
-                DataSource = extracted,
-                Mode = SqliteOpenMode.ReadOnly
-            }.ToString()))
-            {
+                connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                {
+                    DataSource = extracted,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false
+                }.ToString());
                 connection.Open();
                 using var command = connection.CreateCommand();
                 command.CommandText = "PRAGMA integrity_check;";
                 integrity = Convert.ToString(command.ExecuteScalar()) ?? "unknown";
+            }
+            finally
+            {
+                if (connection is not null)
+                {
+                    try { connection.Close(); } catch { }
+                    try { SqliteConnection.ClearPool(connection); } catch { }
+                    connection.Dispose();
+                }
             }
 
             var auditEntry = archive.GetEntry("Data/audit-hub.db");
@@ -169,17 +204,31 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
             {
                 var auditExtracted = Path.Combine(tempRoot, "audit-hub.db");
                 auditEntry.ExtractToFile(auditExtracted, true);
-                using var auditConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+                SqliteConnection? auditConnection = null;
+                try
                 {
-                    DataSource = auditExtracted,
-                    Mode = SqliteOpenMode.ReadOnly
-                }.ToString());
-                auditConnection.Open();
-                using var auditCommand = auditConnection.CreateCommand();
-                auditCommand.CommandText = "PRAGMA integrity_check;";
-                var auditIntegrity = Convert.ToString(auditCommand.ExecuteScalar()) ?? "unknown";
-                if (!auditIntegrity.Equals("ok", StringComparison.OrdinalIgnoreCase))
-                    integrity = "AUDIT FAILED: " + auditIntegrity;
+                    auditConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+                    {
+                        DataSource = auditExtracted,
+                        Mode = SqliteOpenMode.ReadOnly,
+                        Pooling = false
+                    }.ToString());
+                    auditConnection.Open();
+                    using var auditCommand = auditConnection.CreateCommand();
+                    auditCommand.CommandText = "PRAGMA integrity_check;";
+                    var auditIntegrity = Convert.ToString(auditCommand.ExecuteScalar()) ?? "unknown";
+                    if (!auditIntegrity.Equals("ok", StringComparison.OrdinalIgnoreCase))
+                        integrity = "AUDIT FAILED: " + auditIntegrity;
+                }
+                finally
+                {
+                    if (auditConnection is not null)
+                    {
+                        try { auditConnection.Close(); } catch { }
+                        try { SqliteConnection.ClearPool(auditConnection); } catch { }
+                        auditConnection.Dispose();
+                    }
+                }
             }
         }
         catch (Exception exception)

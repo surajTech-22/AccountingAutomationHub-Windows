@@ -118,6 +118,8 @@ public sealed class ApplicationBackupService
             {
                 File.Move(replacement, ApplicationDataPaths.DatabasePath);
             }
+            TryDeleteSidecar(ApplicationDataPaths.DatabasePath + "-wal");
+            TryDeleteSidecar(ApplicationDataPaths.DatabasePath + "-shm");
 
             var auditDatabase = archive.GetEntry(AuditDatabaseEntry);
             if (auditDatabase is not null)
@@ -137,6 +139,8 @@ public sealed class ApplicationBackupService
                 {
                     File.Move(auditReplacement, ApplicationDataPaths.AuditDatabasePath);
                 }
+                TryDeleteSidecar(ApplicationDataPaths.AuditDatabasePath + "-wal");
+                TryDeleteSidecar(ApplicationDataPaths.AuditDatabasePath + "-shm");
             }
 
             // Backups from older Hub versions may contain PdfRegistry/* entries.
@@ -155,23 +159,49 @@ public sealed class ApplicationBackupService
         var sourceBuilder = new SqliteConnectionStringBuilder
         {
             DataSource = sourcePath,
-            Mode = SqliteOpenMode.ReadWriteCreate
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false,
+            DefaultTimeout = 15
         };
         var destinationBuilder = new SqliteConnectionStringBuilder
         {
             DataSource = snapshotPath,
-            Mode = SqliteOpenMode.ReadWriteCreate
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false,
+            DefaultTimeout = 15
         };
-        using var source = new SqliteConnection(sourceBuilder.ToString());
-        using var destination = new SqliteConnection(destinationBuilder.ToString());
-        source.Open();
-        destination.Open();
-        source.BackupDatabase(destination);
-        using var command = destination.CreateCommand();
-        command.CommandText = "PRAGMA integrity_check;";
-        var result = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
-        if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"SQLite backup integrity check failed: {result}");
+        SqliteConnection? source = null;
+        SqliteConnection? destination = null;
+        try
+        {
+            source = new SqliteConnection(sourceBuilder.ToString());
+            destination = new SqliteConnection(destinationBuilder.ToString());
+            source.Open();
+            destination.Open();
+            source.BackupDatabase(destination);
+            using var command = destination.CreateCommand();
+            command.CommandText = "PRAGMA integrity_check;";
+            var result = Convert.ToString(command.ExecuteScalar()) ?? string.Empty;
+            if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"SQLite backup integrity check failed: {result}");
+        }
+        finally
+        {
+            if (destination is not null)
+            {
+                try { destination.Close(); } catch { }
+                try { SqliteConnection.ClearPool(destination); } catch { }
+                destination.Dispose();
+            }
+            if (source is not null)
+            {
+                try { source.Close(); } catch { }
+                try { SqliteConnection.ClearPool(source); } catch { }
+                source.Dispose();
+            }
+        }
     }
 
     private static void ValidateDatabase(string databasePath)
@@ -179,46 +209,80 @@ public sealed class ApplicationBackupService
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         };
-        using var connection = new SqliteConnection(builder.ToString());
-        connection.Open();
-        using (var integrity = connection.CreateCommand())
+        SqliteConnection? connection = null;
+        try
         {
-            integrity.CommandText = "PRAGMA integrity_check;";
-            var result = Convert.ToString(integrity.ExecuteScalar()) ?? string.Empty;
-            if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The backup database failed SQLite integrity validation.");
+            connection = new SqliteConnection(builder.ToString());
+            connection.Open();
+            using (var integrity = connection.CreateCommand())
+            {
+                integrity.CommandText = "PRAGMA integrity_check;";
+                var result = Convert.ToString(integrity.ExecuteScalar()) ?? string.Empty;
+                if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The backup database failed SQLite integrity validation.");
+            }
+            using (var schema = connection.CreateCommand())
+            {
+                schema.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Clients';";
+                if (Convert.ToInt32(schema.ExecuteScalar()) != 1)
+                    throw new InvalidDataException("The backup database is not an Accounting Automation Hub database.");
+            }
         }
-        using (var schema = connection.CreateCommand())
+        finally
         {
-            schema.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Clients';";
-            if (Convert.ToInt32(schema.ExecuteScalar()) != 1)
-                throw new InvalidDataException("The backup database is not an Accounting Automation Hub database.");
+            if (connection is not null)
+            {
+                try { connection.Close(); } catch { }
+                try { SqliteConnection.ClearPool(connection); } catch { }
+                connection.Dispose();
+            }
         }
     }
+
     private static void ValidateAuditDatabase(string databasePath)
     {
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         };
-        using var connection = new SqliteConnection(builder.ToString());
-        connection.Open();
-        using (var integrity = connection.CreateCommand())
+        SqliteConnection? connection = null;
+        try
         {
-            integrity.CommandText = "PRAGMA integrity_check;";
-            var result = Convert.ToString(integrity.ExecuteScalar()) ?? string.Empty;
-            if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The Audit backup database failed SQLite integrity validation.");
+            connection = new SqliteConnection(builder.ToString());
+            connection.Open();
+            using (var integrity = connection.CreateCommand())
+            {
+                integrity.CommandText = "PRAGMA integrity_check;";
+                var result = Convert.ToString(integrity.ExecuteScalar()) ?? string.Empty;
+                if (!result.Equals("ok", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The Audit backup database failed SQLite integrity validation.");
+            }
+            using (var schema = connection.CreateCommand())
+            {
+                schema.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='AuditClients';";
+                if (Convert.ToInt32(schema.ExecuteScalar()) != 1)
+                    throw new InvalidDataException("The backup Audit database is not an Accounting Automation Hub Audit database.");
+            }
         }
-        using (var schema = connection.CreateCommand())
+        finally
         {
-            schema.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='AuditClients';";
-            if (Convert.ToInt32(schema.ExecuteScalar()) != 1)
-                throw new InvalidDataException("The backup Audit database is not an Accounting Automation Hub Audit database.");
+            if (connection is not null)
+            {
+                try { connection.Close(); } catch { }
+                try { SqliteConnection.ClearPool(connection); } catch { }
+                connection.Dispose();
+            }
         }
+    }
+
+    private static void TryDeleteSidecar(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
 }

@@ -1214,8 +1214,8 @@ public sealed class MainWindowViewModel :
         get => _selectedBranchWorkspace;
         set
         {
-            if (!BranchWorkspaces.Contains(value) || ReferenceEquals(_selectedBranchWorkspace, value)) return;
             if (value is null || _clientContext.CurrentClient is null) return;
+            if (!BranchWorkspaces.Contains(value) || ReferenceEquals(_selectedBranchWorkspace, value)) return;
             if (_refreshingBranchWorkspaces) return;
             try
             {
@@ -2416,8 +2416,9 @@ public sealed class MainWindowViewModel :
         if (configured.Any(x => x.Name.Length > 80))
             throw new InvalidOperationException("Tally branch names must not exceed 80 characters.");
         var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
-        if (pan.Length == 0 && (parent.Gstin ?? "").Trim().Length == 15)
-            pan = parent.Gstin.Trim().Substring(2, 10).ToUpperInvariant();
+        var parentGstin = (parent.Gstin ?? "").Trim();
+        if (pan.Length == 0 && parentGstin.Length == 15)
+            pan = parentGstin.Substring(2, 10).ToUpperInvariant();
 
         // The private ClientId is the existing branch accounting scope, not a
         // duplicate Directory client. No parent voucher is moved by this stage.
@@ -2541,8 +2542,9 @@ public sealed class MainWindowViewModel :
                          "AAH_CONSOLIDATED_MANUAL_IMPORT_AUDIT.txt" })
                 File.Delete(Path.Combine(manualDirectory, filename));
         var pan = (parent.Pan ?? "").Trim().ToUpperInvariant();
-        if (pan.Length == 0 && (parent.Gstin ?? "").Length == 15)
-            pan = parent.Gstin.Substring(2, 10).ToUpperInvariant();
+        var parentGstin = (parent.Gstin ?? "").Trim();
+        if (pan.Length == 0 && parentGstin.Length == 15)
+            pan = parentGstin.Substring(2, 10).ToUpperInvariant();
 
         var identities = new List<TallyBranchMasterIdentity>();
         var branchSources = new List<TallyPreparedBranchXml>();
@@ -4216,6 +4218,13 @@ public sealed class MainWindowViewModel :
         object? sender,
         EventArgs e)
     {
+        var uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (uiDispatcher is not null && !uiDispatcher.CheckAccess())
+        {
+            _ = uiDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => OnTallyCoordinatorChanged(sender, e)));
+            return;
+        }
+
         OnPropertyChanged(nameof(TallyCompanies));
         OnPropertyChanged(nameof(SelectedTallyCompany));
         OnPropertyChanged(nameof(TallyConnectionStatus));

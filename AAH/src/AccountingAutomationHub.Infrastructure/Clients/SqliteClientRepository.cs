@@ -859,6 +859,12 @@ public sealed class SqliteClientRepository :
             ?? throw new InvalidOperationException(
                 "The selected client no longer exists.");
 
+        // Private branch child accounts are maintained exclusively by the parent Branch workspace;
+        // skipping GST-profile writes here prevents infinite AutoImport retry errors while still
+        // returning the existing child profile so GSTR-3B download/import discovery can proceed.
+        if (IsPrivateBranchChildClient(client.Id))
+            return client;
+
         var changed = false;
 
         var preferredClientName = AccountingText.DisplayName(
@@ -930,6 +936,29 @@ public sealed class SqliteClientRepository :
         // replace or reorder secondary GSTINs saved by the Client Editor.
         client.AdditionalGstins = null;
         return Save(client);
+    }
+
+    private bool IsPrivateBranchChildClient(long clientId)
+    {
+        if (clientId <= 0) return false;
+        try
+        {
+            using var connection = OpenConnection();
+            using var tableCheck = connection.CreateCommand();
+            tableCheck.CommandText =
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='InternalBranchAccounts' LIMIT 1);";
+            if (Convert.ToInt32(tableCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                return false;
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM InternalBranchAccounts WHERE ChildClientId=$Id LIMIT 1);";
+            cmd.Parameters.AddWithValue("$Id", clientId);
+            return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+        }
+        catch (SqliteException)
+        {
+            return false;
+        }
     }
 
     public void SetCurrent(
