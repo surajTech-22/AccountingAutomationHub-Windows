@@ -50,7 +50,11 @@ public sealed class TallyBankStatementReconciliationService(
         var link = tallyRepository.GetLinkForClient(client.Id);
         if (link is null || string.IsNullOrWhiteSpace(link.CompanyKey) || string.IsNullOrWhiteSpace(link.CompanyName))
         {
-            transferReconciliationService.Reconcile(client.Id, client.FinancialYear);
+            var beforeUnlinked = SnapshotActiveImportedBankState(bankingRepository.GetTransactions(client.Id, client.FinancialYear, includeArchived: false));
+            var unlinkedMatches = transferReconciliationService.Reconcile(client.Id, client.FinancialYear);
+            var afterUnlinked = SnapshotActiveImportedBankState(bankingRepository.GetTransactions(client.Id, client.FinancialYear, includeArchived: false));
+            result.ImportedInterbankMatches = unlinkedMatches.Count;
+            result.ImportedInterbankChanged = !beforeUnlinked.SequenceEqual(afterUnlinked);
             result.Status = "No confirmed Tally company link; normal imported-statement Inter-Bank reconciliation ran without Tally conversion.";
             return result;
         }
@@ -401,7 +405,14 @@ public sealed class TallyBankStatementReconciliationService(
 
         // THIS is the only matching handoff. The Tally layer does not decide Contra,
         // source/target or matching evidence. It supplies inputs to the existing engine.
+        var beforeImportedState = SnapshotActiveImportedBankState(bankingRepository.GetTransactions(client.Id, client.FinancialYear, includeArchived: false));
         var reconciliation = transferReconciliationService.Reconcile(client.Id, client.FinancialYear, converted);
+        var afterImportedState = SnapshotActiveImportedBankState(bankingRepository.GetTransactions(client.Id, client.FinancialYear, includeArchived: false));
+        var importedMatches = reconciliation
+            .Where(match => !match.MatchOrigin.Equals("Tally Converted Bank Transaction", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        result.ImportedInterbankMatches = importedMatches.Length;
+        result.ImportedInterbankChanged = !beforeImportedState.SequenceEqual(afterImportedState);
         var tallyMatches = reconciliation
             .Where(match => match.MatchOrigin.Equals("Tally Converted Bank Transaction", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -719,7 +730,9 @@ public sealed class TallyBankStatementReconciliationService(
         // FIX5: Bank-account authority/ledger/name/account changes are matching inputs too.
         // A rename/relink must invalidate the Inter-Bank checkpoint even if no transaction
         // row changed, otherwise exact live Tally ledger resolution could remain stale.
-        var payload = string.Join("\n", accountRows.Concat(transactionRows));
+        // MATCHER_V2_RBI_UTR invalidates pre-UTR-upgrade checkpoints once per Client/FY so
+        // canonical 22-char/16-char UTR Inter-Bank transfers reconcile on existing clients.
+        var payload = string.Join("\n", new[] { "MATCHER_V2_RBI_UTR" }.Concat(accountRows).Concat(transactionRows));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
     }
 
@@ -1494,6 +1507,11 @@ public sealed class TallyBankStatementReconciliationService(
     private static string Normalize(string? value) =>
         new string((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
 
+    private static string[] SnapshotActiveImportedBankState(IReadOnlyCollection<BankTransactionRecord> rows) =>
+        rows.OrderBy(row => row.Id)
+            .Select(row => string.Join("|", row.Id, row.MatchId, row.MatchedTransactionId ?? 0, row.Mode, row.LedgerName))
+            .ToArray();
+
     private static (DateTime From, DateTime To) ResolveFinancialYear(string financialYear)
     {
         var digits = new string((financialYear ?? string.Empty).Where(char.IsDigit).ToArray());
@@ -1520,6 +1538,8 @@ public sealed class TallyBankStatementReconciliationResult
     public string LiveReadError { get; set; } = string.Empty;
     public string FinancialLedgerReadError { get; set; } = string.Empty;
     public int Matched { get; set; }
+    public int ImportedInterbankMatches { get; set; }
+    public bool ImportedInterbankChanged { get; set; }
     public int SingleStatementLinked { get; set; }
     public int VerificationConfirmed { get; set; }
     public int AlreadyCorrect { get; set; }

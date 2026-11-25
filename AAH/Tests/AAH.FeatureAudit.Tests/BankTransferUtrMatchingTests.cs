@@ -1,4 +1,6 @@
 using AccountingAutomationHub.Domain.Banking;
+using AccountingAutomationHub.Domain.Common;
+using AccountingAutomationHub.Domain.Masters;
 using AccountingAutomationHub.Infrastructure.Banking;
 using AccountingAutomationHub.Infrastructure.Masters;
 using Microsoft.Data.Sqlite;
@@ -14,9 +16,11 @@ internal static class BankTransferUtrMatchingTests
     {
         RunCanonicalUtrTests();
         RunNewlineCleanupTests();
+        RunFlexibleFilterMatcherTests();
+        RunContraPolicyAndMaintenanceTests();
         RunEndToEndReconcileTest();
         RunBankingViewLedgerColumnContractTest();
-        Console.WriteLine("PASS BankTransferUtrMatching: canonical RBI RTGS/NEFT UTR matching, escaped newline cleanup, SQLite reconcile & Ledger selector contract.");
+        Console.WriteLine("PASS BankTransferUtrMatching: canonical RBI RTGS/NEFT UTR matching, escaped newline cleanup, flexible date/amount filters, Contra policy & DB maintenance.");
     }
 
     private static void RunCanonicalUtrTests()
@@ -105,6 +109,250 @@ internal static class BankTransferUtrMatchingTests
             "Uppercase backslash path NEFT\\RAJESH\\12345 lost its leading R.");
         Check(BankNarrationParser.Normalize(@"UPI\NARESH\999") == "UPI NARESH 999",
             "Uppercase backslash path UPI\\NARESH\\999 lost its leading N.");
+
+        var cleanedDisplay = BankNarrationParser.CleanLiteralEscapedNewlines("DEP TFR\\nRTGS TEST BUYER\\nTRF FR INTERNAL ACCOUNT");
+        Check(cleanedDisplay == "DEP TFR RTGS TEST BUYER TRF FR INTERNAL ACCOUNT",
+            $"CleanLiteralEscapedNewlines failed: [{cleanedDisplay}].");
+    }
+
+    private static void RunFlexibleFilterMatcherTests()
+    {
+        var nov5 = new DateTime(2025, 11, 5);
+        var nov15 = new DateTime(2025, 11, 15);
+        var nov25 = new DateTime(2025, 11, 25);
+
+        foreach (var matchingDateQuery in new[] { "5-11-25", "05-11-25", "5.11.25", "5/11/25", "5-11-2025", "05.11.2025", "2025-11-05", "5-11", "05-11", "5-", "5-Nov-25" })
+        {
+            Check(FlexibleFilterMatcher.MatchesDate(nov5, matchingDateQuery),
+                $"Expected query '{matchingDateQuery}' to match 05.11.2025.");
+        }
+
+        foreach (var nonMatchingForNov15 in new[] { "5-11-25", "5.11.25", "5-11", "5-" })
+        {
+            Check(!FlexibleFilterMatcher.MatchesDate(nov15, nonMatchingForNov15),
+                $"Query '{nonMatchingForNov15}' must not falsely match 15.11.2025.");
+            Check(!FlexibleFilterMatcher.MatchesDate(nov25, nonMatchingForNov15),
+                $"Query '{nonMatchingForNov15}' must not falsely match 25.11.2025.");
+        }
+
+        Check(FlexibleFilterMatcher.MatchesDate(nov5, "5-11-25", exactOnly: true),
+            "Exact date match should succeed for 5-11-25 vs 05.11.2025.");
+        Check(!FlexibleFilterMatcher.MatchesDate(nov5, "5-11", exactOnly: true),
+            "Partial date 5-11 should not satisfy exactOnly=true.");
+
+        foreach (var matchingAmountQuery in new[] { "1000000", "1,000,000", "10,00,000", "1000000.00", "10000", "INR 1000000", "1000000 Dr" })
+        {
+            Check(FlexibleFilterMatcher.MatchesAmount(1000000m, matchingAmountQuery),
+                $"Expected amount query '{matchingAmountQuery}' to match 1,000,000.00.");
+        }
+
+        Check(FlexibleFilterMatcher.MatchesAmount(1000000m, "1000000", exactOnly: true),
+            "Exact amount match should succeed for 1000000.");
+        Check(!FlexibleFilterMatcher.MatchesAmount(1000000m, "10000", exactOnly: true),
+            "Partial amount 10000 should not satisfy exactOnly=true.");
+        Check(!FlexibleFilterMatcher.TryExtractAmountQuery("TRANSFER", out _, out _),
+            "Plain narration words must not parse as numeric amount queries.");
+    }
+
+    private static void RunContraPolicyAndMaintenanceTests()
+    {
+        var groups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Secured Loan From Banks"] = "Secured Loans"
+        };
+        var ledgers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Synthetic Bank OD - 6810"] = "Secured Loan From Banks",
+            ["Cash"] = "Cash-in-Hand",
+            ["Bank Charges"] = "Indirect Expenses"
+        };
+
+        Check(BankContraLedgerPolicy.ResolveModeForLedger("Payment", "Synthetic Bank OD - 6810", 32000m, 0m, ledgers, groups) == "Contra",
+            "Mapping a Payment row to a Secured Loan From Banks ledger must switch Mode to Contra.");
+        Check(BankContraLedgerPolicy.ResolveModeForLedger("Receipt", "Cash", 0m, 1000m, ledgers, groups) == "Contra",
+            "Mapping a Receipt row to Cash-in-Hand must switch Mode to Contra.");
+        Check(BankContraLedgerPolicy.ResolveModeForLedger("Contra", "Bank Charges", 20m, 0m, ledgers, groups) == "Payment",
+            "Re-mapping a Contra debit row to Indirect Expenses must switch Mode back to Payment.");
+        Check(!BankContraLedgerPolicy.IsBankOrOverdraftGroup("Cash-in-Hand"),
+            "IsBankOrOverdraftGroup must exclude Cash-in-Hand so Bank rename/list selectors stay bank-only.");
+        Check(BankContraLedgerPolicy.IsBankOrOverdraftGroup("Secured Loan From Banks") &&
+              BankContraLedgerPolicy.IsBankOrOverdraftGroup("Cash Credit"),
+            "IsBankOrOverdraftGroup must match Secured Loan From Banks and Cash Credit.");
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "aah_maint_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var dbPath = Path.Combine(tempRoot, "maint.db");
+        var connStr = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString();
+
+        try
+        {
+            using (var bootstrap = new SqliteConnection(connStr))
+            {
+                bootstrap.Open();
+                using var cmd = bootstrap.CreateCommand();
+                cmd.CommandText = "CREATE TABLE Clients(Id INTEGER PRIMARY KEY); INSERT INTO Clients(Id) VALUES(202);";
+                cmd.ExecuteNonQuery();
+            }
+
+            var bankingRepo = new SqliteBankingRepository(connStr);
+            bankingRepo.Initialize();
+            var masterRepo = new SqliteMasterRepository(connStr);
+            masterRepo.Initialize();
+
+            const long clientId = 202;
+            const string fy = "2025-26";
+            masterRepo.Save(new MasterRecord
+            {
+                ClientId = clientId,
+                FinancialYear = fy,
+                Type = "Group",
+                Name = "Secured Loan From Banks",
+                Parent = "Secured Loans"
+            });
+            masterRepo.Save(new MasterRecord
+            {
+                ClientId = clientId,
+                FinancialYear = fy,
+                Type = "Ledger",
+                Name = "Synthetic Bank OD - 6810",
+                Parent = "Secured Loan From Banks"
+            });
+            masterRepo.Save(new MasterRecord
+            {
+                ClientId = clientId,
+                FinancialYear = fy,
+                Type = "Ledger",
+                Name = "Bank Charges",
+                Parent = "Indirect Expenses"
+            });
+
+            var bank = bankingRepo.UpsertAccount(new BankAccountRecord
+            {
+                ClientId = clientId,
+                FinancialYear = fy,
+                BankName = "SYNTHETIC CO-OP BANK",
+                AccountNumber = "900000300003",
+                AccountType = "SB"
+            });
+            var stmtId = bankingRepo.SaveStatement(new BankStatementRecord
+            {
+                ClientId = clientId,
+                FinancialYear = fy,
+                BankAccountId = bank.Id,
+                SourceFile = "synthetic_stmt.pdf",
+                SourceSheet = "Bank Statement",
+                FileHash = "hash-maint-stmt",
+                PeriodFrom = new DateTime(2025, 5, 15),
+                PeriodTo = new DateTime(2025, 11, 5)
+            });
+
+            bankingRepo.InsertTransactions(
+            [
+                new BankTransactionRecord
+                {
+                    ClientId = clientId,
+                    FinancialYear = fy,
+                    StatementId = stmtId,
+                    BankAccountId = bank.Id,
+                    TransactionDate = new DateTime(2025, 5, 15),
+                    Narration = "WDL TFR\\nINT\\nTRF TO 9000006810",
+                    NormalizedNarration = "WDL TFR INT TRF TO 9000006810",
+                    Debit = 32000m,
+                    Mode = "Payment",
+                    LedgerName = "Synthetic Bank OD - 6810",
+                    MappingStatus = "Mapped",
+                    Fingerprint = "fp-maint-1",
+                    RecordStatus = "Active"
+                },
+                new BankTransactionRecord
+                {
+                    ClientId = clientId,
+                    FinancialYear = fy,
+                    StatementId = stmtId,
+                    BankAccountId = bank.Id,
+                    TransactionDate = new DateTime(2025, 6, 30),
+                    Narration = "SMS CHARGE",
+                    NormalizedNarration = "SMS CHARGE",
+                    Debit = 20m,
+                    Mode = "Payment",
+                    LedgerName = "Bank Charges",
+                    MappingStatus = "Mapped",
+                    Fingerprint = "fp-maint-2",
+                    RecordStatus = "Active"
+                },
+                new BankTransactionRecord
+                {
+                    ClientId = clientId,
+                    FinancialYear = fy,
+                    StatementId = stmtId,
+                    BankAccountId = bank.Id,
+                    TransactionDate = new DateTime(2025, 11, 5),
+                    Narration = "WDL TFR\\nOD TRANSFER",
+                    NormalizedNarration = "WDL TFR OD TRANSFER",
+                    Debit = 5000m,
+                    Mode = "Payment",
+                    MappingStatus = "Mapping Required",
+                    Fingerprint = "fp-maint-3",
+                    RecordStatus = "Active"
+                }
+            ]);
+
+            // Reset the two v4.0.0.647 maintenance markers to simulate an existing DB upgrading to v4.0.0.647
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using var del = conn.CreateCommand();
+                del.CommandText =
+                    "DELETE FROM BankingMaintenanceState WHERE RepairKey IN ('FIX-BANK-ESCAPED-NEWLINES-V1','FIX-BANK-CONTRA-MODE-FOR-BANK-OD-CASH-V1');";
+                del.ExecuteNonQuery();
+            }
+
+            // Use a distinct connection string to simulate a fresh app process restart upgrading
+            // an existing database past SqliteSchemaInitializationGate's in-process gate cache.
+            var upgradedConnStr = new SqliteConnectionStringBuilder(connStr)
+            {
+                DefaultTimeout = 31
+            }.ToString();
+            var upgradedRepo = new SqliteBankingRepository(upgradedConnStr);
+            upgradedRepo.Initialize();
+
+            var afterUpgrade = upgradedRepo.GetTransactions(clientId, fy, includeArchived: false).OrderBy(item => item.Id).ToArray();
+            Check(afterUpgrade[0].Narration == "WDL TFR INT TRF TO 9000006810",
+                $"Startup maintenance should strip \\n, got [{afterUpgrade[0].Narration}].");
+            Check(afterUpgrade[0].Mode == "Contra",
+                $"Startup maintenance should switch Bank OD row Mode to Contra, got [{afterUpgrade[0].Mode}].");
+            Check(afterUpgrade[1].Mode == "Payment",
+                $"Non-bank Bank Charges row should remain Payment, got [{afterUpgrade[1].Mode}].");
+
+            // ApplyLedgerMapping batch assignment to a Secured Loan From Banks ledger must set Mode = Contra
+            upgradedRepo.ApplyLedgerMapping(clientId, fy,
+                new BankLedgerMapping
+                {
+                    ClientId = clientId,
+                    FinancialYear = fy,
+                    BankFilter = bank.AuthorityName,
+                    VoucherType = "Payment",
+                    SummaryName = "WDL TFR OD TRANSFER",
+                    LedgerName = "Synthetic Bank OD - 6810",
+                    TransactionIds = [afterUpgrade[2].Id],
+                    Status = "Mapped"
+                });
+
+            var afterMapping = upgradedRepo.GetTransactions(clientId, fy, includeArchived: false)
+                .Single(item => item.Id == afterUpgrade[2].Id);
+            Check(afterMapping.LedgerName == "Synthetic Bank OD - 6810" && afterMapping.Mode == "Contra",
+                $"ApplyLedgerMapping to Secured Loan From Banks must set Mode=Contra, got Ledger=[{afterMapping.LedgerName}] Mode=[{afterMapping.Mode}].");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(tempRoot, true); } catch { }
+        }
     }
 
     private static void RunEndToEndReconcileTest()

@@ -418,6 +418,20 @@ public sealed class SqliteBankingRepository : IBankingRepository
         const string fix23OverlapAuthorityKey = "FIX23-NONDESTRUCTIVE-BALANCE-STITCH-V1";
         if (!HasBankingMaintenanceMarker(connection, fix23OverlapAuthorityKey))
             SetBankingMaintenanceMarker(connection, fix23OverlapAuthorityKey);
+
+        const string fixEscapedNewlinesKey = "FIX-BANK-ESCAPED-NEWLINES-V1";
+        if (!HasBankingMaintenanceMarker(connection, fixEscapedNewlinesKey))
+        {
+            RepairLiteralEscapedNewlinesInBankTransactions(connection);
+            SetBankingMaintenanceMarker(connection, fixEscapedNewlinesKey);
+        }
+
+        const string fixContraModeKey = "FIX-BANK-CONTRA-MODE-FOR-BANK-OD-CASH-V1";
+        if (!HasBankingMaintenanceMarker(connection, fixContraModeKey) && TableExists(connection, "Masters"))
+        {
+            RepairContraModeForBankAndCashLedgers(connection);
+            SetBankingMaintenanceMarker(connection, fixContraModeKey);
+        }
     }
 
     public bool HasRecords(long clientId, string financialYear)
@@ -2841,28 +2855,74 @@ public sealed class SqliteBankingRepository : IBankingRepository
         if (assignments.Count == 0) return 0;
         using var connection = OpenConnection();
         using var transactionScope = connection.BeginTransaction();
-        var affected = 0;
-        foreach (var ledgerGroup in assignments.GroupBy(item => item.Value, StringComparer.OrdinalIgnoreCase))
+        var hasMasters = TableExists(connection, "Masters");
+        var masterLookups = hasMasters
+            ? LoadContraMasterLookups(connection, transactionScope)
+            : new Dictionary<(long ClientId, string FinancialYear), (Dictionary<string, string> LedgerGroups, Dictionary<string, string> GroupHierarchy)>();
+
+        var rows = new List<(long Id, long ClientId, string FinancialYear, string LedgerName, string MappingStatus, string Mode, decimal Debit, decimal Credit)>();
+        var distinctIds = assignments.Keys.Where(id => id > 0).Distinct().ToArray();
+        foreach (var batch in distinctIds.Chunk(400))
         {
-            var ids = ledgerGroup.Select(item => item.Key).Where(id => id > 0).Distinct().ToArray();
-            foreach (var batch in ids.Chunk(400))
+            using var read = connection.CreateCommand();
+            read.Transaction = transactionScope;
+            var parameterNames = new List<string>(batch.Length);
+            for (var index = 0; index < batch.Length; index++)
             {
-                using var command = connection.CreateCommand();
-                command.Transaction = transactionScope;
-                var parameterNames = new List<string>();
-                for (var index = 0; index < batch.Length; index++)
-                {
-                    var name = $"$Id{index}";
-                    parameterNames.Add(name);
-                    command.Parameters.AddWithValue(name, batch[index]);
-                }
-                command.CommandText =
-                    $"UPDATE BankTransactions SET LedgerName=$LedgerName,MappingStatus='Mapped' " +
-                    $"WHERE Id IN ({string.Join(',', parameterNames)}) " +
-                    "AND (COALESCE(LedgerName,'') <> $LedgerName OR COALESCE(MappingStatus,'') <> 'Mapped');";
-                command.Parameters.AddWithValue("$LedgerName", ledgerGroup.Key);
-                affected += command.ExecuteNonQuery();
+                var name = $"$Id{index}";
+                parameterNames.Add(name);
+                read.Parameters.AddWithValue(name, batch[index]);
             }
+            read.CommandText =
+                "SELECT Id,ClientId,FinancialYear,COALESCE(LedgerName,''),COALESCE(MappingStatus,''),COALESCE(Mode,''),COALESCE(Debit,0),COALESCE(Credit,0) " +
+                $"FROM BankTransactions WHERE Id IN ({string.Join(',', parameterNames)});";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    Convert.ToDecimal(reader.GetValue(6), CultureInfo.InvariantCulture),
+                    Convert.ToDecimal(reader.GetValue(7), CultureInfo.InvariantCulture)));
+            }
+        }
+
+        var affected = 0;
+        foreach (var row in rows)
+        {
+            if (!assignments.TryGetValue(row.Id, out var rawLedger)) continue;
+            var targetLedger = (rawLedger ?? string.Empty).Trim();
+            var targetMode = row.Mode;
+            if (hasMasters && masterLookups.TryGetValue((row.ClientId, row.FinancialYear.Trim().ToUpperInvariant()), out var lookup))
+            {
+                targetMode = BankContraLedgerPolicy.ResolveModeForLedger(
+                    row.Mode,
+                    targetLedger,
+                    row.Debit,
+                    row.Credit,
+                    lookup.LedgerGroups,
+                    lookup.GroupHierarchy);
+            }
+
+            if (string.Equals(row.LedgerName, targetLedger, StringComparison.Ordinal) &&
+                string.Equals(row.MappingStatus, "Mapped", StringComparison.Ordinal) &&
+                string.Equals(row.Mode, targetMode, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            using var update = connection.CreateCommand();
+            update.Transaction = transactionScope;
+            update.CommandText =
+                "UPDATE BankTransactions SET LedgerName=$LedgerName,MappingStatus='Mapped',Mode=$Mode WHERE Id=$Id;";
+            update.Parameters.AddWithValue("$LedgerName", targetLedger);
+            update.Parameters.AddWithValue("$Mode", targetMode);
+            update.Parameters.AddWithValue("$Id", row.Id);
+            affected += update.ExecuteNonQuery();
         }
         transactionScope.Commit();
         return affected;
@@ -3047,6 +3107,126 @@ public sealed class SqliteBankingRepository : IBankingRepository
         command.Parameters.AddWithValue("$RepairKey", repairKey);
         command.Parameters.AddWithValue("$CompletedUtc", DateTime.UtcNow.ToString("O"));
         command.ExecuteNonQuery();
+    }
+
+    private static bool TableExists(SqliteConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=$TableName LIMIT 1);";
+        command.Parameters.AddWithValue("$TableName", tableName);
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static Dictionary<(long ClientId, string FinancialYear), (Dictionary<string, string> LedgerGroups, Dictionary<string, string> GroupHierarchy)> LoadContraMasterLookups(
+        SqliteConnection connection,
+        SqliteTransaction? transaction = null)
+    {
+        var result = new Dictionary<(long ClientId, string FinancialYear), (Dictionary<string, string> LedgerGroups, Dictionary<string, string> GroupHierarchy)>();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT ClientId,FinancialYear,COALESCE(Type,''),COALESCE(Name,''),COALESCE(Parent,'') " +
+            "FROM Masters WHERE COALESCE(IsArchived,0)=0;";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var clientId = reader.GetInt64(0);
+            var fyKey = reader.GetString(1).Trim().ToUpperInvariant();
+            var type = reader.GetString(2).Trim();
+            var name = reader.GetString(3).Trim();
+            var parent = reader.GetString(4).Trim();
+            if (name.Length == 0) continue;
+
+            if (!result.TryGetValue((clientId, fyKey), out var entry))
+            {
+                entry = (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                result[(clientId, fyKey)] = entry;
+            }
+
+            if (type.Equals("Group", StringComparison.OrdinalIgnoreCase))
+                entry.GroupHierarchy[name] = parent;
+            else if (type.Equals("Ledger", StringComparison.OrdinalIgnoreCase))
+                entry.LedgerGroups[name] = parent;
+        }
+        return result;
+    }
+
+    private static void RepairLiteralEscapedNewlinesInBankTransactions(SqliteConnection connection)
+    {
+        var updates = new List<(long Id, string Narration, string NormalizedNarration)>();
+        using (var read = connection.CreateCommand())
+        {
+            read.CommandText =
+                "SELECT Id,COALESCE(Narration,'') FROM BankTransactions " +
+                "WHERE Narration LIKE '%\\n%' OR Narration LIKE '%\\r%';";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                var raw = reader.GetString(1);
+                var cleaned = BankNarrationParser.CleanLiteralEscapedNewlines(raw);
+                if (!string.Equals(cleaned, raw, StringComparison.Ordinal))
+                    updates.Add((id, cleaned, BankNarrationParser.Normalize(cleaned)));
+            }
+        }
+
+        if (updates.Count == 0) return;
+
+        using var tx = connection.BeginTransaction();
+        foreach (var item in updates)
+        {
+            using var update = connection.CreateCommand();
+            update.Transaction = tx;
+            update.CommandText =
+                "UPDATE BankTransactions SET Narration=$Narration,NormalizedNarration=$Normalized WHERE Id=$Id;";
+            update.Parameters.AddWithValue("$Narration", item.Narration);
+            update.Parameters.AddWithValue("$Normalized", item.NormalizedNarration);
+            update.Parameters.AddWithValue("$Id", item.Id);
+            update.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    private static void RepairContraModeForBankAndCashLedgers(SqliteConnection connection)
+    {
+        var lookups = LoadContraMasterLookups(connection);
+        if (lookups.Count == 0) return;
+
+        var contraIds = new List<long>();
+        using (var read = connection.CreateCommand())
+        {
+            read.CommandText =
+                "SELECT Id,ClientId,FinancialYear,COALESCE(LedgerName,'') FROM BankTransactions " +
+                "WHERE TRIM(COALESCE(LedgerName,'')) <> '' " +
+                "AND UPPER(TRIM(COALESCE(Mode,''))) <> 'CONTRA' " +
+                "AND COALESCE(RecordStatus,'') NOT LIKE 'Archived%';";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                var clientId = reader.GetInt64(1);
+                var fyKey = reader.GetString(2).Trim().ToUpperInvariant();
+                var ledgerName = reader.GetString(3).Trim();
+                if (lookups.TryGetValue((clientId, fyKey), out var lookup) &&
+                    BankContraLedgerPolicy.IsContraCounterpartLedger(ledgerName, lookup.LedgerGroups, lookup.GroupHierarchy))
+                {
+                    contraIds.Add(id);
+                }
+            }
+        }
+
+        if (contraIds.Count == 0) return;
+
+        using var tx = connection.BeginTransaction();
+        foreach (var id in contraIds)
+        {
+            using var update = connection.CreateCommand();
+            update.Transaction = tx;
+            update.CommandText = "UPDATE BankTransactions SET Mode='Contra' WHERE Id=$Id;";
+            update.Parameters.AddWithValue("$Id", id);
+            update.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     private static void RepairFirstImportWinsTransactionDuplicates(SqliteConnection connection)

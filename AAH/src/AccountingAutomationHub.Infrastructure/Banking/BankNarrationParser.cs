@@ -2323,6 +2323,13 @@ public static partial class BankNarrationParser
     private static int CountLetters(string text) => text.Count(character => (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z'));
     private static int WordCount(string text) => NormalizeWhitespace(text).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
 
+    public static string CleanLiteralEscapedNewlines(string? text)
+    {
+        var unescaped = LiteralEscapedNewlineRegex().Replace(text ?? string.Empty, " ");
+        var value = unescaped.Replace('\u00A0', ' ').Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ').Trim();
+        return CollapseSpaces(value);
+    }
+
     private static string NormalizeWhitespace(string text)
     {
         var unescaped = LiteralEscapedNewlineRegex().Replace(text ?? string.Empty, " ");

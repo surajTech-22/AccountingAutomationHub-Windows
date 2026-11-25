@@ -14,6 +14,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using AccountingAutomationHub.Desktop.Views;
+using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Domain.Purchases;
 
 namespace AccountingAutomationHub.Desktop.Behaviors;
@@ -859,26 +860,38 @@ public static class DataGridColumnFilterBehavior
                 return MatchesMonthRange(value, startMonth, endMonth);
             if (TryParseDateRange(query, out var startDate, out var endDate))
                 return TryReadDate(value, out var actualDate) && actualDate.Date >= startDate.Date && actualDate.Date <= endDate.Date;
-            if (TryParseQueryDate(query, out var queryDate))
-                return TryReadDate(value, out var actualDate) && actualDate.Date == queryDate.Date;
-            if (TryReadDecimalText(query, out var queryNumber) && TryReadDecimal(value, out var valueNumber))
-                return valueNumber == queryNumber;
+            if (TryReadDate(value, out var actualFieldDate))
+                return FlexibleFilterMatcher.MatchesDate(actualFieldDate, query);
+            if (FlexibleFilterMatcher.TryExtractAmountQuery(query, out _, out _) && TryReadDecimal(value, out var valueNumber))
+                return FlexibleFilterMatcher.MatchesAmount(valueNumber, query);
             return FormatValue(value).Contains(query, StringComparison.CurrentCultureIgnoreCase);
         }
 
         if (TryParseQueryDate(term, out var dateTerm) && state.DefaultDatePath.Length > 0)
             return TryReadDate(ReadPath(item, state.DefaultDatePath), out var rowDate) && rowDate.Date == dateTerm.Date;
 
-        // Plain numbers must match numeric values, not only their comma-formatted display
-        // text (for example 26000 must find 26,000.00). Plain text retains all-fields search.
-        if (TryReadDecimalText(term, out var plainNumber))
+        // Plain numbers and flexible dates (e.g. 1000000 -> 1,000,000.00; 5-11-25 -> 05.11.2025)
+        // must match typed column values rather than only strict pre-formatted strings.
+        if (term.IndexOfAny(['.', '-', '/']) >= 0)
         {
             foreach (var property in GetSearchableProperties(item.GetType()))
             {
                 object? value;
                 try { value = property.GetValue(item); }
                 catch { continue; }
-                if (TryReadDecimal(value, out var numberValue) && numberValue == plainNumber)
+                if (TryConvertDate(value, out var propDate) && FlexibleFilterMatcher.MatchesDate(propDate, term))
+                    return true;
+            }
+        }
+
+        if (FlexibleFilterMatcher.TryExtractAmountQuery(term, out _, out _))
+        {
+            foreach (var property in GetSearchableProperties(item.GetType()))
+            {
+                object? value;
+                try { value = property.GetValue(item); }
+                catch { continue; }
+                if (TryReadDecimal(value, out var numberValue) && FlexibleFilterMatcher.MatchesAmount(numberValue, term))
                     return true;
             }
         }
@@ -1038,6 +1051,8 @@ public static class DataGridColumnFilterBehavior
 
     private static bool TryParseQueryDate(string? text, out DateTime date)
     {
+        if (FlexibleFilterMatcher.TryParseFlexibleDate(text, out date))
+            return true;
         var formats = new[]
         {
             "dd.MM.yyyy", "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd",
@@ -1352,6 +1367,8 @@ public static class DataGridColumnFilterBehavior
         if (value is DateTimeOffset dto) { date = dto.DateTime; return true; }
         if (value is string text)
         {
+            if (FlexibleFilterMatcher.TryParseFlexibleDate(text, out date))
+                return true;
             var trimmed = text.Trim();
             var formats = new[] { "dd.MM.yyyy", "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd", "dd-MMM-yyyy", "d.M.yyyy", "d-M-yyyy", "d/M/yyyy" };
             if (DateTime.TryParseExact(trimmed, formats, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out date) ||
@@ -1483,8 +1500,8 @@ public static class DataGridColumnFilterBehavior
         {
             var op = Operator.Trim().ToUpperInvariant();
             var text = Convert.ToString(value, CultureInfo.CurrentCulture)?.Trim() ?? string.Empty;
-            if (op == "CONTAINS") return text.Contains(Query1, StringComparison.CurrentCultureIgnoreCase);
-            if (op == "DOES NOT CONTAIN") return !text.Contains(Query1, StringComparison.CurrentCultureIgnoreCase);
+            if (op == "CONTAINS") return ContainsFlexible(value, text, Query1);
+            if (op == "DOES NOT CONTAIN") return !ContainsFlexible(value, text, Query1);
             if (op == "STARTS WITH") return text.StartsWith(Query1, StringComparison.CurrentCultureIgnoreCase);
             if (op == "ENDS WITH") return text.EndsWith(Query1, StringComparison.CurrentCultureIgnoreCase);
 
@@ -1538,8 +1555,22 @@ public static class DataGridColumnFilterBehavior
             };
         }
 
+        private static bool ContainsFlexible(object? value, string text, string query)
+        {
+            if (text.Contains(query, StringComparison.CurrentCultureIgnoreCase))
+                return true;
+            if (TryDate(value, out var dateValue) && FlexibleFilterMatcher.MatchesDate(dateValue, query))
+                return true;
+            if (DataGridColumnFilterBehavior.TryReadDecimal(value, out var numberValue) &&
+                FlexibleFilterMatcher.MatchesAmount(numberValue, query))
+                return true;
+            return false;
+        }
+
         private static bool TryQueryDate(string query, out DateTime date)
         {
+            if (FlexibleFilterMatcher.TryParseFlexibleDate(query, out date))
+                return true;
             var formats = new[] { "dd.MM.yyyy", "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd", "dd-MMM-yyyy", "d.M.yyyy", "d-M-yyyy", "d/M/yyyy" };
             return DateTime.TryParseExact(query?.Trim(), formats, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out date) ||
                    DateTime.TryParseExact(query?.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out date) ||
@@ -1553,9 +1584,10 @@ public static class DataGridColumnFilterBehavior
             {
                 if (value is byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal)
                     valueNumber = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
-                else if (!decimal.TryParse((Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty).Replace(",", string.Empty), NumberStyles.Number, CultureInfo.InvariantCulture, out valueNumber))
+                else if (!FlexibleFilterMatcher.TryParseAmount(Convert.ToString(value, CultureInfo.InvariantCulture), out valueNumber))
                     return false;
-                return decimal.TryParse((query ?? string.Empty).Replace(",", string.Empty), NumberStyles.Number, CultureInfo.InvariantCulture, out queryNumber) ||
+                return FlexibleFilterMatcher.TryParseAmount(query, out queryNumber) ||
+                       decimal.TryParse((query ?? string.Empty).Replace(",", string.Empty), NumberStyles.Number, CultureInfo.InvariantCulture, out queryNumber) ||
                        decimal.TryParse(query, NumberStyles.Number, CultureInfo.CurrentCulture, out queryNumber);
             }
             catch { return false; }

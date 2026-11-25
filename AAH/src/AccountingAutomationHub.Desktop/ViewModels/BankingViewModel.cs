@@ -2671,6 +2671,13 @@ public sealed class BankingViewModel : PageViewModel
             if (!BankModes.Contains(transaction.Mode, StringComparer.OrdinalIgnoreCase)) throw new InvalidOperationException("Mode must be Payment, Receipt or Contra.");
             if (!string.IsNullOrWhiteSpace(transaction.LedgerName) && !MasterLedgerNames.Contains(transaction.LedgerName, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The selected Ledger does not exist in Master.");
+            transaction.Mode = ResolveModeForSelectedLedger(
+                transaction.ClientId,
+                transaction.FinancialYear,
+                transaction.Mode,
+                transaction.LedgerName,
+                transaction.Debit,
+                transaction.Credit);
             transaction.MappingStatus = string.IsNullOrWhiteSpace(transaction.LedgerName) ? "Mapping Required" : "Mapped";
             _repository.SaveTransaction(transaction);
             _reconciliationService.Reconcile(transaction.ClientId, transaction.FinancialYear);
@@ -4266,33 +4273,39 @@ public sealed class BankingViewModel : PageViewModel
         if (needle.Length == 0) return true;
         var exact = needle.StartsWith("=", StringComparison.Ordinal);
         if (exact) needle = needle[1..].Trim();
+        if (needle.Length == 0) return true;
 
         bool Has(string? value, string text) => exact
             ? string.Equals((value ?? string.Empty).Trim(), text, StringComparison.OrdinalIgnoreCase)
             : (value ?? string.Empty).Contains(text, StringComparison.OrdinalIgnoreCase);
 
-        var dateValues = new[]
-        {
-            row.TransactionDate.ToString("dd.MM.yyyy"),
-            row.TransactionDate.ToString("dd/MM/yyyy"),
-            row.TransactionDate.ToString("yyyy-MM-dd")
-        };
         var debit = row.Debit.ToString("N2");
         var credit = row.Credit.ToString("N2");
         var runningBalance = row.RunningBalance?.ToString("N2") ?? string.Empty;
 
+        var matchDate = FlexibleFilterMatcher.MatchesDate(row.TransactionDate, needle, exactOnly: exact);
+        var matchDebit = FlexibleFilterMatcher.MatchesAmount(row.Debit, needle, exactOnly: exact) ||
+                         Has(debit, needle) ||
+                         Has(row.Debit.ToString(CultureInfo.InvariantCulture), needle);
+        var matchCredit = FlexibleFilterMatcher.MatchesAmount(row.Credit, needle, exactOnly: exact) ||
+                          Has(credit, needle) ||
+                          Has(row.Credit.ToString(CultureInfo.InvariantCulture), needle);
+        var matchBalance = (row.RunningBalance.HasValue &&
+                            (FlexibleFilterMatcher.MatchesAmount(row.RunningBalance.Value, needle, exactOnly: exact) ||
+                             Has(row.RunningBalance.Value.ToString(CultureInfo.InvariantCulture), needle))) ||
+                           Has(runningBalance, needle);
+
         return column.ToUpperInvariant() switch
         {
-            "DATE" => dateValues.Any(value => Has(value, needle)),
+            "DATE" => matchDate,
             "NARRATION" => Has(row.Narration, needle),
-            "DEBIT" => Has(debit, needle) || Has(row.Debit.ToString(), needle),
-            "CREDIT" => Has(credit, needle) || Has(row.Credit.ToString(), needle),
-            "RUNNING BALANCE" => Has(runningBalance, needle) || (row.RunningBalance.HasValue && Has(row.RunningBalance.Value.ToString(), needle)),
+            "DEBIT" => matchDebit,
+            "CREDIT" => matchCredit,
+            "RUNNING BALANCE" => matchBalance,
             "MODE" => Has(row.Mode, needle),
             "LEDGER" => Has(row.LedgerName, needle),
             "BANK" => Has(row.BankAccountName, needle),
-            _ => dateValues.Any(value => Has(value, needle)) ||
-                 Has(row.Narration, needle) || Has(debit, needle) || Has(credit, needle) || Has(runningBalance, needle) ||
+            _ => matchDate || Has(row.Narration, needle) || matchDebit || matchCredit || matchBalance ||
                  Has(row.Mode, needle) || Has(row.LedgerName, needle) || Has(row.BankAccountName, needle)
         };
     }
@@ -4324,24 +4337,28 @@ public sealed class BankingViewModel : PageViewModel
     {
         if (needle.Length == 0) return true;
         static bool Has(string? value, string text) => (value ?? string.Empty).Contains(text, StringComparison.OrdinalIgnoreCase);
-        var dateValues = new[] { detail.Date.ToString("dd.MM.yyyy"), detail.Date.ToString("dd/MM/yyyy"), detail.Date.ToString("yyyy-MM-dd"), detail.Date.ToString("dd-MM-yyyy") };
-        var debit = detail.Debit.ToString("N2");
-        var credit = detail.Credit.ToString("N2");
+        var matchDate = FlexibleFilterMatcher.MatchesDate(detail.Date, needle);
+        var matchDebit = FlexibleFilterMatcher.MatchesAmount(detail.Debit, needle) ||
+                         Has(detail.Debit.ToString("N2"), needle) ||
+                         Has(detail.Debit.ToString(CultureInfo.InvariantCulture), needle);
+        var matchCredit = FlexibleFilterMatcher.MatchesAmount(detail.Credit, needle) ||
+                          Has(detail.Credit.ToString("N2"), needle) ||
+                          Has(detail.Credit.ToString(CultureInfo.InvariantCulture), needle);
         var rowNo = detail.RowNo.ToString(CultureInfo.InvariantCulture);
 
         return column.ToUpperInvariant() switch
         {
-            "DATE" => dateValues.Any(value => Has(value, needle)),
+            "DATE" => matchDate,
             "NARRATION" => Has(detail.Narration, needle),
-            "DEBIT" => Has(debit, needle) || Has(detail.Debit.ToString(CultureInfo.InvariantCulture), needle),
-            "CREDIT" => Has(credit, needle) || Has(detail.Credit.ToString(CultureInfo.InvariantCulture), needle),
+            "DEBIT" => matchDebit,
+            "CREDIT" => matchCredit,
             "MODE" => Has(detail.Mode, needle),
             "METHOD" => Has(detail.Method, needle),
             "LEDGER" => Has(detail.Ledger, needle),
             "BANK" => Has(detail.Bank, needle),
             "ROW NO" => Has(rowNo, needle),
-            _ => dateValues.Any(value => Has(value, needle)) || Has(detail.Narration, needle) ||
-                 Has(debit, needle) || Has(credit, needle) || Has(detail.Mode, needle) || Has(detail.Method, needle) ||
+            _ => matchDate || Has(detail.Narration, needle) ||
+                 matchDebit || matchCredit || Has(detail.Mode, needle) || Has(detail.Method, needle) ||
                  Has(detail.Ledger, needle) || Has(detail.Bank, needle) || Has(rowNo, needle)
         };
     }
@@ -5401,13 +5418,16 @@ public sealed class BankingViewModel : PageViewModel
                         // check. Master deltas independently update Existing Match in-place.
                         var bankAuthorityChanged = tallyResult.ConvertedBankTransactions > 0 ||
                                                    tallyResult.ImportedTransactionsRetired > 0 ||
+                                                   tallyResult.ImportedInterbankChanged ||
                                                    tallyResult.Matched > 0 ||
                                                    tallyResult.SingleStatementLinked > 0 ||
                                                    tallyResult.VerificationConfirmed > 0 ||
                                                    tallyResult.AlteredAndVerified > 0;
                         if (bankAuthorityChanged)
                         {
+                            _loadedBankingAuthorityFingerprint = string.Empty;
                             _workspaceStateCache.QueueModuleRefresh(client.Id, client.FinancialYear, ClientWorkspaceModule.Banking);
+                            _workspaceStateCache.QueueModuleRefresh(client.Id, client.FinancialYear, ClientWorkspaceModule.LedgerMapping);
                             _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Banking, "Tally Bank transaction conversion reconciliation");
                         }
                         StatusText = string.IsNullOrWhiteSpace(tallyResult.Status) ? StatusText : $"{StatusText} | {tallyResult.Status}";
@@ -5635,18 +5655,43 @@ public sealed class BankingViewModel : PageViewModel
         };
     }
 
-    private static bool IsBankOrOverdraftMasterGroup(string? groupName)
+    private string ResolveModeForSelectedLedger(
+        long clientId,
+        string financialYear,
+        string? currentMode,
+        string? ledgerName,
+        decimal debit,
+        decimal credit)
     {
-        var group = (groupName ?? string.Empty).Trim().ToUpperInvariant();
-        if (group.Length == 0) return false;
-        return group.Contains("BANK", StringComparison.Ordinal) ||
-               group.Contains("OVERDRAFT", StringComparison.Ordinal) ||
-               group.Contains("OD A/C", StringComparison.Ordinal) ||
-               group.Contains("OD ACCOUNT", StringComparison.Ordinal) ||
-               group.Equals("OD", StringComparison.Ordinal) ||
-               group.Contains("CASH CREDIT", StringComparison.Ordinal) ||
-               group.Contains("OCC", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(ledgerName))
+            return string.IsNullOrWhiteSpace(currentMode) ? (debit > 0 ? "Payment" : "Receipt") : currentMode.Trim();
+
+        var masters = _activeMasterRecords.Count > 0 &&
+                      CurrentClientId == clientId &&
+                      CurrentFinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase)
+            ? _activeMasterRecords
+            : _masterRepository.Get(clientId, financialYear, false, string.Empty);
+
+        var ledgerGroups = masters
+            .Where(item => item.Type.Equals("Ledger", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.Name))
+            .GroupBy(item => item.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Parent.Trim(), StringComparer.OrdinalIgnoreCase);
+        var groupHierarchy = masters
+            .Where(item => item.Type.Equals("Group", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.Name))
+            .GroupBy(item => item.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Parent.Trim(), StringComparer.OrdinalIgnoreCase);
+
+        return BankContraLedgerPolicy.ResolveModeForLedger(
+            currentMode,
+            ledgerName,
+            debit,
+            credit,
+            ledgerGroups,
+            groupHierarchy);
     }
+
+    private static bool IsBankOrOverdraftMasterGroup(string? groupName) =>
+        BankContraLedgerPolicy.IsBankOrOverdraftGroup(groupName);
 
     private void ApplyBankRename()
     {
@@ -5935,6 +5980,10 @@ public sealed class BankingViewModel : PageViewModel
         var completedMatches = CompletedTransferMatches(matches);
         var pendingTally = matches.Count(item => BankTransferWorkflowState.IsTallyMatch(item) && !BankTransferWorkflowState.IsCompleted(item));
         TransferMatches.ReplaceRange(completedMatches);
+        LoadTransactions();
+        _mappingService.Rebuild(client.Id, client.FinancialYear);
+        BuildLedgerMappingRows(_ledgerMappingBankFilter, _ledgerMappingShowMapped, _ledgerMappingVoucherFilter);
+        _loadedBankingAuthorityFingerprint = string.Empty;
         if (_reportsWorkspaceLoaded)
         {
             ClearReportCollections();
@@ -5942,6 +5991,7 @@ public sealed class BankingViewModel : PageViewModel
             AppendTransientImportIssuesToReport();
         }
         QueueWorkspaceCacheRefresh();
+        _liveChangeHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Banking, "Inter-Bank transfer reconciliation");
         StatusText = $"{completedMatches.Count:N0} completed Inter-Bank transfer(s) are in Transfer Matches/Transfer_Map; {pendingTally:N0} Tally workflow candidate(s) remain staged in Tally Bank Conversion/Contra Debug until Contra and final balance verification complete.";
     }
 
