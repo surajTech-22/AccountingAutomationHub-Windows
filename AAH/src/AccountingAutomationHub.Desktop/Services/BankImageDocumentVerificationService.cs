@@ -1953,7 +1953,7 @@ internal sealed class BankImageDocumentVerificationService
                             .Replace("<br>", " ", StringComparison.OrdinalIgnoreCase)
                             .Replace("<br/>", " ", StringComparison.OrdinalIgnoreCase)
                             .Replace("<br />", " ", StringComparison.OrdinalIgnoreCase), " ");
-                    var value = Normalize(WebUtility.HtmlDecode(text));
+                    var value = Normalize(CleanCellEscapedNewlines(WebUtility.HtmlDecode(text)));
                     int Span(Regex regex)
                     {
                         var match = regex.Match(attributes);
@@ -2006,7 +2006,7 @@ internal sealed class BankImageDocumentVerificationService
         }
         if (pending.Contains('|')) logicalLines.Add(pending);
         var pipeRows = logicalLines
-            .Select(line => line.Trim().Trim('|').Split('|').Select(Normalize).ToList())
+            .Select(line => line.Trim().Trim('|').Split('|').Select(cell => Normalize(CleanCellEscapedNewlines(cell))).ToList())
             .Where(row => !IsSeparatorRow(row))
             .ToList();
         if (pipeRows.Count == 0) return [];
@@ -2045,6 +2045,12 @@ internal sealed class BankImageDocumentVerificationService
         }
         return string.Join("\n", parts);
     }
+
+    private static string CleanCellEscapedNewlines(string? value) =>
+        (value ?? string.Empty)
+            .Replace("\\r\\n", " ", StringComparison.Ordinal)
+            .Replace("\\n", " ", StringComparison.Ordinal)
+            .Replace("\\r", " ", StringComparison.Ordinal);
 
     private static string Clean(string? value) => (value ?? string.Empty).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim();
     private static string Normalize(string? value) => Regex.Replace(Clean(value), @"\s+", " ").Trim();

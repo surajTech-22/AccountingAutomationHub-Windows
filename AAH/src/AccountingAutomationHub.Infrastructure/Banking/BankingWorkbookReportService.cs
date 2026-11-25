@@ -500,7 +500,11 @@ public sealed class BankingWorkbookReportService(
 
                     var targetReferences = BankNarrationParser.ExtractReferenceGroups(
                         CombineReference(target), targetMethod, target.Credit, target.TransactionDate);
-                    var shared = SelectSharedReference(sourceReferences, targetReferences);
+                    var shared = BankNarrationParser.SelectSharedReference(
+                        sourceReferences,
+                        targetReferences,
+                        sourceMethod.Length > 0 ? sourceMethod : targetMethod,
+                        source.TransactionDate);
                     if (shared.Length == 0) continue;
                     accepted.Add((target, targetMethod, targetReferences, shared));
                 }
@@ -1190,10 +1194,4 @@ public sealed class BankingWorkbookReportService(
         transaction.ReferenceNumber.Length > 0
             ? transaction.ReferenceNumber + " " + transaction.Narration
             : transaction.Narration;
-
-    private static string SelectSharedReference(IReadOnlySet<string> source, IReadOnlySet<string> target) =>
-        source.Intersect(target, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(value => value.Any(char.IsLetter) && value.Any(char.IsDigit))
-            .ThenByDescending(value => value.Length)
-            .FirstOrDefault() ?? string.Empty;
 }

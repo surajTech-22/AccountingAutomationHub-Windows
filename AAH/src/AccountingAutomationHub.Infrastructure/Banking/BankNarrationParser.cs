@@ -174,6 +174,138 @@ public static partial class BankNarrationParser
         return result;
     }
 
+    /// <summary>
+    /// Selects the strongest shared transfer reference between two bank statement or
+    /// Tally-converted entries. Exact reference matches always win; for NEFT and RTGS,
+    /// different banks can format the same RBI SFMS UTR in either 22-character YYYYMMDD
+    /// or 16-character YYDDD Julian-date form, which are matched canonically here while
+    /// still returning the authentic source reference token for display.
+    /// </summary>
+    public static string SelectSharedReference(
+        IReadOnlySet<string> sourceReferences,
+        IReadOnlySet<string> targetReferences,
+        string paymentMethod = "",
+        DateTime? transactionDate = null)
+    {
+        var method = (paymentMethod ?? string.Empty).Trim().ToUpperInvariant();
+        var exact = sourceReferences.Intersect(targetReferences, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(value => ReferencePriority(value, method))
+            .ThenByDescending(value => value.Length)
+            .ThenBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (!string.IsNullOrEmpty(exact)) return exact;
+
+        if (method.Length > 0 && method is not ("RTGS" or "NEFT"))
+            return string.Empty;
+
+        var sourceByCanonicalKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var reference in sourceReferences)
+        {
+            if (!TryBuildCanonicalRbiUtrKey(reference, transactionDate, out var canonicalKey)) continue;
+            if (!sourceByCanonicalKey.TryGetValue(canonicalKey, out var existing) ||
+                ReferencePriority(reference, method) > ReferencePriority(existing, method) ||
+                (ReferencePriority(reference, method) == ReferencePriority(existing, method) && reference.Length > existing.Length))
+            {
+                sourceByCanonicalKey[canonicalKey] = reference;
+            }
+        }
+
+        if (sourceByCanonicalKey.Count == 0) return string.Empty;
+
+        string bestDisplay = string.Empty;
+        var bestScore = int.MinValue;
+        foreach (var targetReference in targetReferences)
+        {
+            if (!TryBuildCanonicalRbiUtrKey(targetReference, transactionDate, out var canonicalKey)) continue;
+            if (!sourceByCanonicalKey.TryGetValue(canonicalKey, out var sourceReference)) continue;
+
+            var chosen = sourceReference.Length >= targetReference.Length ? sourceReference : targetReference;
+            var score = ReferencePriority(chosen, method);
+            if (score > bestScore ||
+                (score == bestScore && (chosen.Length > bestDisplay.Length ||
+                 (chosen.Length == bestDisplay.Length && string.Compare(chosen, bestDisplay, StringComparison.OrdinalIgnoreCase) < 0))))
+            {
+                bestDisplay = chosen;
+                bestScore = score;
+            }
+        }
+
+        return bestDisplay;
+    }
+
+    public static bool TryBuildCanonicalRbiUtrKey(
+        string? reference,
+        DateTime? transactionDate,
+        out string canonicalKey)
+    {
+        canonicalKey = string.Empty;
+        if (string.IsNullOrWhiteSpace(reference)) return false;
+
+        var compact = new string(reference
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
+        if (compact.Length is < 16 or > 24) return false;
+
+        string bank;
+        DateTime utrDate;
+        string sequence;
+
+        if (compact.Length >= 19)
+        {
+            var match = RbiCalendarUtrRegex().Match(compact);
+            if (!match.Success) return false;
+            var yyyymmdd = match.Groups["year"].Value + match.Groups["month"].Value + match.Groups["day"].Value;
+            if (!DateTime.TryParseExact(
+                    yyyymmdd,
+                    "yyyyMMdd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out utrDate))
+            {
+                return false;
+            }
+
+            bank = match.Groups["bank"].Value;
+            sequence = match.Groups["seq"].Value;
+        }
+        else
+        {
+            var match = RbiJulianUtrRegex().Match(compact);
+            if (!match.Success) return false;
+            var yy = int.Parse(match.Groups["yy"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var dayOfYear = int.Parse(match.Groups["ddd"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var year = 2000 + yy;
+            var daysInYear = DateTime.IsLeapYear(year) ? 366 : 365;
+            if (dayOfYear < 1 || dayOfYear > daysInYear) return false;
+
+            utrDate = new DateTime(year, 1, 1).AddDays(dayOfYear - 1);
+            bank = match.Groups["bank"].Value;
+            sequence = match.Groups["seq"].Value;
+        }
+
+        var trimmedSequence = sequence.TrimStart('0');
+        if (trimmedSequence.Length < 4) return false;
+
+        if (transactionDate.HasValue &&
+            Math.Abs((utrDate.Date - transactionDate.Value.Date).TotalDays) > 3)
+        {
+            return false;
+        }
+
+        canonicalKey = $"{bank}|{utrDate:yyyyMMdd}|{trimmedSequence}";
+        return true;
+    }
+
+    private static int ReferencePriority(string value, string method)
+    {
+        var score = value.Length;
+        if (value.Any(char.IsLetter) && value.Any(char.IsDigit)) score += 30;
+        if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase) && value.Length == 12 && value.All(char.IsDigit)) score += 40;
+        if (method is "NEFT" or "RTGS" && value.Length >= 12) score += 40;
+        return score;
+    }
+
     private static bool IsIgnoredReference(string value, decimal amount, DateTime? transactionDate)
     {
         if (new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -2193,7 +2325,8 @@ public static partial class BankNarrationParser
 
     private static string NormalizeWhitespace(string text)
     {
-        var value = (text ?? string.Empty).Replace('\u00A0', ' ').Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ')
+        var unescaped = LiteralEscapedNewlineRegex().Replace(text ?? string.Empty, " ");
+        var value = unescaped.Replace('\u00A0', ' ').Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ')
             .Trim().ToUpperInvariant();
         return CollapseSpaces(value);
     }
@@ -2262,4 +2395,13 @@ public static partial class BankNarrationParser
 
     [GeneratedRegex(@"^(?<base>.+\D)\s+(?<suffix>\d{1,2})$", RegexOptions.IgnoreCase)]
     private static partial Regex ShortSequenceSuffixRegex();
+
+    [GeneratedRegex(@"\\r\\n|\\[rn](?=[A-Z0-9\s/|:,.\-]|$)", RegexOptions.CultureInvariant)]
+    private static partial Regex LiteralEscapedNewlineRegex();
+
+    [GeneratedRegex(@"^(?<bank>[A-Z]{4})(?<chan>[A-Z][0-9]|[A-Z]{1,2})(?<year>20\d{2})(?<month>0[1-9]|1[0-2])(?<day>0[1-9]|[12]\d|3[01])(?<seq>\d{6,10})$", RegexOptions.CultureInvariant)]
+    private static partial Regex RbiCalendarUtrRegex();
+
+    [GeneratedRegex(@"^(?<bank>[A-Z]{4})(?<chan>[A-Z][0-9]|[A-Z]{1,2})(?<yy>\d{2})(?<ddd>\d{3})(?<seq>\d{6,8})$", RegexOptions.CultureInvariant)]
+    private static partial Regex RbiJulianUtrRegex();
 }

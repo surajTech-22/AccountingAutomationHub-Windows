@@ -84,6 +84,7 @@ public class SearchableComboBox : ComboBox
         ItemsSource = _view;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        DataContextChanged += OnDataContextChanged;
         SelectionChanged += OnSelectionChanged;
         AddHandler(UIElement.PreviewKeyDownEvent, new KeyEventHandler(OnPreviewKeyDown), true);
         PreviewMouseWheel += OnPreviewMouseWheel;
@@ -364,6 +365,28 @@ public class SearchableComboBox : ComboBox
         _pendingReload = null;
         DetachEditableTextBox();
         if (_observedCollection is not null) ObserveCollection(_observedCollection, false);
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (IsKeyboardFocusWithin || _popupSelectionCommitInProgress || _sourceReloadInProgress) return;
+        _sourceReloadInProgress = true;
+        try
+        {
+            GetBindingExpression(TextProperty)?.UpdateTarget();
+            var boundText = Text?.Trim() ?? string.Empty;
+            var selected = string.IsNullOrWhiteSpace(boundText)
+                ? null
+                : _items.FirstOrDefault(item => string.Equals(GetValueText(item), boundText, StringComparison.OrdinalIgnoreCase));
+            SelectedItem = selected;
+            var display = selected is not null ? GetValueText(selected) : boundText;
+            _lastCommittedText = display;
+            SetEditableText(display, updateSource: false);
+        }
+        finally
+        {
+            _sourceReloadInProgress = false;
+        }
     }
 
     private void AttachEditableTextBox()

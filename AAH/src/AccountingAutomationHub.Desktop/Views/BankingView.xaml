@@ -335,7 +335,9 @@
                               ScrollViewer.CanContentScroll="True"
                               Loaded="BankStatementGrid_Loaded"
                               BeginningEdit="BankStatementGrid_BeginningEdit"
-                              RowEditEnding="BankStatementGrid_RowEditEnding">
+                              RowEditEnding="BankStatementGrid_RowEditEnding"
+                              PreviewKeyDown="BankStatementGrid_PreviewKeyDown"
+                              PreviewTextInput="BankStatementGrid_PreviewTextInput">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, Mode=OneWay, StringFormat=dd.MM.yyyy}" IsReadOnly="True" Width="Auto" MinWidth="95" MaxWidth="125"/>
                             <DataGridTextColumn Header="Narration" Binding="{Binding Narration, Mode=OneWay}" IsReadOnly="True" Width="*" MinWidth="300"/>
@@ -353,17 +355,28 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Ledger" Width="Auto" MinWidth="190" MaxWidth="360">
+                            <DataGridTemplateColumn Header="Ledger" IsReadOnly="True" Width="220" MinWidth="190" MaxWidth="360">
                                 <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate><TextBlock Text="{Binding LedgerName, Mode=OneWay}" Padding="4,2"/></DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                                <DataGridTemplateColumn.CellEditingTemplate>
                                     <DataTemplate>
-                                        <controls:SearchableComboBox SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                                             Text="{Binding LedgerName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                                             AllowCustomText="False" OpenOnFocus="True" EnableMouseWheelSelection="False"/>
+                                        <controls:SearchableComboBox IsEnabled="{Binding DataContext.CanEditAccounting, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                     SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                     Text="{Binding LedgerName, Mode=TwoWay, UpdateSourceTrigger=Explicit}"
+                                                                     AllowCustomText="False"
+                                                                     SelectFirstVisibleOnNoMatch="False"
+                                                                     UpdateSourceWhileTyping="False"
+                                                                     HandleEnterKey="False"
+                                                                     OpenOnFocus="True"
+                                                                     EnableMouseWheelSelection="False"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     VerticalContentAlignment="Center"
+                                                                     BorderThickness="0"
+                                                                     Background="Transparent"
+                                                                     GotKeyboardFocus="BankStatementLedger_GotKeyboardFocus"
+                                                                     DropDownClosed="BankStatementLedger_DropDownClosed"
+                                                                     LostKeyboardFocus="BankStatementLedger_LostKeyboardFocus"
+                                                                     PreviewKeyDown="BankStatementLedger_PreviewKeyDown"/>
                                     </DataTemplate>
-                                </DataGridTemplateColumn.CellEditingTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Bank" Binding="{Binding BankAccountName, Mode=OneWay}" IsReadOnly="True" Width="Auto" MinWidth="240" MaxWidth="420"/>
                         </DataGrid.Columns>

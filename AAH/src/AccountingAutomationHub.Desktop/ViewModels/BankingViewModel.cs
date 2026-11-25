@@ -89,6 +89,9 @@ public sealed class BankingViewModel : PageViewModel
     private long _loadedClientId;
     private string _loadedFinancialYear = string.Empty;
     private bool _requiresDataRefresh = true;
+    private string _loadedBankingAuthorityFingerprint = string.Empty;
+    private long _activeBankStatementLedgerEditTransactionId;
+    private ClientWorkspaceSnapshot? _deferredBankingSnapshot;
     private bool _ledgerMappingsLoaded;
     private IReadOnlyList<MasterRecord> _activeMasterRecords = [];
     private string _bankBalanceAccountName = "Select a Bank Account";
@@ -2194,6 +2197,21 @@ public sealed class BankingViewModel : PageViewModel
         {
             case ClientWorkspaceModule.Banking:
             {
+                var incomingFingerprint = BankingAuthorityFingerprint(snapshot);
+                if (_loadedClientId == client.Id &&
+                    _loadedFinancialYear.Equals(client.FinancialYear, StringComparison.OrdinalIgnoreCase) &&
+                    !_requiresDataRefresh &&
+                    string.Equals(_loadedBankingAuthorityFingerprint, incomingFingerprint, StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                if (_activeBankStatementLedgerEditTransactionId > 0)
+                {
+                    _deferredBankingSnapshot = snapshot;
+                    break;
+                }
+
                 var accountId = SelectedAccount?.Id ?? 0L;
                 var statementId = SelectedStatement?.Id ?? 0L;
                 var transactionId = SelectedTransaction?.Id ?? 0L;
@@ -2211,6 +2229,8 @@ public sealed class BankingViewModel : PageViewModel
                 RefreshBankBalanceSnapshot();
                 ChainStatusText = BuildChainStatus();
                 _loadedClientId = client.Id; _loadedFinancialYear = client.FinancialYear; _requiresDataRefresh = false;
+                _loadedBankingAuthorityFingerprint = incomingFingerprint;
+                _deferredBankingSnapshot = null;
                 var balanceReviews = Statements.Count(item => item.ReconciliationStatus.Contains("Review", StringComparison.OrdinalIgnoreCase) || item.ReconciliationStatus.Equals("Difference", StringComparison.OrdinalIgnoreCase));
                 StatusText = $"Banking ready • {Transactions.Count:N0} transaction(s), {balanceReviews:N0} balance review(s) from Banking cache stream.";
                 QueueBankRenameHistoryHydration(client.Id, client.FinancialYear, snapshot.BankAccounts);
@@ -2377,6 +2397,93 @@ public sealed class BankingViewModel : PageViewModel
             QueueBankBalanceEvidenceRepair(client);
             QueueTallyBankStatementReconciliation(client, force: true, reason: "Banking Refresh");
         }
+    }
+
+    public void BeginBankStatementLedgerEdit(BankTransactionRecord? row)
+    {
+        _activeBankStatementLedgerEditTransactionId = row?.Id ?? 0;
+    }
+
+    public void EndBankStatementLedgerEdit(BankTransactionRecord? row, bool applyDeferredSnapshot = true)
+    {
+        if (row is not null && row.Id != _activeBankStatementLedgerEditTransactionId) return;
+        _activeBankStatementLedgerEditTransactionId = 0;
+        if (!applyDeferredSnapshot || _deferredBankingSnapshot is not { } pending) return;
+        _deferredBankingSnapshot = null;
+        WarmFromPreparedSnapshot(pending, ClientWorkspaceModule.Banking);
+    }
+
+    private static string BankingAuthorityFingerprint(ClientWorkspaceSnapshot snapshot)
+    {
+        var accounts = string.Join("\n", snapshot.BankAccounts
+            .OrderBy(item => item.Id)
+            .Select(item => string.Join("|",
+                item.Id,
+                item.BankName.Trim(),
+                item.AccountType.Trim(),
+                item.AccountNumber.Trim(),
+                item.LedgerName.Trim(),
+                item.TallyLedgerMasterId.Trim(),
+                item.OpeningBalance?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.ClosingBalance?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.BalanceStatus.Trim())));
+
+        var statements = string.Join("\n", snapshot.BankStatements
+            .OrderBy(item => item.Id)
+            .Select(item => string.Join("|",
+                item.Id,
+                item.BankAccountId,
+                item.SourceFile.Trim(),
+                item.SourceSheet.Trim(),
+                item.OpeningBalance?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.ClosingBalance?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.OpeningBalanceSource.Trim(),
+                item.ClosingBalanceSource.Trim(),
+                item.ReconciliationStatus.Trim(),
+                item.Difference.ToString("F2", CultureInfo.InvariantCulture),
+                item.TransactionCount)));
+
+        var transactions = string.Join("\n", snapshot.BankTransactions
+            .OrderBy(item => item.Id)
+            .Select(item => string.Join("|",
+                item.Id,
+                item.BankAccountId,
+                item.TransactionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                item.Debit.ToString("F2", CultureInfo.InvariantCulture),
+                item.Credit.ToString("F2", CultureInfo.InvariantCulture),
+                item.RunningBalance?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.Mode.Trim(),
+                item.LedgerName.Trim(),
+                item.MappingStatus.Trim(),
+                item.RecordStatus.Trim(),
+                item.MatchId.Trim(),
+                item.MatchedTransactionId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                item.Narration)));
+
+        var reconciliation = string.Join("\n", snapshot.BankReconciliation
+            .OrderBy(item => item.StatementId)
+            .ThenBy(item => item.BankAccountId)
+            .Select(item => string.Join("|",
+                item.StatementId,
+                item.BankAccountId,
+                item.AccountName.Trim(),
+                item.PeriodLabel.Trim(),
+                item.Difference?.ToString("F2", CultureInfo.InvariantCulture) ?? string.Empty,
+                item.Status.Trim())));
+
+        var transfers = string.Join("\n", snapshot.BankTransfers
+            .OrderBy(item => item.MatchId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id)
+            .Select(item => string.Join("|",
+                item.Id,
+                item.MatchId.Trim(),
+                item.SourceTransactionId,
+                item.TargetTransactionId,
+                item.Amount.ToString("F2", CultureInfo.InvariantCulture),
+                item.ReferenceNumber.Trim(),
+                item.Status.Trim())));
+
+        return string.Join("\u001e", accounts, statements, transactions, reconciliation, transfers);
     }
 
     public void BeginLedgerMappingEditor(LedgerMappingWorkbenchRow? row)
@@ -2570,6 +2677,9 @@ public sealed class BankingViewModel : PageViewModel
             _mappingService.Rebuild(transaction.ClientId, transaction.FinancialYear);
             _ledgerTotalService.Invalidate(transaction.ClientId, transaction.FinancialYear);
             RefreshBankBalanceSnapshot();
+            _activeBankStatementLedgerEditTransactionId = 0;
+            _deferredBankingSnapshot = null;
+            _loadedBankingAuthorityFingerprint = string.Empty;
             QueueWorkspaceCacheRefresh();
             _liveChangeHub.Publish(transaction.ClientId, transaction.FinancialYear, AccountingLiveArea.Banking, "Bank Statement row saved");
             StatusText = "Bank Statement row saved; Ledger Mapping and balances refreshed.";
@@ -9001,6 +9111,9 @@ public sealed class BankingViewModel : PageViewModel
         _loadedClientId = 0;
         _loadedFinancialYear = string.Empty;
         _requiresDataRefresh = true;
+        _loadedBankingAuthorityFingerprint = string.Empty;
+        _activeBankStatementLedgerEditTransactionId = 0;
+        _deferredBankingSnapshot = null;
         _ledgerMappingsLoaded = false;
         _activeMasterRecords = [];
         _ledgerMappingExistingMatchRefreshFingerprint = string.Empty;

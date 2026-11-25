@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -29,6 +30,7 @@ public partial class BankingView : UserControl
     private LedgerMappingWorkbenchRow? _ledgerMappingLastStagedRow;
     private string _ledgerMappingLastStagedFinalLedger = string.Empty;
     private string _ledgerMappingLastStagedGroup = string.Empty;
+    private readonly ConditionalWeakTable<SearchableComboBox, BankStatementLedgerEditState> _bankStatementLedgerEditStates = new();
 
     public BankingView()
     {
@@ -205,10 +207,176 @@ public partial class BankingView : UserControl
             return;
         }
 
+        if (FindVisualChild<SearchableComboBox>(e.Row) is { IsDropDownOpen: true }) return;
+
         QueueAfterCommit(() =>
         {
             ViewModel?.SaveTransactionRecord(transaction);
         });
+    }
+
+    private void BankStatementLedger_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (ViewModel is not { CanEditAccounting: true } viewModel) return;
+        if (sender is not SearchableComboBox { DataContext: BankTransactionRecord row } combo) return;
+
+        var state = _bankStatementLedgerEditStates.GetValue(combo, _ => new BankStatementLedgerEditState());
+        if (!state.IsArmed || !ReferenceEquals(state.Row, row))
+        {
+            state.Row = row;
+            state.OriginalValue = (row.LedgerName ?? string.Empty).Trim();
+            state.IsArmed = true;
+        }
+
+        viewModel.SelectedTransaction = row;
+        viewModel.BeginBankStatementLedgerEdit(row);
+    }
+
+    private void BankStatementLedger_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (sender is SearchableComboBox { DataContext: BankTransactionRecord row } combo)
+            CommitBankStatementLedgerIfChanged(combo, row, finalizeIfUnchanged: false);
+    }
+
+    private void BankStatementLedger_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not SearchableComboBox { DataContext: BankTransactionRecord row } combo) return;
+        if (e.NewFocus is DependencyObject target &&
+            ItemsControl.ContainerFromElement(combo, target) is ComboBoxItem)
+        {
+            return;
+        }
+
+        CommitBankStatementLedgerIfChanged(combo, row, finalizeIfUnchanged: true);
+    }
+
+    private void BankStatementLedger_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (sender is SearchableComboBox { DataContext: BankTransactionRecord row } combo)
+            CommitBankStatementLedgerIfChanged(combo, row, finalizeIfUnchanged: false);
+    }
+
+    private void CommitBankStatementLedgerIfChanged(
+        SearchableComboBox combo,
+        BankTransactionRecord row,
+        bool finalizeIfUnchanged)
+    {
+        if (!_bankStatementLedgerEditStates.TryGetValue(combo, out var state) || !state.IsArmed)
+            return;
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!_bankStatementLedgerEditStates.TryGetValue(combo, out var deferred) ||
+                !deferred.IsArmed ||
+                !ReferenceEquals(deferred.Row, row))
+            {
+                return;
+            }
+
+            var viewModel = ViewModel;
+            if (viewModel is null)
+            {
+                if (finalizeIfUnchanged) deferred.IsArmed = false;
+                return;
+            }
+
+            var current = (combo.Text ?? string.Empty).Trim();
+            if (string.Equals(deferred.OriginalValue, current, StringComparison.OrdinalIgnoreCase))
+            {
+                if (finalizeIfUnchanged)
+                {
+                    deferred.IsArmed = false;
+                    viewModel.EndBankStatementLedgerEdit(row);
+                }
+                return;
+            }
+
+            if (current.Length > 0 &&
+                !viewModel.MasterLedgerNames.Contains(current, StringComparer.OrdinalIgnoreCase))
+            {
+                if (finalizeIfUnchanged)
+                {
+                    deferred.IsArmed = false;
+                    viewModel.EndBankStatementLedgerEdit(row);
+                }
+                return;
+            }
+
+            deferred.OriginalValue = current;
+            if (finalizeIfUnchanged) deferred.IsArmed = false;
+            row.LedgerName = current;
+            combo.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+            viewModel.EndBankStatementLedgerEdit(row, applyDeferredSnapshot: false);
+            viewModel.SaveTransactionRecord(row);
+        }, DispatcherPriority.DataBind);
+    }
+
+    private void BankStatementGrid_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { CanEditAccounting: true }) return;
+        if (sender is not DataGrid grid ||
+            !(grid.CurrentColumn?.Header?.ToString()?.Equals("Ledger", StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            return;
+        }
+
+        if (Keyboard.FocusedElement is DependencyObject focused &&
+            FindVisualParent<SearchableComboBox>(focused) is not null)
+        {
+            return;
+        }
+
+        var open = e.Key is Key.F2 or Key.F4 ||
+                   ((e.Key is Key.Down or Key.Up) && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt));
+        if (!open) return;
+
+        var selector = GetCurrentBankStatementLedgerSelector(grid);
+        if (selector is null)
+            grid.Dispatcher.BeginInvoke(() => GetCurrentBankStatementLedgerSelector(grid)?.ActivateSelector(true), DispatcherPriority.Input);
+        else
+            selector.ActivateSelector(true);
+        e.Handled = true;
+    }
+
+    private void BankStatementGrid_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (ViewModel is not { CanEditAccounting: true }) return;
+        if (sender is not DataGrid grid ||
+            string.IsNullOrEmpty(e.Text) ||
+            !(grid.CurrentColumn?.Header?.ToString()?.Equals("Ledger", StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            return;
+        }
+
+        if (Keyboard.FocusedElement is DependencyObject focused &&
+            FindVisualParent<SearchableComboBox>(focused) is not null)
+        {
+            return;
+        }
+
+        var selector = GetCurrentBankStatementLedgerSelector(grid);
+        if (selector is null)
+            grid.Dispatcher.BeginInvoke(() => GetCurrentBankStatementLedgerSelector(grid)?.BeginTyping(e.Text), DispatcherPriority.Input);
+        else
+            selector.BeginTyping(e.Text);
+        e.Handled = true;
+    }
+
+    private static SearchableComboBox? GetCurrentBankStatementLedgerSelector(DataGrid grid)
+    {
+        if (grid.CurrentItem is null || grid.CurrentColumn is null) return null;
+        grid.ScrollIntoView(grid.CurrentItem, grid.CurrentColumn);
+        grid.UpdateLayout();
+        var content = grid.CurrentColumn.GetCellContent(grid.CurrentItem);
+        return content as SearchableComboBox ?? FindVisualChild<SearchableComboBox>(content);
+    }
+
+    private sealed class BankStatementLedgerEditState
+    {
+        public BankTransactionRecord? Row { get; set; }
+        public string OriginalValue { get; set; } = string.Empty;
+        public bool IsArmed { get; set; }
     }
 
     private void ObVerify_Click(

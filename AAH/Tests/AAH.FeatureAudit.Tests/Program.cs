@@ -19,6 +19,7 @@ internal static class Program
         TallySalesXmlImportTests.Run();
         Gstr1ReportSalesMappingTests.Run();
         SalesAutoImportDiagnosticsTests.Run();
+        BankTransferUtrMatchingTests.Run();
         foreach (var count in new[] { 1, 2, 31, 365 })
         foreach (var seed in new[] { 1, 19, 137 })
         {

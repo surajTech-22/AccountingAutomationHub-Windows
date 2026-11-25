@@ -809,7 +809,27 @@ try
         throw new Exception("Header-only co-op summary did not trigger unparsedPrintedSummary fail-closed guard.");
     coopPassed++;
 
-    Console.WriteLine($"PASS: {coopPassed}/7 general co-op & IFSC Bank OCR safety scenarios.");
+    // 8. HTML cell with literal escaped \n newlines must produce clean space-separated narration.
+    var escapedNewlineHtml = VerifySynthetic("html-escaped-newline",
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nAccount No : 100000001234\nIFSC : KSCB0004999"),
+        ("table", """
+            <table>
+              <tr><th>Post.Dt</th><th>Val.Dt</th><th>Details</th><th>Chq no</th><th>Debit</th><th>Credit</th><th>Balance</th></tr>
+              <tr><td></td><td></td><td></td><td></td><td>BROUGHT</td><td>FORWARD:</td><td>500.00Cr</td></tr>
+              <tr><td>05/11/25</td><td>05/11/25</td><td>DEP TFR\nRTGS SYNTHETIC TEST\nTRF</td><td></td><td></td><td>1000.00</td><td>1500.00Cr</td></tr>
+            </table>
+            """),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| 500.00 | 0 | 1 | 0.00 | 1,000.00 | 1,500.00Cr |"));
+    if (escapedNewlineHtml.Status != "VERIFIED" ||
+        escapedNewlineHtml.Transactions.Count != 1 ||
+        escapedNewlineHtml.Transactions[0].Description.Contains("\\n", StringComparison.Ordinal) ||
+        escapedNewlineHtml.Transactions[0].Description != "DEP TFR RTGS SYNTHETIC TEST TRF")
+    {
+        throw new Exception($"HTML literal \\n cleanup failed: status={escapedNewlineHtml.Status} desc=[{escapedNewlineHtml.Transactions.FirstOrDefault()?.Description}]");
+    }
+    coopPassed++;
+
+    Console.WriteLine($"PASS: {coopPassed}/8 general co-op & IFSC Bank OCR safety scenarios.");
 }
 finally
 {

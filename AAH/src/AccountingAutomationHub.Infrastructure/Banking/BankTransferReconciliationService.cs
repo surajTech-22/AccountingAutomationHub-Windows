@@ -118,10 +118,11 @@ public sealed class BankTransferReconciliationService(
                         targetMethod,
                         creditCandidate.Credit,
                         creditCandidate.TransactionDate);
-                    var sharedReference = SelectSharedReference(
+                    var sharedReference = BankNarrationParser.SelectSharedReference(
                         sourceReferences,
                         targetReferences,
-                        sourceMethod.Length > 0 ? sourceMethod : targetMethod);
+                        sourceMethod.Length > 0 ? sourceMethod : targetMethod,
+                        source.TransactionDate);
                     if (sharedReference.Length == 0) continue;
 
                     var difference = Math.Round(source.Debit - creditCandidate.Credit, 2);
@@ -573,26 +574,4 @@ public sealed class BankTransferReconciliationService(
             }
         ]);
     }
-
-    private static string SelectSharedReference(
-        IReadOnlySet<string> sourceReferences,
-        IReadOnlySet<string> targetReferences,
-        string method)
-    {
-        var shared = sourceReferences.Intersect(targetReferences, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(value => ReferencePriority(value, method))
-            .ThenByDescending(value => value.Length)
-            .ToList();
-        return shared.Count > 0 ? shared[0] : string.Empty;
-    }
-
-    private static int ReferencePriority(string value, string method)
-    {
-        var score = value.Length;
-        if (value.Any(char.IsLetter) && value.Any(char.IsDigit)) score += 30;
-        if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase) && value.Length == 12 && value.All(char.IsDigit)) score += 40;
-        if (method is "NEFT" or "RTGS" && value.Length >= 12) score += 40;
-        return score;
-    }
-
 }
