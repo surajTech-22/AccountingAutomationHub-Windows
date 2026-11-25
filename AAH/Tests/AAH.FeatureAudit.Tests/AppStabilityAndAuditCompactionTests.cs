@@ -25,7 +25,8 @@ internal static class AppStabilityAndAuditCompactionTests
         RunBranchChildGstProfileSkipTest();
         RunAuditRepositoryPolicyTest();
         RunPerformanceTraceRotationTest();
-        Console.WriteLine("PASS AppStabilityAndAuditCompaction: trigger no-op guard, startup audit compaction, non-pooled verified backup, branch GST skip, Audit SQLite policy & trace rotation.");
+        RunInvoiceVisionChildUnlinkedContractTest();
+        Console.WriteLine("PASS AppStabilityAndAuditCompaction: trigger no-op guard, startup audit compaction, non-pooled verified backup, branch GST skip, Audit SQLite policy, trace rotation & InvoiceVisionChild unlink.");
     }
 
     private static void RunAuditTriggerAndCompactionTest()
@@ -281,6 +282,42 @@ internal static class AppStabilityAndAuditCompactionTests
         {
             CleanupTempRoot(tempRoot);
         }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "AAH", "src")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+        throw new DirectoryNotFoundException("Could not locate AAH repository root.");
+    }
+
+    private static void RunInvoiceVisionChildUnlinkedContractTest()
+    {
+        var root = FindRepoRoot();
+        var bridge = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Services", "InvoiceOcrChildBridge.cs"));
+        var launcher = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Services", "InvoiceVisionChildLauncher.cs"));
+        var server = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Services", "SecureLanServerService.cs"));
+        var mobileView = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "MobileLinkView.xaml"));
+        var dumpView = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "UniversalDumpWindow.xaml"));
+
+        Check(bridge.Contains("public const bool IsLinked = false;", StringComparison.Ordinal) &&
+              !bridge.Contains("Process.Start", StringComparison.Ordinal),
+            "InvoiceOcrChildBridge must be unlinked (IsLinked = false) and must not spawn child processes.");
+        Check(launcher.Contains("public const bool IsLinked = false;", StringComparison.Ordinal) &&
+              !launcher.Contains("Process.Start", StringComparison.Ordinal),
+            "InvoiceVisionChildLauncher must be unlinked (IsLinked = false) and must not spawn child processes.");
+        Check(!server.Contains("InvoiceOcrChildBridge.TryStage1Async", StringComparison.Ordinal),
+            "SecureLanServerService must not invoke InvoiceOcrChildBridge.TryStage1Async.");
+        Check(mobileView.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal),
+            "MobileLinkView must hide Invoice OCR Child buttons and banner.");
+        Check(dumpView.Contains("Review in InvoiceVision", StringComparison.Ordinal) &&
+              dumpView.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal),
+            "UniversalDumpWindow must hide the Review in InvoiceVision button.");
     }
 
     private static long CountAuditEvents(string dbPath) =>

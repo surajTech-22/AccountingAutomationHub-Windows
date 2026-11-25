@@ -41,7 +41,7 @@
                 <Button Grid.Column="3" Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,5" Margin="10,0,6,0"/>
                 <Button Grid.Column="4" Content="Retry OCR" Command="{Binding RetryOcrCommand}" Padding="10,5"
                         ToolTip="Retry the selected queued scan using the existing independent ONNX invoice OCR runtime; no duplicate import."/>
-                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="7,0,0,0">
+                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="7,0,0,0" Visibility="Collapsed">
                     <Button Content="Run Child Stage 1" Command="{Binding RetryChildStage1Command}" Padding="9,5" Margin="0,0,6,0"
                             ToolTip="Backfill Stage 1 on an existing Phone Link scan without reuploading or rerunning AAH accounting OCR."/>
                     <Button Content="View in Invoice OCR Child" Command="{Binding OpenInInvoiceOcrCommand}" Padding="9,5"
@@ -78,7 +78,7 @@
 
             <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
                 <DockPanel LastChildFill="True">
-                    <Border DockPanel.Dock="Top" Background="#EDF4FF" CornerRadius="5" Padding="8,5" Margin="0,0,0,7">
+                    <Border DockPanel.Dock="Top" Background="#EDF4FF" CornerRadius="5" Padding="8,5" Margin="0,0,0,7" Visibility="Collapsed">
                         <TextBlock Text="{Binding ChildStage1StatusText}" FontWeight="SemiBold" Foreground="#194A76"
                                    FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChildStage1StatusText}"/>
                     </Border>

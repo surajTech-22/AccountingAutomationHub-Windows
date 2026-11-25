@@ -87,9 +87,6 @@ public sealed class SecureLanServerService : IDisposable
     private readonly ConcurrentDictionary<string, MobileInvoiceQueueItem> _mobileInvoiceQueue = new(StringComparer.OrdinalIgnoreCase);
     // R79: one recognition attempt per authenticated Client/FY scan ID; retry never reuploads or reposts.
     private readonly ConcurrentDictionary<string, byte> _mobileInvoiceOcrInFlight = new(StringComparer.OrdinalIgnoreCase);
-    // R97: optional Stage 1 backfill for a previously received Phone Link scan.
-    // This does NOT rerun ONNX, alter its mapped payload, or create accounting entries.
-    private readonly ConcurrentDictionary<string, byte> _mobileInvoiceChildOnlyInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly SqlitePurchaseRecordRepository _mobilePurchaseRepository = new();
     private readonly SqliteSalesRecordRepository _mobileSalesRepository = new();
     // R46 R29: reuse the production Bank PaddleOCR-VL raw-recognition engine for invoice
@@ -653,52 +650,8 @@ public sealed class SecureLanServerService : IDisposable
 
     // R97: Backfill/retry Child Stage 1 on the selected EXISTING scan, independently of
     // DocumentOcrState=Ready. Never re-upload, duplicate or alter ONNX accounting data.
-    public string RetryMobileInvoiceChildStage1(long clientId, string financialYear, string scanId)
-    {
-        var key = MobileQueueKey(clientId, financialYear, scanId);
-        if (!_mobileInvoiceQueue.TryGetValue(key, out var row) ||
-            !row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
-            return "The selected scan is no longer in this Client/FY review queue.";
-        var client = _clients.GetById(clientId);
-        if (client is null || client.IsArchived ||
-            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
-            return "The selected Client/FY is not available.";
-        if (row.ImagePaths.Count == 0 || row.ImagePaths.Any(p => !File.Exists(p)))
-            return "The original Phone Link photo is missing; Child Stage 1 was not started.";
-        if (_mobileInvoiceOcrInFlight.ContainsKey(key))
-            return "The original OCR pipeline is already processing this scan; wait for it to finish.";
-        if (!_mobileInvoiceChildOnlyInFlight.TryAdd(key, 0))
-            return "Child Stage 1 is already processing this scan.";
-        row.ChildStage1Status = "Queued existing Phone Link photo for Child Stage 1; accounting OCR untouched.";
-        row.ChildStage1Archive = string.Empty;
-        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-        _ = RunExistingChildStage1Async(row, key);
-        return "Existing photo queued for Invoice OCR Child Stage 1. No upload or accounting OCR retry.";
-    }
-
-    private async Task RunExistingChildStage1Async(MobileInvoiceQueueItem row, string key)
-    {
-        try {
-            var result = await InvoiceOcrChildBridge.TryStage1Async(row.ImagePaths,
-                row.ClientId, row.FinancialYear, row.ScanId, row.EvidenceFolder,
-                _mobileInvoiceOcrCancellation.Token).ConfigureAwait(false);
-            if (_mobileInvoiceQueue.TryGetValue(key, out var current) && ReferenceEquals(current, row) &&
-                row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase)) {
-                row.ChildStage1Status = result.Message;
-                row.ChildStage1Archive = result.Stage1Succeeded ? result.Stage1Archive : string.Empty;
-                MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-            }
-        }
-        catch (OperationCanceledException) {
-            row.ChildStage1Status = "Child Stage 1 stopped with AAH; accounting data unchanged.";
-            MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-        }
-        catch (Exception ex) {
-            row.ChildStage1Status = "Child Stage 1 failed: " + ex.Message + "; AAH OCR data unchanged.";
-            MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-        }
-        finally { _mobileInvoiceChildOnlyInFlight.TryRemove(key, out _); }
-    }
+    public string RetryMobileInvoiceChildStage1(long clientId, string financialYear, string scanId) =>
+        "InvoiceVision Child is unlinked from AAH. Use Retry OCR to run AAH ONNX invoice OCR.";
 
     public void CompleteMobileInvoiceReview(long clientId, string financialYear, string scanId, bool confirmed, MobileInvoiceMappedResult? mappedResult)
     {
@@ -3155,21 +3108,10 @@ public sealed class SecureLanServerService : IDisposable
         try
         {
             row.DocumentOcrState = "Processing";
-            row.ChildStage1Status = "Original photo received by AAH; sending source-bound Stage 1 request to Child...";
+            row.ChildStage1Archive = string.Empty;
+            row.ChildStage1Status = "AAH ONNX Phone Link OCR active (InvoiceVision Child unlinked).";
             row.DocumentOcrMessage = "AAH ONNX Phone Link OCR is detecting bounded text polygons, classifying document semantics and preparing R89 accounting review evidence.";
             row.DocumentOcrAuthority = "AAH ONNX source-linked spatial OCR pending";
-            MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-
-            // R96: AAH first passes its ORIGINAL, authenticated Client/FY photograph to
-            // the standalone Child in a source-SHA-bound local handoff. Child returns only
-            // provisional Stage 1 evidence until Stages 2–4 are independently certified.
-            // Existing ONNX stays the accounting-review fallback; NEVER post Child geometry.
-            var childStage1 = await InvoiceOcrChildBridge.TryStage1Async(
-                row.ImagePaths, row.ClientId, row.FinancialYear, row.ScanId,
-                row.EvidenceFolder, _mobileInvoiceOcrCancellation.Token).ConfigureAwait(false);
-            row.ChildStage1Status = childStage1.Message;
-            row.ChildStage1Archive = childStage1.Stage1Archive;
-            row.DocumentOcrMessage = childStage1.Message;
             MobileLinkChanged?.Invoke(this, EventArgs.Empty);
 
             // R46 R37: Mobile Link owns a dedicated invoice OCR pipeline. It uses Windows OCR
