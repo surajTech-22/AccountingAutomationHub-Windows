@@ -702,6 +702,114 @@ try
         throw new Exception("The dated 0.01 brought-forward credit must be opening metadata, never a voucher or auto-approved without proof.");
     Console.WriteLine("PASS: dated 0.01 brought-forward amount held in opening metadata with missing balance proof.");
     Console.WriteLine($"PASS: {passed + 7}/{scenarios.Length + 11} Bank OCR verifier safety scenarios.");
+
+    // Synthetic general co-op & RBI IFSC verification scenarios (no private customer data).
+    BankVerifiedDocument VerifySynthetic(string dirName, params (string Label, string Content)[] docBlocks)
+    {
+        var caseDir = Path.Combine(root, dirName);
+        Directory.CreateDirectory(caseDir);
+        var path = Path.Combine(caseDir, "page.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            parsing_res_list = docBlocks.Select(b => new { block_label = b.Label, block_content = b.Content }).ToArray()
+        }));
+        var res = new BankImageDocumentVerificationService().Verify(new BankOcrRecognitionBatch
+        {
+            WasSuccessful = true,
+            Pages = [new BankOcrRecognitionPage { Id = "S001P001", SourcePath = "synthetic-coop.pdf", SourceIndex = 1, SourcePage = 1, JsonPath = path }]
+        }, caseDir, null, CancellationToken.None);
+        return res.Documents.Single();
+    }
+
+    int coopPassed = 0;
+
+    // 1. Co-op statement with Post.Dt / Val.Dt, KSCB shared apex IFSC + printed co-op name, SBCHQ product,
+    // Page Number : 1, split BROUGHT | FORWARD: opening, and Indian-comma Ope Bal / Clo Bal summary.
+    var coopDoc = VerifySynthetic("coop-valid",
+        ("header", "Page Number : 1"),
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nBranch : Main Branch\nAccount No : 100000001234\nProduct : SBCHQ-INDIVIDUAL Currency : INR\nIFSC : KSCB0004999 MicrCode : 560000001\nStatement of Account From : 01/04/2025 To : 31/03/2026"),
+        ("table", string.Join("\n",
+            "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |",
+            "| | | | | BROUGHT | FORWARD: | 500.00Cr |",
+            "| 06/05/25 | 06/05/25 | CSH DEP | | | 1000000.00 | 1000500.00Cr |",
+            "| 15/05/25 | 15/05/25 | WDL TFR | | 100000.00 | | 900500.00Cr |",
+            "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |")),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| | 1 | 1 | 1,00,000.00 | 10,00,000.00 | 9,00,500.00Cr |"));
+    if (coopDoc.Status != "VERIFIED" || coopDoc.SummaryStatus != "VERIFIED" ||
+        coopDoc.BankName != "SYNTHETIC DISTRICT CO-OP BANK" || coopDoc.AccountType != "SB" ||
+        coopDoc.Pages[0].PrintedPage != 1 || coopDoc.OpeningBalance != 500.00m ||
+        coopDoc.ClosingBalance != 900500.00m || coopDoc.Transactions.Count != 2)
+        throw new Exception("Co-op valid scenario failed: status=" + coopDoc.Status + " bank=" + coopDoc.BankName + " issues=" + string.Join("; ", coopDoc.Issues));
+    coopPassed++;
+
+    // 2. Unknown 11-char RBI IFSC (UCBX0001234): with printed header AND IFSC-only fallback.
+    var ucbxWithName = VerifySynthetic("ucbx-named",
+        ("text", "SYNTHETIC URBAN CO-OP BANK\nAccount No : 5500112233\nIFSC : UCBX0001234\nStatement of Account From : 01/04/2025 To : 31/03/2026"),
+        ("table", "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |\n| | | | | BROUGHT | FORWARD: | 500.00Cr |\n| 10/05/25 | 10/05/25 | DEPOSIT | | | 200.00 | 700.00Cr |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| 500.00 | 0 | 1 | 0.00 | 200.00 | 700.00Cr |"));
+    var ucbxIfscOnly = VerifySynthetic("ucbx-only",
+        ("text", "Account No : 5500112233\nIFSC : UCBX0001234\nStatement of Account From : 01/04/2025 To : 31/03/2026"),
+        ("table", "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |\n| | | | | BROUGHT | FORWARD: | 500.00Cr |\n| 10/05/25 | 10/05/25 | DEPOSIT | | | 200.00 | 700.00Cr |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| 500.00 | 0 | 1 | 0.00 | 200.00 | 700.00Cr |"));
+    if (ucbxWithName.Status != "VERIFIED" || ucbxWithName.BankName != "SYNTHETIC URBAN CO-OP BANK" ||
+        ucbxIfscOnly.Status != "VERIFIED" || ucbxIfscOnly.BankName != "UCBX BANK")
+        throw new Exception($"Unknown IFSC scenario failed: named={ucbxWithName.BankName}/{ucbxWithName.Status}, only={ucbxIfscOnly.BankName}/{ucbxIfscOnly.Status}");
+    coopPassed++;
+
+    // 3. Missing bank name AND missing IFSC must remain blocked.
+    var noBankNoIfsc = VerifySynthetic("no-bank-no-ifsc",
+        ("text", "Account No : 5500112233\nStatement of Account From : 01/04/2025 To : 31/03/2026"),
+        ("table", "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |\n| | | | | BROUGHT | FORWARD: | 500.00Cr |\n| 10/05/25 | 10/05/25 | DEPOSIT | | | 200.00 | 700.00Cr |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| 500.00 | 0 | 1 | 0.00 | 200.00 | 700.00Cr |"));
+    if (noBankNoIfsc.Status != "REVIEW_REQUIRED" ||
+        !noBankNoIfsc.Issues.Any(i => i.Contains("Bank metadata missing: bank name or IFSC", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Missing bank + IFSC did not remain blocked.");
+    coopPassed++;
+
+    // 4. Val.Dt placed BEFORE Post.Dt must map posting date to Post.Dt and value date to Val.Dt.
+    var valBeforePost = VerifySynthetic("val-before-post",
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nAccount No : 100000001234\nIFSC : KSCB0004999"),
+        ("table", "| Val.Dt | Post.Dt | Details | Debit | Credit | Balance |\n| | | BROUGHT FORWARD | | | 100.00 |\n| 16/05/25 | 15/05/25 | CLEARING DEP | | 50.00 | 150.00 |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| 100.00 | 0 | 1 | 0.00 | 50.00 | 150.00 |"));
+    if (valBeforePost.Status != "VERIFIED" ||
+        valBeforePost.Transactions[0].Date != new DateTime(2025, 5, 15) ||
+        valBeforePost.Transactions[0].ValueDate != new DateTime(2025, 5, 16))
+        throw new Exception($"Val.Dt before Post.Dt mapped incorrectly: post={valBeforePost.Transactions[0].Date} val={valBeforePost.Transactions[0].ValueDate} issues={string.Join("; ", valBeforePost.Issues)}");
+    coopPassed++;
+
+    // 5. Blank Ope Bal in summary WITHOUT printed BROUGHT FORWARD must remain REVIEW_REQUIRED.
+    var blankOpeWithoutBf = VerifySynthetic("blank-ope-no-bf",
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nAccount No : 100000001234\nIFSC : KSCB0004999"),
+        ("table", "| Post.Dt | Val.Dt | Details | Debit | Credit | Balance |\n| 15/05/25 | 15/05/25 | DEPOSIT | | 50.00 | 150.00 |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| | 0 | 1 | 0.00 | 50.00 | 150.00 |"));
+    if (blankOpeWithoutBf.Status != "REVIEW_REQUIRED" ||
+        !blankOpeWithoutBf.Issues.Any(i => i.Contains("unrecognized financial control fields", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Blank Ope Bal without BROUGHT FORWARD was not blocked.");
+    coopPassed++;
+
+    // 6. Blank Ope Bal WITH BROUGHT FORWARD but 0.01 mismatch on Clo Bal must remain REVIEW_REQUIRED.
+    var blankOpeBadClosing = VerifySynthetic("blank-ope-bad-closing",
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nAccount No : 100000001234\nIFSC : KSCB0004999"),
+        ("table", "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |\n| | | | | BROUGHT | FORWARD: | 500.00Cr |\n| 06/05/25 | 06/05/25 | CSH DEP | | | 1000000.00 | 1000500.00Cr |\n| 15/05/25 | 15/05/25 | WDL TFR | | 100000.00 | | 900500.00Cr |"),
+        ("table", "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |\n| | 1 | 1 | 1,00,000.00 | 10,00,000.00 | 9,00,500.01Cr |"));
+    if (blankOpeBadClosing.Status != "REVIEW_REQUIRED" || blankOpeBadClosing.SummaryStatus != "REVIEW_REQUIRED")
+        throw new Exception("0.01 Clo Bal mismatch with blank Ope Bal was not blocked.");
+    coopPassed++;
+
+    // 7. Header-only embedded Ope Bal ... Clo Bal with no summary values must fail closed.
+    var headerOnlySummary = VerifySynthetic("header-only-summary",
+        ("text", "SYNTHETIC DISTRICT CO-OP BANK\nAccount No : 100000001234\nIFSC : KSCB0004999"),
+        ("table", string.Join("\n",
+            "| Post.Dt | Val.Dt | Details | Chq no | Debit | Credit | Balance |",
+            "| | | | | BROUGHT | FORWARD: | 500.00Cr |",
+            "| 06/05/25 | 06/05/25 | CSH DEP | | | 1000.00 | 1500.00Cr |",
+            "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |")));
+    if (headerOnlySummary.Status != "REVIEW_REQUIRED" ||
+        !headerOnlySummary.Issues.Any(i => i.Contains("financial controls are unreadable", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Header-only co-op summary did not trigger unparsedPrintedSummary fail-closed guard.");
+    coopPassed++;
+
+    Console.WriteLine($"PASS: {coopPassed}/7 general co-op & IFSC Bank OCR safety scenarios.");
 }
 finally
 {

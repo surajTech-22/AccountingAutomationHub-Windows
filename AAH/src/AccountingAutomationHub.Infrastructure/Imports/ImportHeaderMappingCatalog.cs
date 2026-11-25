@@ -222,8 +222,8 @@ public static class ImportHeaderMappingCatalog
         }
 
         result[Banking] = Map(
-            ("Date", ["Date", "Transaction Date", "Txn Date", "Tran Date", "Post Date", "Booking Date", "Posting Date"]),
-            ("ValueDate", ["Value Date", "Val Date"]),
+            ("Date", ["Date", "Transaction Date", "Txn Date", "Tran Date", "Post Date", "Booking Date", "Posting Date", "Post.Dt", "Post Dt", "Txn.Dt", "Txn Dt", "Tran.Dt", "Tran Dt"]),
+            ("ValueDate", ["Value Date", "Val Date", "Val.Dt", "Val Dt"]),
             ("Narration", ["Narration", "Particulars", "Details", "Description", "Transaction Details", "Remarks", "Memo"]),
             ("Debit", ["Debit", "Debit Amount", "Amount Dr", "Amt Dr", "Withdrawal", "Withdrawals", "Paid Out", "Payment"]),
             ("Credit", ["Credit", "Credit Amount", "Amount Cr", "Amt Cr", "Deposit", "Deposits", "Received In", "Receipt"]),

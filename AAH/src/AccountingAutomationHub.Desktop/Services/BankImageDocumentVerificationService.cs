@@ -18,66 +18,6 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// </summary>
 internal sealed class BankImageDocumentVerificationService
 {
-    private static readonly IReadOnlyDictionary<string, string[]> BankAliases =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["STATE BANK OF INDIA"] = ["STATE BANK OF INDIA"],
-            ["HDFC BANK"] = ["HDFC BANK"],
-            ["ICICI BANK"] = ["ICICI BANK"],
-            ["AXIS BANK"] = ["AXIS BANK"],
-            ["CANARA BANK"] = ["CANARA BANK"],
-            ["BANK OF BARODA"] = ["BANK OF BARODA"],
-            ["BANK OF INDIA"] = ["BANK OF INDIA"],
-            ["INDIAN BANK"] = ["INDIAN BANK"],
-            ["INDIAN OVERSEAS BANK"] = ["INDIAN OVERSEAS BANK"],
-            ["UNION BANK OF INDIA"] = ["UNION BANK OF INDIA", "UNION BANK"],
-            ["PUNJAB NATIONAL BANK"] = ["PUNJAB NATIONAL BANK"],
-            ["KOTAK MAHINDRA BANK"] = ["KOTAK MAHINDRA BANK", "KOTAK BANK"],
-            ["IDFC FIRST BANK"] = ["IDFC FIRST BANK"],
-            ["KARNATAKA BANK"] = ["KARNATAKA BANK"],
-            ["FEDERAL BANK"] = ["FEDERAL BANK"],
-            ["SOUTH INDIAN BANK"] = ["SOUTH INDIAN BANK"],
-            ["YES BANK"] = ["YES BANK"],
-            ["INDUSIND BANK"] = ["INDUSIND BANK"],
-            ["RBL BANK"] = ["RBL BANK"],
-            ["BANDHAN BANK"] = ["BANDHAN BANK"],
-            ["AU SMALL FINANCE BANK"] = ["AU SMALL FINANCE BANK"],
-            ["UJJIVAN SMALL FINANCE BANK"] = ["UJJIVAN SMALL FINANCE BANK"],
-            ["EQUITAS SMALL FINANCE BANK"] = ["EQUITAS SMALL FINANCE BANK"],
-            ["DBS BANK INDIA"] = ["DBS BANK INDIA", "DBS BANK"],
-            ["HSBC"] = ["HSBC"],
-            ["STANDARD CHARTERED BANK"] = ["STANDARD CHARTERED BANK", "STANDARD CHARTERED"],
-            ["CITI BANK"] = ["CITIBANK", "CITI BANK"],
-            ["CENTRAL BANK OF INDIA"] = ["CENTRAL BANK OF INDIA"],
-            ["BANK OF MAHARASHTRA"] = ["BANK OF MAHARASHTRA"],
-            ["UCO BANK"] = ["UCO BANK"],
-            ["PUNJAB & SIND BANK"] = ["PUNJAB & SIND BANK", "PUNJAB AND SIND BANK"],
-            ["JAMMU & KASHMIR BANK"] = ["JAMMU & KASHMIR BANK", "JAMMU AND KASHMIR BANK"],
-            ["CSB BANK"] = ["CSB BANK", "CATHOLIC SYRIAN BANK"],
-            ["DCB BANK"] = ["DCB BANK"],
-            ["TAMILNAD MERCANTILE BANK"] = ["TAMILNAD MERCANTILE BANK"],
-            ["KARUR VYSYA BANK"] = ["KARUR VYSYA BANK"],
-            ["CITY UNION BANK"] = ["CITY UNION BANK"]
-        };
-
-    private static readonly IReadOnlyDictionary<string, string> IfscPrefixBank =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["SBIN"] = "STATE BANK OF INDIA", ["HDFC"] = "HDFC BANK", ["ICIC"] = "ICICI BANK",
-            ["UTIB"] = "AXIS BANK", ["CNRB"] = "CANARA BANK", ["BARB"] = "BANK OF BARODA",
-            ["BKID"] = "BANK OF INDIA", ["IDIB"] = "INDIAN BANK", ["IOBA"] = "INDIAN OVERSEAS BANK",
-            ["UBIN"] = "UNION BANK OF INDIA", ["PUNB"] = "PUNJAB NATIONAL BANK", ["KKBK"] = "KOTAK MAHINDRA BANK",
-            ["IDFB"] = "IDFC FIRST BANK", ["KARB"] = "KARNATAKA BANK", ["FDRL"] = "FEDERAL BANK",
-            ["SIBL"] = "SOUTH INDIAN BANK", ["YESB"] = "YES BANK", ["INDB"] = "INDUSIND BANK",
-            ["RATN"] = "RBL BANK", ["BDBL"] = "BANDHAN BANK", ["AUBL"] = "AU SMALL FINANCE BANK",
-            ["UJVN"] = "UJJIVAN SMALL FINANCE BANK", ["ESFB"] = "EQUITAS SMALL FINANCE BANK", ["DBSS"] = "DBS BANK INDIA",
-            ["HSBC"] = "HSBC", ["SCBL"] = "STANDARD CHARTERED BANK", ["CITI"] = "CITI BANK",
-            ["CBIN"] = "CENTRAL BANK OF INDIA", ["MAHB"] = "BANK OF MAHARASHTRA", ["UCBA"] = "UCO BANK",
-            ["PSIB"] = "PUNJAB & SIND BANK", ["JAKA"] = "JAMMU & KASHMIR BANK", ["CSBK"] = "CSB BANK",
-            ["DCBL"] = "DCB BANK", ["TMBL"] = "TAMILNAD MERCANTILE BANK", ["KVBL"] = "KARUR VYSYA BANK",
-            ["CIUB"] = "CITY UNION BANK"
-        };
-
     private static readonly Regex IfscRegex = new(@"\b[A-Z]{4}0[A-Z0-9]{6}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // Never match AC inside a GSTN/PAN/customer identifier, e.g. a footer
     // containing AAAAC123456H1ZW. Only explicit account-number labels qualify.
@@ -90,7 +30,7 @@ internal sealed class BankImageDocumentVerificationService
         @"(?<![A-Z0-9])ACCOUNT\s*:\s*([0-9X*][0-9X*\-\s]{5,25})",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PageWithTotalRegex = new(@"\bPAGE\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*(\d{1,4})\s*(?:OF|/)\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex PageOnlyRegex = new(@"\bPAGE\s*(?:NO\.?)?\s*[:\-]?\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PageOnlyRegex = new(@"\bPAGE\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*(\d{1,4})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex DateTextRegex = new(@"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex HtmlRowRegex = new(@"<tr\b[^>]*>(.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex HtmlCellRegex = new(@"<(?:td|th)\b(?<attrs>[^>]*)>(?<body>.*?)</(?:td|th)>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
@@ -316,6 +256,7 @@ internal sealed class BankImageDocumentVerificationService
             Bank = meta.Bank,
             BankStatus = meta.BankStatus,
             BankEvidence = meta.BankEvidence,
+            IsSharedApexIfscFallback = meta.IsSharedApexIfscFallback,
             Ifsc = meta.Ifsc,
             AccountNumber = meta.AccountNumber,
             AccountType = meta.AccountType,
@@ -364,31 +305,10 @@ internal sealed class BankImageDocumentVerificationService
     {
         var upper = NormalizeUpper(headerText);
         var ifscs = IfscRegex.Matches(upper).Select(match => match.Value.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var evidence = new List<string>();
-
-        foreach (var ifsc in ifscs)
-        {
-            if (!IfscPrefixBank.TryGetValue(ifsc[..4], out var bank)) continue;
-            scores[bank] = scores.TryGetValue(bank, out var score) ? score + 10 : 10;
-            evidence.Add($"IFSC {ifsc} -> {bank}");
-        }
-
-        foreach (var match in BankNameMatches(headerText))
-        {
-            scores[match.Bank] = scores.TryGetValue(match.Bank, out var score) ? score + 5 : 5;
-            evidence.Add($"Header text: {match.Alias}");
-        }
-
-        var ranked = scores.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).ToList();
-        var bankName = ranked.FirstOrDefault().Key ?? string.Empty;
-        var bankStatus = "NOT_DETECTED";
-        if (ranked.Count > 0)
-        {
-            bankStatus = ranked.Count > 1 && ranked[0].Value == ranked[1].Value
-                ? "REVIEW_REQUIRED"
-                : ranked[0].Value >= 10 ? "VERIFIED" : "DETECTED";
-        }
+        var identity = BankIfscCatalog.ResolveBankIdentity(headerText, ifscs);
+        var bankName = identity.BankName;
+        var bankStatus = identity.BankStatus;
+        var evidence = identity.Evidence.ToList();
 
         var accountNumber = ExtractAccountNumber(headerText);
         // Source OCR often prints the customer and branch as separate text blocks,
@@ -403,10 +323,10 @@ internal sealed class BankImageDocumentVerificationService
         }
         var branchName = LabeledValue(@"(?:ACCOUNT\s+)?BRANCH(?:\s+NAME)?");
         var accountType = string.Empty;
-        if (Regex.IsMatch(upper, @"\bCURRENT\s+ACCOUNT\b|\bPRODUCT\s*:\s*CA[-\s]", RegexOptions.IgnoreCase)) accountType = "CA";
-        else if (Regex.IsMatch(upper, @"\bSAVINGS?\s+(?:BANK\s+)?ACCOUNT\b|\bPRODUCT\s*:\s*SB[-\s]", RegexOptions.IgnoreCase)) accountType = "SB";
-        else if (Regex.IsMatch(upper, @"\bOVERDRAFT\b|\bOD\s+ACCOUNT\b", RegexOptions.IgnoreCase)) accountType = "OD";
-        else if (Regex.IsMatch(upper, @"\bCASH\s+CREDIT\b|\bCC\s+ACCOUNT\b", RegexOptions.IgnoreCase)) accountType = "CC";
+        if (Regex.IsMatch(upper, @"\bCURRENT\s+ACCOUNT\b|\bPRODUCT\s*:\s*CA(?:CHQ|GEN|IND|[-\s])", RegexOptions.IgnoreCase)) accountType = "CA";
+        else if (Regex.IsMatch(upper, @"\bSAVINGS?\s+(?:BANK\s+)?ACCOUNT\b|\bPRODUCT\s*:\s*SB(?:CHQ|GEN|IND|[-\s])", RegexOptions.IgnoreCase)) accountType = "SB";
+        else if (Regex.IsMatch(upper, @"\bOVERDRAFT\b|\bOD\s+ACCOUNT\b|\bPRODUCT\s*:\s*OD(?:CHQ|GEN|IND|[-\s])", RegexOptions.IgnoreCase)) accountType = "OD";
+        else if (Regex.IsMatch(upper, @"\bCASH\s+CREDIT\b|\bCC\s+ACCOUNT\b|\bPRODUCT\s*:\s*CC(?:CHQ|GEN|IND|[-\s])", RegexOptions.IgnoreCase)) accountType = "CC";
 
         var accountName = LabeledValue(@"(?:ACCOUNT\s+HOLDER|ACCOUNT\s+NAME|CUSTOMER\s+NAME)");
         foreach (var block in blocks)
@@ -445,6 +365,7 @@ internal sealed class BankImageDocumentVerificationService
             Bank = bankName,
             BankStatus = bankStatus,
             BankEvidence = evidence.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            IsSharedApexIfscFallback = identity.IsSharedApexIfscFallback,
             Ifsc = ifscs.FirstOrDefault() ?? string.Empty,
             AccountNumber = accountNumber,
             AccountType = accountType.Length > 0 ? accountType : LabeledValue(@"ACCOUNT\s+TYPE"),
@@ -463,30 +384,6 @@ internal sealed class BankImageDocumentVerificationService
             if (value.Length >= 6) return value;
         }
         return string.Empty;
-    }
-
-    private static IReadOnlyList<BankNameMatch> BankNameMatches(string text)
-    {
-        var upper = NormalizeUpper(text);
-        var candidates = new List<BankNameMatch>();
-        foreach (var pair in BankAliases)
-        {
-            foreach (var alias in pair.Value)
-            {
-                var escaped = Regex.Escape(NormalizeUpper(alias)).Replace("\\ ", @"\s+");
-                var regex = new Regex($@"(?<![A-Z0-9]){escaped}(?![A-Z0-9])", RegexOptions.IgnoreCase);
-                foreach (Match match in regex.Matches(upper))
-                    candidates.Add(new BankNameMatch(match.Index, match.Index + match.Length, pair.Key, alias));
-            }
-        }
-
-        var selected = new List<BankNameMatch>();
-        foreach (var candidate in candidates.OrderByDescending(item => item.End - item.Start).ThenBy(item => item.Start).ThenBy(item => item.Bank, StringComparer.OrdinalIgnoreCase))
-        {
-            if (selected.Any(item => !(candidate.End <= item.Start || candidate.Start >= item.End))) continue;
-            selected.Add(candidate);
-        }
-        return selected.OrderBy(item => item.Start).ToList();
     }
 
     private static (string Start, string End) ExtractStatementPeriod(string text)
@@ -549,22 +446,38 @@ internal sealed class BankImageDocumentVerificationService
             var description = Get(row, "description");
             var dateRaw = Get(row, "date");
             var balanceRaw = Get(row, "balance");
+            var debitRawCell = Get(row, "debit");
+            var creditRawCell = Get(row, "credit");
             var descriptionUpper = NormalizeUpper(description);
+
+            if (IsEmbeddedSummaryHeaderRow(row) &&
+                ParseDate(dateRaw) is null &&
+                ParseMoney(debitRawCell) is null &&
+                ParseMoney(creditRawCell) is null &&
+                ParseSignedMoney(balanceRaw) is null)
+                continue;
 
             // A BALANCE BROUGHT FORWARD control belongs in opening-balance
             // metadata, even when a bank prints it as a dated debit/credit row.
             // Never produce a voucher for this line. Retain the source movement
             // separately so the printed summary (which may count it) reconciles.
+            var splitAmountBf = NormalizeUpper($"{debitRawCell} {creditRawCell}").Contains("BROUGHT FORWARD", StringComparison.Ordinal) &&
+                ParseMoney(debitRawCell) is null && ParseMoney(creditRawCell) is null;
             var isBroughtForward = descriptionUpper.Contains("BALANCE BROUGHT FORWARD", StringComparison.Ordinal) ||
-                descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal);
+                descriptionUpper.StartsWith("BROUGHT FORWARD", StringComparison.Ordinal) ||
+                splitAmountBf ||
+                (dateRaw.Length == 0 && (descriptionUpper.StartsWith("B/F", StringComparison.Ordinal) ||
+                                         descriptionUpper.StartsWith("OPENING BALANCE", StringComparison.Ordinal)));
             if (isBroughtForward)
             {
                 if (broughtForward is not null)
                     narrationIssues.Add("Multiple BROUGHT FORWARD controls appear on one statement page.");
-                var debit = ParseMoney(Get(row, "debit"));
-                var credit = ParseMoney(Get(row, "credit"));
+                var debit = ParseMoney(debitRawCell);
+                var credit = ParseMoney(creditRawCell);
                 var printedBalance = ParseSignedMoney(balanceRaw);
-                if (debit is null || credit is null || (Math.Abs(debit.Value) > 0.009m && Math.Abs(credit.Value) > 0.009m))
+                var balanceOnlyBroughtForward = printedBalance is not null && debit is null && credit is null;
+                if (!balanceOnlyBroughtForward &&
+                    (debit is null || credit is null || (Math.Abs(debit.Value) > 0.009m && Math.Abs(credit.Value) > 0.009m)))
                     narrationIssues.Add("BROUGHT FORWARD debit/credit cells are ambiguous; review the original statement.");
                 // For a credit-only/debit-only row whose balance OCR is blank,
                 // expose its amount in the opening section, but do NOT treat
@@ -684,6 +597,12 @@ internal sealed class BankImageDocumentVerificationService
         for (var sourceIndex = startingIndex; sourceIndex < table.Rows.Count; sourceIndex++)
         {
             var row = table.Rows[sourceIndex].Select(Normalize).ToArray();
+            if (IsEmbeddedSummaryHeaderRow(row) &&
+                ParseDate(Cell(row, dateColumn)) is null &&
+                ParseMoney(Cell(row, debitColumn)) is null &&
+                ParseMoney(Cell(row, creditColumn)) is null &&
+                ParseSignedMoney(Cell(row, balanceColumn)) is null)
+                continue;
             var description = Cell(row, descriptionColumn);
             var date = Cell(row, dateColumn);
             var reference = Cell(row, referenceColumn);
@@ -789,29 +708,81 @@ internal sealed class BankImageDocumentVerificationService
                 var header = rows[headerIndex].Select(NormalizeUpper).ToList();
                 var mapping = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-                FindSemantic("date", ["POST DATE", "TRANSACTION DATE", "TXN DATE", "DATE"]);
-                FindSemantic("description", ["DESCRIPTION", "NARRATION", "PARTICULARS", "DETAILS"]);
-                FindSemantic("debit", ["DEBIT", "WITHDRAWAL", "DR AMOUNT"]);
-                FindSemantic("credit", ["CREDIT", "DEPOSIT", "CR AMOUNT"]);
-                FindSemantic("balance", ["BALANCE", "RUNNING BALANCE"]);
+                static bool IsValueDateHeader(string cell) =>
+                    cell.Contains("VALUE DATE", StringComparison.Ordinal) ||
+                    cell.Contains("VALUE DT", StringComparison.Ordinal) ||
+                    cell.Contains("VALUE.DT", StringComparison.Ordinal) ||
+                    cell.Contains("VAL DATE", StringComparison.Ordinal) ||
+                    cell.Contains("VAL DT", StringComparison.Ordinal) ||
+                    cell.Contains("VAL.DT", StringComparison.Ordinal);
 
                 for (var i = 0; i < header.Count; i++)
                 {
-                    if (header[i].Contains("VALUE DATE", StringComparison.Ordinal) ||
-                        header[i].Contains("VALUE DT", StringComparison.Ordinal)) mapping["value_date"] = i;
-                    if (new[] { "REFERENCE", "CHEQUE", "CHQ", "REF NO", "REF.", "REF/" }
-                        .Any(word => header[i].Contains(word, StringComparison.Ordinal))) mapping["reference"] = i;
+                    if (IsValueDateHeader(header[i]))
+                        mapping["value_date"] = i;
+                    if (new[] { "REFERENCE", "CHEQUE", "CHQ", "REF NO", "REF.", "REF/", "INSTRUMENT", "INST NO", "INST." }
+                        .Any(word => header[i].Contains(word, StringComparison.Ordinal)))
+                        mapping["reference"] = i;
                 }
+
+                // Posting date must match explicit posting/transaction date headers
+                // (including co-op abbreviations like Post.Dt / Txn.Dt) before falling
+                // back to generic Date/Dt headers, and must never match Value Date.
+                var explicitDateWords = new[]
+                {
+                    "POST DATE", "POST.DT", "POST DT", "POSTING DATE", "POSTING DT",
+                    "TRANSACTION DATE", "TXN DATE", "TXN.DT", "TXN DT",
+                    "TRAN DATE", "TRAN.DT", "TRAN DT", "TRN DATE", "TRN DT", "VCH DATE"
+                };
+                for (var i = 0; i < header.Count; i++)
+                {
+                    if (IsValueDateHeader(header[i]) || mapping.Values.Contains(i)) continue;
+                    if (explicitDateWords.Any(word => header[i].Contains(word, StringComparison.Ordinal)))
+                    {
+                        mapping["date"] = i;
+                        break;
+                    }
+                }
+                if (!mapping.ContainsKey("date"))
+                {
+                    for (var i = 0; i < header.Count; i++)
+                    {
+                        if (IsValueDateHeader(header[i]) || mapping.Values.Contains(i)) continue;
+                        if (header[i].Contains("DATE", StringComparison.Ordinal) ||
+                            header[i] is "DT" or "DT." ||
+                            header[i].EndsWith(" DT", StringComparison.Ordinal) ||
+                            header[i].EndsWith(".DT", StringComparison.Ordinal))
+                        {
+                            mapping["date"] = i;
+                            break;
+                        }
+                    }
+                }
+
+                FindSemantic("description", ["DESCRIPTION", "NARRATION", "PARTICULARS", "PARTICULAR", "DETAILS", "REMARKS"]);
+                FindSemantic("debit", ["DEBIT", "WITHDRAWAL", "WITHDRAW", "DR AMOUNT", "DR AMT", "DEBIT AMT"],
+                    cell => cell.Contains("DR COUNT", StringComparison.Ordinal) || cell.Contains("DEBIT COUNT", StringComparison.Ordinal));
+                FindSemantic("credit", ["CREDIT", "DEPOSIT", "CR AMOUNT", "CR AMT", "CREDIT AMT"],
+                    cell => cell.Contains("CR COUNT", StringComparison.Ordinal) || cell.Contains("CREDIT COUNT", StringComparison.Ordinal));
+                FindSemantic("balance", ["BALANCE", "RUNNING BALANCE", "BAL."],
+                    cell => cell.Contains("OPE BAL", StringComparison.Ordinal) || cell.Contains("OPENING BAL", StringComparison.Ordinal) ||
+                            cell.Contains("CLO BAL", StringComparison.Ordinal) || cell.Contains("OP BAL", StringComparison.Ordinal) ||
+                            cell.Contains("CL BAL", StringComparison.Ordinal),
+                    allowExactBal: true);
 
                 if (new[] { "date", "description", "debit", "credit", "balance" }.All(mapping.ContainsKey) &&
                     mapping.Values.Distinct().Count() == mapping.Count)
                     return new IdentifiedTable(rows.Skip(headerIndex).ToList(), mapping, true);
 
-                void FindSemantic(string semantic, IReadOnlyList<string> words)
+                void FindSemantic(string semantic, IReadOnlyList<string> words, Func<string, bool>? reject = null, bool allowExactBal = false)
                 {
                     for (var i = 0; i < header.Count; i++)
                     {
-                        if (!words.Any(word => header[i].Contains(word, StringComparison.Ordinal))) continue;
+                        if (mapping.Values.Contains(i)) continue;
+                        if (reject is not null && reject(header[i])) continue;
+                        var matched = words.Any(word => header[i].Contains(word, StringComparison.Ordinal)) ||
+                            (allowExactBal && header[i] is "BAL");
+                        if (!matched) continue;
                         mapping[semantic] = i;
                         break;
                     }
@@ -854,8 +825,24 @@ internal sealed class BankImageDocumentVerificationService
         return null;
     }
 
+    private static bool IsEmbeddedSummaryHeaderRow(IReadOnlyList<string> row)
+    {
+        var joined = NormalizeUpper(string.Join(" ", row));
+        var matches = 0;
+        if (Regex.IsMatch(joined, @"\b(?:OPENING|OPE|OP\.?)\s+BAL(?:ANCE)?\b")) matches++;
+        if (Regex.IsMatch(joined, @"\b(?:DR|DEBIT)\s+COUNT\b")) matches++;
+        if (Regex.IsMatch(joined, @"\b(?:CR|CREDIT)\s+COUNT\b")) matches++;
+        if (Regex.IsMatch(joined, @"\b(?:TOTAL\s+)?DEBITS?\b")) matches++;
+        if (Regex.IsMatch(joined, @"\b(?:TOTAL\s+)?CREDITS?\b")) matches++;
+        if (Regex.IsMatch(joined, @"\b(?:CLOSING|CLO|CL\.?)\s+BAL(?:ANCE)?\b")) matches++;
+        return matches >= 4;
+    }
+
     private static StatementSummary? ExtractSummary(IReadOnlyList<OcrBlock> blocks)
     {
+        const string summaryTokenPattern = @"-?(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?(?:\s*(?:CR|DR))?";
+        const string summaryDecimalPattern = @"-?(?:\d{1,3}(?:,\d{2,3})+|\d+)\.\d{1,2}(?:\s*(?:CR|DR))?";
+
         foreach (var block in blocks)
         {
             // PaddleOCR sometimes labels a structurally valid Markdown/HTML
@@ -881,12 +868,12 @@ internal sealed class BankImageDocumentVerificationService
                 return null;
             }
 
-            var opening = Find("BROUGHT FORWARD", "OPENING BALANCE", "OPENING BAL");
+            var opening = Find("BROUGHT FORWARD", "OPENING BALANCE", "OPENING BAL", "OPE BAL", "OP BAL", "OP. BAL");
             var drCount = Find("DR COUNT", "DEBIT COUNT");
             var crCount = Find("CR COUNT", "CREDIT COUNT");
             var totalDebits = Find("TOTAL DEBITS", "TOTAL DEBIT", "DEBITS");
             var totalCredits = Find("TOTAL CREDITS", "TOTAL CREDIT", "CREDITS");
-            var closing = Find("CLOSING BALANCE", "CLOSING BAL");
+            var closing = Find("CLOSING BALANCE", "CLOSING BAL", "CLO BAL", "CL BAL", "CL. BAL");
             if (new[] { opening, drCount, crCount, totalDebits, totalCredits, closing }.Count(value => value is not null) < 4) continue;
 
             var row = rows[headerRow + 1];
@@ -907,19 +894,26 @@ internal sealed class BankImageDocumentVerificationService
                     .Replace(@"\n", " ", StringComparison.Ordinal)
                     .Replace(@"\r", " ", StringComparison.Ordinal);
                 var embedded = Regex.Match(sourceLabelCell,
-                    @"\bOPENING\s+BAL(?:ANCE)?\s*[:=\-]?\s*(?<amount>-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*$",
+                    @"\b(?:OPENING|OPE|OP\.?)\s+BAL(?:ANCE)?\s*[:=\-]?\s*(?<amount>" + summaryTokenPattern + @")\s*$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (embedded.Success)
                     printedOpening = ParseSignedMoney(embedded.Groups["amount"].Value);
             }
+            var parsedDrCount = ParseNullableInt(Regex.Replace(Cell(drCount), @"[^0-9]", string.Empty));
+            var parsedCrCount = ParseNullableInt(Regex.Replace(Cell(crCount), @"[^0-9]", string.Empty));
+            var parsedTotalDebits = AbsNullable(ParseMoney(Cell(totalDebits)));
+            var parsedTotalCredits = AbsNullable(ParseMoney(Cell(totalCredits)));
+            var parsedClosing = ParseSignedMoney(Cell(closing));
+            var parsedCount = new object?[] { printedOpening, parsedDrCount, parsedCrCount, parsedTotalDebits, parsedTotalCredits, parsedClosing }.Count(value => value is not null);
+            if (parsedCount < 2) continue;
             return new StatementSummary
             {
                 Opening = printedOpening,
-                DebitCount = ParseNullableInt(Regex.Replace(Cell(drCount), @"[^0-9]", string.Empty)),
-                CreditCount = ParseNullableInt(Regex.Replace(Cell(crCount), @"[^0-9]", string.Empty)),
-                TotalDebits = AbsNullable(ParseMoney(Cell(totalDebits))),
-                TotalCredits = AbsNullable(ParseMoney(Cell(totalCredits))),
-                Closing = ParseSignedMoney(Cell(closing))
+                DebitCount = parsedDrCount,
+                CreditCount = parsedCrCount,
+                TotalDebits = parsedTotalDebits,
+                TotalCredits = parsedTotalCredits,
+                Closing = parsedClosing
             };
             } // Candidate source-table header row
         }
@@ -929,16 +923,107 @@ internal sealed class BankImageDocumentVerificationService
         // Never infer any financial amount from computed transaction totals.
         var verticalSummary = ExtractLabeledSummaryControls(blocks);
         if (verticalSummary is not null) return verticalSummary;
-        // Text-only fallback requires the explicit printed summary title, all
-        // six labeled controls in source order, and an adjacent line with
-        // exactly six numeric cells. It must NEVER fill missing OCR values
-        // from transaction arithmetic or a filename/account-specific guess.
+        // Text-only fallback requires the explicit printed summary title (or all
+        // six explicit summary headers in source order) and an adjacent numeric
+        // value line. It must NEVER fill missing OCR values from transaction
+        // arithmetic or a filename/account-specific guess.
         // A value that cannot be independently parsed leaves REVIEW_REQUIRED.
         var text = string.Join("\n", blocks
             .Where(block => !NormalizeUpper(block.Label).Equals("TABLE", StringComparison.Ordinal))
             .Select(block => block.Content));
         var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(Normalize).Where(line => line.Length > 0).ToArray();
+        var summaryLabels = new[]
+        {
+            @"\b(?:OPENING|OPE|OP\.?)\s+BAL(?:ANCE)?\b",
+            @"\b(?:DR|DEBIT)\s+COUNT\b",
+            @"\b(?:CR|CREDIT)\s+COUNT\b",
+            @"\b(?:TOTAL\s+)?DEBITS?\b",
+            @"\b(?:TOTAL\s+)?CREDITS?\b",
+            @"\b(?:CLOSING|CLO|CL\.?)\s+BAL(?:ANCE)?\b"
+        };
+
+        StatementSummary? TryParseSummaryLines(int headerIndex, bool allowBlankOpening)
+        {
+            var headerLine = NormalizeUpper(lines[headerIndex]);
+            var valueIndex = headerIndex + 1;
+            if (valueIndex < lines.Length &&
+                NormalizeUpper(lines[valueIndex]) == "COUNT" &&
+                headerIndex + 2 < lines.Length)
+            {
+                headerLine = Regex.Replace(headerLine, @"\bCR\s+(?=(?:TOTAL\s+)?DEBITS?\b)", "CR COUNT ");
+                valueIndex = headerIndex + 2;
+            }
+            if (valueIndex >= lines.Length) return null;
+
+            var positions = summaryLabels.Select(label => Regex.Match(headerLine, label)).ToArray();
+            if (positions.Any(match => !match.Success)) return null;
+            if (!positions.Zip(positions.Skip(1), (left, right) => left.Index < right.Index).All(ok => ok))
+                return null;
+
+            var normalizedValuesLine = Regex.Replace(
+                lines[valueIndex].Trim(),
+                @"(?<=\d)\s+(?=(?:CR|DR)\b)",
+                string.Empty,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var values = Regex.Split(normalizedValuesLine, @"\s+")
+                .Where(value => value.Length > 0).ToArray();
+
+            if (values.Length == 6)
+            {
+                if (values.Any(value => !Regex.IsMatch(value, "^" + summaryTokenPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) ||
+                    !Regex.IsMatch(values[1], @"^\d+$") ||
+                    !Regex.IsMatch(values[2], @"^\d+$"))
+                    return null;
+                var openingVal = ParseSignedMoney(values[0]);
+                var dr = ParseNullableInt(values[1]);
+                var cr = ParseNullableInt(values[2]);
+                var debits = ParseMoney(values[3]);
+                var credits = ParseMoney(values[4]);
+                var closingVal = ParseSignedMoney(values[5]);
+                if (openingVal is null || dr is null || cr is null ||
+                    debits is null || credits is null || closingVal is null)
+                    return null;
+                return new StatementSummary
+                {
+                    Opening = openingVal,
+                    DebitCount = dr,
+                    CreditCount = cr,
+                    TotalDebits = Math.Abs(debits.Value),
+                    TotalCredits = Math.Abs(credits.Value),
+                    Closing = closingVal
+                };
+            }
+
+            if (allowBlankOpening && values.Length == 5)
+            {
+                if (!Regex.IsMatch(values[0], @"^\d+$") ||
+                    !Regex.IsMatch(values[1], @"^\d+$") ||
+                    !Regex.IsMatch(values[2], "^" + summaryDecimalPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+                    !Regex.IsMatch(values[3], "^" + summaryDecimalPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+                    !Regex.IsMatch(values[4], "^" + summaryDecimalPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                    return null;
+                var dr = ParseNullableInt(values[0]);
+                var cr = ParseNullableInt(values[1]);
+                var debits = ParseMoney(values[2]);
+                var credits = ParseMoney(values[3]);
+                var closingVal = ParseSignedMoney(values[4]);
+                if (dr is null || cr is null || debits is null || credits is null || closingVal is null)
+                    return null;
+                return new StatementSummary
+                {
+                    Opening = null,
+                    DebitCount = dr,
+                    CreditCount = cr,
+                    TotalDebits = Math.Abs(debits.Value),
+                    TotalCredits = Math.Abs(credits.Value),
+                    Closing = closingVal
+                };
+            }
+
+            return null;
+        }
+
         for (var i = 0; i + 2 < lines.Length; i++)
         {
             if (!NormalizeUpper(lines[i]).Contains("STATEMENT SUMMARY", StringComparison.Ordinal))
@@ -948,47 +1033,15 @@ internal sealed class BankImageDocumentVerificationService
             // the page cannot be mistaken for a summary's value row.
             for (var h = i + 1; h < Math.Min(lines.Length - 1, i + 4); h++)
             {
-                var headerLine = NormalizeUpper(lines[h]);
-                var labels = new[]
-                {
-                    @"\bOPENING\s+BAL(?:ANCE)?\b",
-                    @"\b(?:DR|DEBIT)\s+COUNT\b",
-                    @"\b(?:CR|CREDIT)\s+COUNT\b",
-                    @"\b(?:TOTAL\s+)?DEBITS?\b",
-                    @"\b(?:TOTAL\s+)?CREDITS?\b",
-                    @"\bCLOSING\s+BAL(?:ANCE)?\b"
-                };
-                var positions = labels.Select(label => Regex.Match(headerLine, label)).ToArray();
-                if (positions.Any(match => !match.Success)) continue;
-                if (!positions.Zip(positions.Skip(1), (left, right) => left.Index < right.Index).All(ok => ok))
-                    continue;
-
-                var values = Regex.Split(lines[h + 1].Trim(), @"\s+")
-                    .Where(value => value.Length > 0).ToArray();
-                if (values.Length != 6 ||
-                    values.Any(value => !Regex.IsMatch(value, @"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$")) ||
-                    !Regex.IsMatch(values[1], @"^\d+$") ||
-                    !Regex.IsMatch(values[2], @"^\d+$"))
-                    continue;
-                var opening = ParseSignedMoney(values[0]);
-                var dr = ParseNullableInt(values[1]);
-                var cr = ParseNullableInt(values[2]);
-                var debits = ParseMoney(values[3]);
-                var credits = ParseMoney(values[4]);
-                var closing = ParseSignedMoney(values[5]);
-                if (opening is null || dr is null || cr is null ||
-                    debits is null || credits is null || closing is null)
-                    continue;
-                return new StatementSummary
-                {
-                    Opening = opening,
-                    DebitCount = dr,
-                    CreditCount = cr,
-                    TotalDebits = Math.Abs(debits.Value),
-                    TotalCredits = Math.Abs(credits.Value),
-                    Closing = closing
-                };
+                var parsed = TryParseSummaryLines(h, allowBlankOpening: false);
+                if (parsed is not null) return parsed;
             }
+        }
+
+        for (var h = 0; h + 1 < lines.Length; h++)
+        {
+            var parsed = TryParseSummaryLines(h, allowBlankOpening: true);
+            if (parsed is not null) return parsed;
         }
         return null;
     }
@@ -1009,12 +1062,12 @@ internal sealed class BankImageDocumentVerificationService
 
         var labelPatterns = new[]
         {
-            @"^OPENING\s+BAL(?:ANCE)?$",
+            @"^(?:OPENING|OPE|OP\.?)\s+BAL(?:ANCE)?$",
             @"^(?:DR|DEBIT)\s+COUNT$",
             @"^(?:CR|CREDIT)\s+COUNT$",
             @"^(?:TOTAL\s+)?DEBITS?$",
             @"^(?:TOTAL\s+)?CREDITS?$",
-            @"^CLOSING\s+BAL(?:ANCE)?$"
+            @"^(?:CLOSING|CLO|CL\.?)\s+BAL(?:ANCE)?$"
         };
         int Field(string label)
         {
@@ -1026,7 +1079,7 @@ internal sealed class BankImageDocumentVerificationService
         }
         // Require precise printed numeric shapes; do not repair O/0, guess
         // separators, or use arithmetic to invent OCR values.
-        const string moneyPattern = @"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?";
+        const string moneyPattern = @"-?(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?(?:\s*(?:CR|DR))?";
         var entries = new Dictionary<int, string>();
         var conflict = false;
         void Add(string label, string value)
@@ -1034,7 +1087,7 @@ internal sealed class BankImageDocumentVerificationService
             var id = Field(label);
             if (id < 0) return;
             value = Normalize(value);
-            if (!Regex.IsMatch(value, "^" + moneyPattern + "$", RegexOptions.CultureInvariant))
+            if (!Regex.IsMatch(value, "^" + moneyPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 return;
             if (id is 1 or 2 && !Regex.IsMatch(value, @"^\d+$")) return;
             if (entries.TryGetValue(id, out var previous) &&
@@ -1059,7 +1112,7 @@ internal sealed class BankImageDocumentVerificationService
             foreach (var rawLine in block.Content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
                 var line = Normalize(WebUtility.HtmlDecode(HtmlTagRegex.Replace(rawLine, " ")));
-                var match = Regex.Match(line, @"^(?<key>[A-Za-z ]{3,36})\s*[:=\-]?\s+(?<value>" + moneyPattern + @")\s*$",
+                var match = Regex.Match(line, @"^(?<key>[A-Za-z .]{3,36})\s*[:=\-]?\s+(?<value>" + moneyPattern + @")\s*$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (match.Success)
                     Add(match.Groups["key"].Value, match.Groups["value"].Value);
@@ -1318,10 +1371,23 @@ internal sealed class BankImageDocumentVerificationService
             if (row.Balance is not null) previous = row.Balance;
         }
 
+        var summaryOpeningAnchoredByBroughtForward =
+            summary is not null &&
+            summary.Opening is null &&
+            summary.DebitCount is not null &&
+            summary.CreditCount is not null &&
+            summary.TotalDebits is not null &&
+            summary.TotalCredits is not null &&
+            summary.Closing is not null &&
+            firstBroughtForward?.Value is not null &&
+            !firstBroughtForward.DerivedFromMovement &&
+            openingSource == "FIRST_PAGE_BROUGHT_FORWARD";
+
         var rawEval = EvaluateSummary(summary, opening, transactions, firstBroughtForward, useRequired: false);
         var correctedEval = EvaluateSummary(summary, opening, transactions, firstBroughtForward, useRequired: true);
         var summaryHasAllControls = summary is not null &&
-            summary.Opening is not null && summary.DebitCount is not null &&
+            (summary.Opening is not null || summaryOpeningAnchoredByBroughtForward) &&
+            summary.DebitCount is not null &&
             summary.CreditCount is not null && summary.TotalDebits is not null &&
             summary.TotalCredits is not null && summary.Closing is not null;
         var summaryProvesCandidates = summaryHasAllControls && correctedEval.Exact && !rawEval.Exact;
@@ -1398,7 +1464,8 @@ internal sealed class BankImageDocumentVerificationService
             // Do not treat missing OCR summary fields as positive proof.
             // A partially parsed summary requires manual review, even if
             // the subset that happened to be read matches the transaction sums.
-            if (summary.Opening is null || summary.DebitCount is null ||
+            if ((summary.Opening is null && !summaryOpeningAnchoredByBroughtForward) ||
+                summary.DebitCount is null ||
                 summary.CreditCount is null || summary.TotalDebits is null ||
                 summary.TotalCredits is null || summary.Closing is null)
                 issues.Add("Statement summary contains unrecognized financial control fields.");
@@ -1519,7 +1586,14 @@ internal sealed class BankImageDocumentVerificationService
         // bypass an unreadable printed amount through a brought-forward value.
         var unparsedPrintedSummary = summary is null &&
             ordered.Any(page => page.RawBlocks.Any(block =>
-                NormalizeUpper(block.Content).Contains("STATEMENT SUMMARY", StringComparison.Ordinal)));
+            {
+                var upperBlock = NormalizeUpper(block.Content);
+                return upperBlock.Contains("STATEMENT SUMMARY", StringComparison.Ordinal) ||
+                    (Regex.IsMatch(upperBlock, @"\b(?:OPENING|OPE|OP\.?)\s+BAL(?:ANCE)?\b") &&
+                     Regex.IsMatch(upperBlock, @"\b(?:DR|DEBIT)\s+COUNT\b") &&
+                     Regex.IsMatch(upperBlock, @"\b(?:CR|CREDIT)\s+COUNT\b") &&
+                     Regex.IsMatch(upperBlock, @"\b(?:CLOSING|CLO|CL\.?)\s+BAL(?:ANCE)?\b"));
+            }));
         if (unparsedPrintedSummary)
             issues.Add("Printed statement summary is present in source OCR but its financial controls are unreadable; review original scanned page.");
 
@@ -1592,9 +1666,15 @@ internal sealed class BankImageDocumentVerificationService
         var branchNames = new List<string>();
         var periods = new List<(string Start, string End)>();
 
+        var specificApexPrefixes = ordered
+            .Where(page => page.Bank.Length > 0 && !page.IsSharedApexIfscFallback && page.Ifsc.Length >= 4)
+            .Select(page => page.Ifsc[..4])
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var page in ordered)
         {
-            if (page.Bank.Length > 0)
+            if (page.Bank.Length > 0 &&
+                !(page.IsSharedApexIfscFallback && page.Ifsc.Length >= 4 && specificApexPrefixes.Contains(page.Ifsc[..4])))
             {
                 var weight = page.BankStatus == "VERIFIED" ? 3 : 1;
                 bankVotes[page.Bank] = bankVotes.TryGetValue(page.Bank, out var value) ? value + weight : weight;
@@ -1746,7 +1826,14 @@ internal sealed class BankImageDocumentVerificationService
     {
         if (left.AccountNumber.Length > 0 && right.AccountNumber.Length > 0 && !left.AccountNumber.Equals(right.AccountNumber, StringComparison.OrdinalIgnoreCase)) return true;
         if (PeriodsConflict(left, right)) return true;
-        return left.Bank.Length > 0 && right.Bank.Length > 0 && left.BankStatus == "VERIFIED" && right.BankStatus == "VERIFIED" && !left.Bank.Equals(right.Bank, StringComparison.OrdinalIgnoreCase);
+        if (left.Bank.Length > 0 && right.Bank.Length > 0 && left.BankStatus == "VERIFIED" && right.BankStatus == "VERIFIED" && !left.Bank.Equals(right.Bank, StringComparison.OrdinalIgnoreCase))
+        {
+            var sameSharedApexIfsc = (left.IsSharedApexIfscFallback || right.IsSharedApexIfscFallback) &&
+                left.Ifsc.Length >= 4 && right.Ifsc.Length >= 4 &&
+                left.Ifsc[..4].Equals(right.Ifsc[..4], StringComparison.OrdinalIgnoreCase);
+            if (!sameSharedApexIfsc) return true;
+        }
+        return false;
     }
 
     private static bool PeriodsConflict(PageProfile left, PageProfile right)
@@ -2040,7 +2127,6 @@ internal sealed class BankImageDocumentVerificationService
         new(name, printed is null ? "NOT_PRINTED" : printed == calculated ? "MATCH" : "MISMATCH");
 
     private sealed class OcrBlock { public string Label { get; set; } = string.Empty; public string Content { get; set; } = string.Empty; }
-    private sealed record BankNameMatch(int Start, int End, string Bank, string Alias);
     private sealed record BalanceEvidence(
         string Raw, decimal? Value, decimal Debit = 0m, decimal Credit = 0m,
         bool DerivedFromMovement = false);
@@ -2057,6 +2143,7 @@ internal sealed class BankImageDocumentVerificationService
         public string Bank { get; set; } = string.Empty;
         public string BankStatus { get; set; } = string.Empty;
         public IReadOnlyList<string> BankEvidence { get; set; } = [];
+        public bool IsSharedApexIfscFallback { get; set; }
         public string Ifsc { get; set; } = string.Empty;
         public string AccountNumber { get; set; } = string.Empty;
         public string AccountType { get; set; } = string.Empty;
@@ -2109,6 +2196,7 @@ internal sealed class BankImageDocumentVerificationService
         public string Bank { get; set; } = string.Empty;
         public string BankStatus { get; set; } = string.Empty;
         public IReadOnlyList<string> BankEvidence { get; set; } = [];
+        public bool IsSharedApexIfscFallback { get; set; }
         public string Ifsc { get; set; } = string.Empty;
         public string AccountNumber { get; set; } = string.Empty;
         public string AccountType { get; set; } = string.Empty;

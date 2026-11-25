@@ -2495,8 +2495,13 @@ public sealed partial class BankStatementImportService(
         }
         if (bankName.Equals("Unknown Bank", StringComparison.OrdinalIgnoreCase))
         {
+            var printed = BankIfscCatalog.ExtractSourcePrintedBankName(headerText);
+            if (printed.Length > 0) bankName = BankIfscCatalog.ToReadableBankName(printed);
+        }
+        if (bankName.Equals("Unknown Bank", StringComparison.OrdinalIgnoreCase))
+        {
             var ifsc = IfscRegex().Match(upperHeader);
-            if (ifsc.Success) bankName = GetBankNameFromIfsc(ifsc.Value[..4]);
+            if (ifsc.Success) bankName = GetBankNameFromIfsc(ifsc.Value[..4], allowGenericFallback: true);
         }
         if (bankName.Equals("Unknown Bank", StringComparison.OrdinalIgnoreCase) && candidate.HeaderRow > 0)
         {
@@ -2628,15 +2633,8 @@ public sealed partial class BankStatementImportService(
         return mappings.FirstOrDefault(item=>source.Contains(item.Key,StringComparison.OrdinalIgnoreCase)).Name ?? "Unknown Bank";
     }
 
-    private static string GetBankNameFromIfsc(string prefix) => prefix.Trim().ToUpperInvariant() switch
-    {
-        "SBIN" => "State Bank of India", "KARB" => "Karnataka Bank", "HDFC" => "HDFC Bank", "ICIC" => "ICICI Bank",
-        "KKBK" => "Kotak Mahindra Bank", "UTIB" => "Axis Bank", "PUNB" => "Punjab National Bank", "BARB" => "Bank of Baroda",
-        "CNRB" => "Canara Bank", "UBIN" => "Union Bank of India", "INDB" => "IndusInd Bank", "IBKL" => "IDBI Bank",
-        "FDRL" => "Federal Bank", "YESB" => "Yes Bank", "PSIB" => "Punjab & Sind Bank", "CBIN" => "Central Bank of India",
-        "IDIB" => "Indian Bank", "IOBA" => "Indian Overseas Bank", "BKID" => "Bank of India", "UCBA" => "UCO Bank",
-        "BDBL" => "Bandhan Bank", _ => "Unknown Bank"
-    };
+    private static string GetBankNameFromIfsc(string prefix, bool allowGenericFallback = false) =>
+        BankIfscCatalog.ResolveFromIfscPrefix(prefix, allowGenericFallback);
 
     private static string DetectAccountNumber(SheetData sheet, int headerLimit, string fileName)
     {

@@ -15,12 +15,13 @@ start = 'private const string RecognitionPython = """'
 assert source.count(start) == 1
 python_source = source.split(start, 1)[1].split('\n""";', 1)[0]
 tree = ast.parse(python_source)
-targets = {"result_json", "_summary_visible", "_recheck_printed_summary"}
+targets = {"result_json", "_summary_visible", "_recheck_printed_summary", "_analyze_table_alignment"}
 funcs = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in targets]
 assert len(funcs) == len(targets), "Source crop helper missing."
 env = {"Path": Path, "status": lambda *a, **k: None}
 exec(compile(ast.Module(body=funcs, type_ignores=[]), "<production-bank-ocr>", "exec"), env)
 recover = env["_recheck_printed_summary"]
+analyze_table = env["_analyze_table_alignment"]
 
 class Rect:
     def __init__(self, x0, y0, x1, y1):
@@ -107,6 +108,57 @@ try:
         assert not ok and same is already
         nonpdf, ok = recover(Path("synthetic.png"), 1, blank(), out, Pipeline(summary))
         assert not ok
+        # Co-op Ope Bal / Clo Bal header-only row must NOT look visible, while
+        # header + numeric controls (with blank Ope Bal) MUST pass visibility.
+        coop_header_only = {
+            "parsing_res_list": [{
+                "block_label": "table",
+                "block_content": "| Ope Bal | Dr count | Cr count | Debits | Credits | Clo Bal |",
+            }],
+        }
+        assert not env["_summary_visible"](coop_header_only), "Header-only co-op summary falsely satisfied visibility."
+        coop_complete = {
+            "parsing_res_list": [{
+                "block_label": "text",
+                "block_content": "Ope Bal Dr count Cr count Debits Credits Clo Bal\n4 6 12,34,567.00 12,45,678.00 11,611.00Cr",
+            }],
+        }
+        assert env["_summary_visible"](coop_complete), "Complete co-op summary was not recognized as visible."
+        # Direct-VLM fallback (use_layout_detection=False) recovers borderless
+        # summaries omitted by layout detection on Attempts 1 & 2.
+        class FallbackPipeline:
+            def __init__(self, value):
+                self.value = value
+                self.calls = []
+            def predict_iter(self, **kwargs):
+                self.calls.append((kwargs.get("use_layout_detection"), kwargs.get("prompt_label")))
+                if kwargs.get("use_layout_detection") is False and kwargs.get("prompt_label") == "table":
+                    return iter([Response(self.value)])
+                return iter([Response({"parsing_res_list": []})])
+        fb_pipe = FallbackPipeline(coop_complete)
+        data = blank()
+        recovered, ok = recover(Path("synthetic.pdf"), 1, data, out, fb_pipe)
+        assert ok and recovered is data and (False, "table") in fb_pipe.calls
+        assert env["_summary_visible"](data), "Direct-VLM fallback did not persist recovered co-op summary."
+        assert (out / "summary_source_001_03.png").exists(), "Direct-VLM tight summary crop absent."
+        # Table alignment analyzer: clean BF + transactions => defect_score == 0;
+        # BF merged onto Tx #1 + drifted dated fragments => needs_recheck == True.
+        clean_html = (
+            "<table><tr><th>Post.Dt</th><th>Val.Dt</th><th>Details</th><th>Debit</th><th>Credit</th><th>Balance</th></tr>"
+            "<tr><td></td><td></td><td></td><td>BROUGHT</td><td>FORWARD:</td><td>500.00Cr</td></tr>"
+            "<tr><td>01/05/25</td><td>01/05/25</td><td>CASH DEP</td><td></td><td>1,000.00</td><td>1,500.00Cr</td></tr>"
+            "<tr><td>02/05/25</td><td>02/05/25</td><td>SMS CHARGE</td><td>20.00</td><td></td><td>1,480.00Cr</td></tr></table>"
+        )
+        clean_stats = analyze_table(clean_html)
+        assert clean_stats is not None and clean_stats["defect_score"] == 0 and not clean_stats["needs_recheck"]
+        drifted_html = (
+            "<table><tr><th>Post.Dt</th><th>Val.Dt</th><th>Details</th><th>Debit</th><th>Credit</th><th>Balance</th></tr>"
+            "<tr><td>01/05/25</td><td>01/05/25</td><td>CASH DEP</td><td>BROUGHT</td><td>FORWARD: 1,000.00</td><td>500.00Cr</td></tr>"
+            "<tr><td>02/05/25</td><td>02/05/25</td><td>SMS CHARGE</td><td></td><td></td><td></td></tr>"
+            "<tr><td></td><td></td><td>CONT LINE</td><td>20.00</td><td></td><td>1,480.00Cr</td></tr></table>"
+        )
+        drifted_stats = analyze_table(drifted_html)
+        assert drifted_stats is not None and drifted_stats["needs_recheck"] and drifted_stats["defect_score"] > clean_stats["defect_score"]
 finally:
     if old_fitz is None:
         sys.modules.pop("fitz", None)
