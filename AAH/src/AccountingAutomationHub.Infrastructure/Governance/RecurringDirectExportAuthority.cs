@@ -11,13 +11,13 @@ public static class RecurringDirectExportAuthority
     public static bool IsCompleteCashGroup(long clientId, string financialYear, string sourceJobId, out string reason)
     {
         reason = string.Empty;
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = ApplicationDataPaths.DatabasePath,
             Mode = SqliteOpenMode.ReadOnly,
             Cache = SqliteCacheMode.Private
-        }.ToString());
-        connection.Open();
+        }.ToString();
+        using var connection = SqliteConnectionPolicy.OpenReadOnly(connectionString);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT r.Status, i.Status, i.TargetId, c.Id, c.SourceRunId, c.SourceJobId

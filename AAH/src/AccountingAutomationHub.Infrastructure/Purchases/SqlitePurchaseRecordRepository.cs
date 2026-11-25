@@ -1671,6 +1671,10 @@ public sealed class SqlitePurchaseRecordRepository :
             var userEdited = reader.GetInt64(2) != 0;
             var updatedUtc = reader.GetString(3);
             var original = reader.GetString(4);
+            // Legacy GST-only rows imported prior to RecordJson storage have blank RecordJson
+            // and no JSON inventory payload. Skip them instead of misclassifying as corrupt JSON;
+            // non-blank malformed JSON (e.g. "{") still falls through as Record=null to enforce repair.
+            if (string.IsNullOrWhiteSpace(original)) continue;
             PurchaseImportRecord? record = null;
             try { record = JsonSerializer.Deserialize<PurchaseImportRecord>(original); }
             catch (JsonException) { /* Retain unreadable source, never reconstruct it. */ }

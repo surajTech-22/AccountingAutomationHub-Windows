@@ -49,13 +49,14 @@ public static class SqliteDatabaseOptimizer
 
     private static SqliteConnection Open(SqliteOpenMode mode)
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = ApplicationDataPaths.DatabasePath,
             Mode = mode,
             Cache = SqliteCacheMode.Private
-        }.ToString());
-        connection.Open();
-        return connection;
+        }.ToString();
+        return mode == SqliteOpenMode.ReadOnly
+            ? SqliteConnectionPolicy.OpenReadOnly(connectionString)
+            : SqliteConnectionPolicy.Open(connectionString);
     }
 }

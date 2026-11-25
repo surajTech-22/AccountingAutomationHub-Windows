@@ -13,6 +13,7 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
 {
     // Backup scheduling can be reached by more than one UI/service lifetime. The gate must therefore
     // be process-wide, otherwise multiple 20-second startup timers can all create the same Daily copy.
+    public const long MinimumValidBackupBytes = 1024L;
     private static readonly SemaphoreSlim GlobalGate = new(1, 1);
     private static readonly Regex BackupNamePattern = new(
         @"^AAH-(?<class>Daily|Weekly|Monthly|Manual)-(?<stamp>\d{8}-\d{6})(?:-\d{2})?\.(?<ext>db|aahbackup)$",
@@ -137,7 +138,15 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
     {
         var target = BuildUniqueBackupPath(scheduleClass, now);
         var backupService = new ApplicationBackupService();
-        backupService.CreateBackup(target);
+        try
+        {
+            backupService.CreateBackup(target);
+        }
+        catch
+        {
+            try { if (File.Exists(target)) File.Delete(target); } catch { }
+            throw;
+        }
         return VerifyPortableBackup(target, scheduleClass);
     }
 
@@ -257,6 +266,7 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
 
     private void ApplyRetention()
     {
+        PruneCorruptBackups();
         PruneMissingRepositoryRecords();
         var deleted = new List<string>();
         foreach (var policy in RetentionCounts)
@@ -303,6 +313,32 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
         }
     }
 
+    private void PruneCorruptBackups()
+    {
+        if (!Directory.Exists(ApplicationDataPaths.VerifiedBackupFolder)) return;
+
+        var deleted = new List<string>();
+        foreach (var path in Directory.EnumerateFiles(ApplicationDataPaths.VerifiedBackupFolder, "AAH-*", SearchOption.TopDirectoryOnly))
+        {
+            if (!BackupNamePattern.IsMatch(Path.GetFileName(path))) continue;
+            try
+            {
+                if (new FileInfo(path).Length >= MinimumValidBackupBytes) continue;
+                File.Delete(path);
+                if (!File.Exists(path)) deleted.Add(path);
+            }
+            catch
+            {
+                // Corrupt legacy artifacts that are temporarily locked will be retried on the next run.
+            }
+        }
+
+        if (deleted.Count > 0)
+        {
+            try { repository.DeleteBackupRecordsByPath(deleted); } catch { }
+        }
+    }
+
     private static IReadOnlyList<PhysicalBackup> EnumeratePhysicalBackups()
     {
         if (!Directory.Exists(ApplicationDataPaths.VerifiedBackupFolder)) return Array.Empty<PhysicalBackup>();
@@ -312,6 +348,15 @@ public sealed class VerifiedBackupService(SqliteGovernanceRepository repository)
         {
             var match = BackupNamePattern.Match(Path.GetFileName(path));
             if (!match.Success) continue;
+
+            try
+            {
+                if (new FileInfo(path).Length < MinimumValidBackupBytes) continue;
+            }
+            catch
+            {
+                continue;
+            }
 
             var scheduleClass = NormalizeScheduleClass(match.Groups["class"].Value);
             DateTime createdLocal;

@@ -8,9 +8,19 @@
 public static class ApplicationStorageMaintenanceService
 {
     private static readonly TimeSpan TempRetention = TimeSpan.FromHours(2);
-    private static readonly TimeSpan LogRetention = TimeSpan.FromDays(30);
-    private const long LogSoftLimitBytes = 150L * 1024 * 1024;
-    private const long LogTargetBytes = 100L * 1024 * 1024;
+    private static readonly TimeSpan LogRetention = TimeSpan.FromDays(14);
+    private const long LogSoftLimitBytes = 40L * 1024 * 1024;
+    private const long LogTargetBytes = 25L * 1024 * 1024;
+    private const long FatalErrorRotateBytes = 2L * 1024 * 1024;
+    private static readonly HashSet<string> ActiveLogNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AutoImport.log",
+        "fatal-error.log",
+        "performance-trace.csv",
+        "navigation-performance.log",
+        "verified-backup.log",
+        "storage-maintenance.log"
+    };
 
     public static void RunSafeMaintenance()
     {
@@ -124,18 +134,30 @@ public static class ApplicationStorageMaintenanceService
         var root = Path.Combine(ApplicationDataPaths.RootFolder, "Logs");
         if (!Directory.Exists(root)) return;
 
+        var fatalLogPath = Path.Combine(root, "fatal-error.log");
+        try
+        {
+            if (File.Exists(fatalLogPath) && new FileInfo(fatalLogPath).Length > FatalErrorRotateBytes)
+            {
+                var archive = Path.Combine(root, $"fatal-error-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+                if (!File.Exists(archive)) File.Move(fatalLogPath, archive);
+            }
+        }
+        catch { }
+
         var cutoff = DateTime.UtcNow - LogRetention;
         foreach (var file in EnumerateFilesSafe(root))
         {
             try
             {
-                if (file.LastWriteTimeUtc < cutoff) file.Delete();
+                if (!ActiveLogNames.Contains(file.Name) && file.LastWriteTimeUtc < cutoff) file.Delete();
             }
             catch { }
         }
 
         var remaining = EnumerateFilesSafe(root)
-            .OrderBy(item => item.LastWriteTimeUtc)
+            .OrderBy(item => ActiveLogNames.Contains(item.Name) ? 1 : 0)
+            .ThenBy(item => item.LastWriteTimeUtc)
             .ToList();
         var total = remaining.Sum(item => SafeLength(item));
         if (total <= LogSoftLimitBytes) return;
@@ -143,6 +165,7 @@ public static class ApplicationStorageMaintenanceService
         foreach (var file in remaining)
         {
             if (total <= LogTargetBytes) break;
+            if (ActiveLogNames.Contains(file.Name)) continue;
             var length = SafeLength(file);
             try
             {

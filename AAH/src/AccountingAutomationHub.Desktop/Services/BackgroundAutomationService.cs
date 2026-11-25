@@ -97,6 +97,8 @@ public sealed class BackgroundAutomationService : IDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _observedFileStates =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _loggedBranchDeferredStates =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, long> _reviewWorkbookSyncVersions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _reviewWorkbookObservedStates =
@@ -4574,13 +4576,13 @@ public sealed class BackgroundAutomationService : IDisposable
         if (IsWithinBranchContainer(folder.FolderPath, path))
         {
             if (ClientBranchAutoImportLayout.TryResolve(folder.FolderPath, path, out var branch))
-                AutomationDiagnosticLog.Write("BRANCH-IMPORT-SCOPE-PENDING",
+                WriteBranchDeferredLogOnce("BRANCH-IMPORT-SCOPE-PENDING",
                     $"File retained for branch ID {branch!.BranchId}; branch accounting scope is not yet connected, so no import was attempted.",
-                    path);
+                    path, force);
             else
-                AutomationDiagnosticLog.Write("BRANCH-IMPORT-UNOWNED",
+                WriteBranchDeferredLogOnce("BRANCH-IMPORT-UNOWNED",
                     "File is within the branch tree but has no verified owner. Import is blocked.",
-                    path);
+                    path, force);
             return false;
         }
 
@@ -4592,8 +4594,8 @@ public sealed class BackgroundAutomationService : IDisposable
         {
             if (!IsPrivateBranchOwnershipVerified(folder, path, branchLink, forcedKind))
             {
-                AutomationDiagnosticLog.Write("BRANCH-IMPORT-OWNER-MISMATCH",
-                    "Private branch source has no exact parent/BranchId folder marker. No import attempted.", path);
+                WriteBranchDeferredLogOnce("BRANCH-IMPORT-OWNER-MISMATCH",
+                    "Private branch source has no exact parent/BranchId folder marker. No import attempted.", path, force);
                 return false;
             }
             if (Path.GetRelativePath(folder.FolderPath, path)
@@ -4609,8 +4611,8 @@ public sealed class BackgroundAutomationService : IDisposable
         {
             // Consolidated's historical files remain evidence; no new generic
             // imports can be assigned to the wrong branch automatically.
-            AutomationDiagnosticLog.Write("BRANCH-CONSOLIDATED-DEFER",
-                "Separate branch books enabled: place new accounting source in its named branch folder. Parent accounting data preserved.", path);
+            WriteBranchDeferredLogOnce("BRANCH-CONSOLIDATED-DEFER",
+                "Separate branch books enabled: place new accounting source in its named branch folder. Parent accounting data preserved.", path, force);
             return false;
         }
 
@@ -9543,6 +9545,7 @@ public sealed class BackgroundAutomationService : IDisposable
             _activeFiles.Clear();
             _activeStages.Clear();
             _observedFileStates.Clear();
+            _loggedBranchDeferredStates.Clear();
             _salesPurchaseObservedStates.Clear();
             _salesPurchaseLiveQueue.Clear();
             _salesPurchaseLiveQueuedKeys.Clear();
@@ -9556,6 +9559,36 @@ public sealed class BackgroundAutomationService : IDisposable
         _bankImportGate.Dispose();
         _bankOcrAutoBatchGate.Dispose();
         _salesPurchaseIndexGate.Dispose();
+    }
+
+    private void WriteBranchDeferredLogOnce(string tag, string message, string path, bool force)
+    {
+        var fingerprint = tag;
+        try
+        {
+            if (File.Exists(path))
+            {
+                var info = new FileInfo(path);
+                fingerprint = $"{tag}|{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+            }
+        }
+        catch { }
+
+        if (!force &&
+            _loggedBranchDeferredStates.TryGetValue(path, out var previous) &&
+            previous.Equals(fingerprint, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (_loggedBranchDeferredStates.Count > 4096)
+        {
+            foreach (var key in _loggedBranchDeferredStates.Keys.Take(_loggedBranchDeferredStates.Count - 3072))
+                _loggedBranchDeferredStates.TryRemove(key, out _);
+        }
+
+        _loggedBranchDeferredStates[path] = fingerprint;
+        AutomationDiagnosticLog.Write(tag, message, path);
     }
 
     [DllImport("user32.dll")]

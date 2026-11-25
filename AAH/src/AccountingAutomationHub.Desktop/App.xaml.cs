@@ -224,6 +224,7 @@ public partial class App : System.Windows.Application
                 }
 
                 await Task.Run(() => SqliteFinanceControlRepository.RunStartupAuditCompactionIfNeeded());
+                await Task.Run(() => AccountingAutomationHub.Infrastructure.Tally.SqliteTallyRepository.RunStartupAuthorityCompressionIfNeeded());
             }
 
             // Keep only bounded AAH-owned reproducible storage. This runs off the UI thread and

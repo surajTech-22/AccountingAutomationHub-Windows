@@ -47,17 +47,12 @@ public sealed class RecurringDirectService
         Initialize();
     }
 
-    private SqliteConnection Open()
-    {
-        var connection = new SqliteConnection(_connectionString);
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON;";
-        command.ExecuteNonQuery();
-        return connection;
-    }
+    private SqliteConnection Open() => SqliteConnectionPolicy.Open(_connectionString);
 
-    private void Initialize()
+    private void Initialize() =>
+        SqliteSchemaInitializationGate.RunOnce(nameof(RecurringDirectService), _connectionString, InitializeCore);
+
+    private void InitializeCore()
     {
         _banking.Initialize(); _masters.Initialize(); _journals.Initialize(); _governance.Initialize();
         using var connection = Open();

@@ -2544,43 +2544,57 @@ public sealed class PurchaseImportViewModel :
 
     public async void IncludeTwoBOnlyRows(IReadOnlyCollection<PurchaseImportRecord>? rows)
     {
-        await IncludeTwoBOnlyRowsCore(rows, confirm: true);
+        try
+        {
+            await IncludeTwoBOnlyRowsCore(rows, confirm: true);
+        }
+        catch (Exception exception)
+        {
+            EditStatusText = $"Including 2B-only Purchase rows failed: {exception.Message}";
+        }
     }
 
     public async void SetTwoBInclusionState(PurchaseImportRecord? row, string requestedState)
     {
-        if (!CanEditPurchase)
+        try
         {
-            EditStatusText = DesktopPermissionService.DeniedMessage(_governanceRepository, "change 2B-only Purchase inclusion", accountingMutation: true);
-            return;
-        }
-
-        if (row is null || !row.IsTwoBOnlyEvidence || row.PersistentId <= 0)
-            return;
-
-        if (PurchaseTreatmentPolicy.IsTwoBIncluded(requestedState))
-        {
-            var included = await IncludeTwoBOnlyRowsCore([row], confirm: false);
-            if (!included)
+            if (!CanEditPurchase)
             {
-                // The selector is optimistic so the user sees the clicked value
-                // immediately. If validation/persistence does not complete, restore the
-                // authoritative reconciliation state instead of leaving a false Included
-                // label on retained evidence.
-                var identity = BuildTwoBOnlyDocumentIdentity(row);
-                foreach (var item in AllRows.Where(item =>
-                             item.IsTwoBOnlyEvidence &&
-                             BuildTwoBOnlyDocumentIdentity(item).Equals(identity, StringComparison.OrdinalIgnoreCase) &&
-                             item.Destination.Equals("2B Only", StringComparison.OrdinalIgnoreCase)))
-                {
-                    item.GstApplicability = PurchaseTreatmentPolicy.NotIncludedInPurchase;
-                }
+                EditStatusText = DesktopPermissionService.DeniedMessage(_governanceRepository, "change 2B-only Purchase inclusion", accountingMutation: true);
+                return;
             }
-            return;
-        }
 
-        if (PurchaseTreatmentPolicy.IsTwoBNotIncluded(requestedState))
-            await ExcludeTwoBOnlyRowsCore([row]);
+            if (row is null || !row.IsTwoBOnlyEvidence || row.PersistentId <= 0)
+                return;
+
+            if (PurchaseTreatmentPolicy.IsTwoBIncluded(requestedState))
+            {
+                var included = await IncludeTwoBOnlyRowsCore([row], confirm: false);
+                if (!included)
+                {
+                    // The selector is optimistic so the user sees the clicked value
+                    // immediately. If validation/persistence does not complete, restore the
+                    // authoritative reconciliation state instead of leaving a false Included
+                    // label on retained evidence.
+                    var identity = BuildTwoBOnlyDocumentIdentity(row);
+                    foreach (var item in AllRows.Where(item =>
+                                 item.IsTwoBOnlyEvidence &&
+                                 BuildTwoBOnlyDocumentIdentity(item).Equals(identity, StringComparison.OrdinalIgnoreCase) &&
+                                 item.Destination.Equals("2B Only", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        item.GstApplicability = PurchaseTreatmentPolicy.NotIncludedInPurchase;
+                    }
+                }
+                return;
+            }
+
+            if (PurchaseTreatmentPolicy.IsTwoBNotIncluded(requestedState))
+                await ExcludeTwoBOnlyRowsCore([row]);
+        }
+        catch (Exception exception)
+        {
+            EditStatusText = $"Updating 2B-only Purchase inclusion failed: {exception.Message}";
+        }
     }
 
     private async Task<bool> IncludeTwoBOnlyRowsCore(

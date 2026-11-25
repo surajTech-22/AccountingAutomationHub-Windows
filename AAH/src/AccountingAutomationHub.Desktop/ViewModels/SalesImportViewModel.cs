@@ -2678,9 +2678,6 @@ public sealed class SalesImportViewModel :
         RebuildB2CCustomerPanel(AllRows.ToArray(), force: true);
     }
 
-    public bool SaveB2CCustomerNameFromPanel(string sourceKey, string customerName) =>
-        SaveB2CCustomerNameFromPanelAsync(sourceKey, customerName).GetAwaiter().GetResult();
-
     private void EnsureB2CDebtorLedgerOption(string customerName)
     {
         var name = AccountingText.DisplayName(customerName);

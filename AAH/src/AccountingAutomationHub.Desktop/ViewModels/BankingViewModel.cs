@@ -1833,6 +1833,13 @@ public sealed class BankingViewModel : PageViewModel
 
     private void OnLiveDataChanged(object? sender, AccountingLiveChange change)
     {
+        var uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (uiDispatcher is not null && !uiDispatcher.CheckAccess())
+        {
+            _ = uiDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => OnLiveDataChanged(sender, change)));
+            return;
+        }
+
         if (change.ClientId != CurrentClientId ||
             !change.FinancialYear.Equals(CurrentFinancialYear, StringComparison.OrdinalIgnoreCase)) return;
 

@@ -4,6 +4,7 @@ using AccountingAutomationHub.Application.Clients;
 using AccountingAutomationHub.Application.Imports;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Services;
+using AccountingAutomationHub.Domain.Common;
 using AccountingAutomationHub.Domain.Imports;
 using AccountingAutomationHub.Infrastructure.Spreadsheets;
 using AccountingAutomationHub.Infrastructure.Imports;
@@ -423,7 +424,8 @@ public sealed class ActionCenterViewModel : PageViewModel
              item.Module.Contains(search, StringComparison.OrdinalIgnoreCase) ||
              item.ActionType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
              item.Title.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-             item.Detail.Contains(search, StringComparison.OrdinalIgnoreCase)));
+             item.Detail.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+             FlexibleFilterMatcher.MatchesDate(item.CreatedUtc.ToLocalTime(), search)));
 
         Actions.Clear();
         foreach (var item in filtered.OrderBy(item => item.CreatedUtc).ThenBy(item => item.PersistentId)) Actions.Add(item);

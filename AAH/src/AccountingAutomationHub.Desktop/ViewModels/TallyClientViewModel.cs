@@ -1,5 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Windows;
+using System.Windows.Threading;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Services;
 using AccountingAutomationHub.Domain.Governance;
@@ -570,6 +572,13 @@ public sealed class TallyClientViewModel : PageViewModel, IDisposable
 
     private void OnCoordinatorChanged(object? sender, EventArgs e)
     {
+        var uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (uiDispatcher is not null && !uiDispatcher.CheckAccess())
+        {
+            _ = uiDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => OnCoordinatorChanged(sender, e)));
+            return;
+        }
+
         // R38 invisible heartbeat: coordinator status text, company discovery and ALTERID
         // timestamps are background authority only. Never mirror those pulse-by-pulse
         // changes into the page. Explicit page actions call SyncCoordinatorPresentation

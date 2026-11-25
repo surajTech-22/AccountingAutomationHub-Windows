@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Threading;
 using System.ComponentModel;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Services;
@@ -421,6 +422,13 @@ public sealed class FinancialStatementsViewModel : PageViewModel
 
     private void OnTallyHeartbeatChanged(object? sender, EventArgs e)
     {
+        var uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (uiDispatcher is not null && !uiDispatcher.CheckAccess())
+        {
+            _ = uiDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => OnTallyHeartbeatChanged(sender, e)));
+            return;
+        }
+
         if (!FinancialStatementsEnabled || !IsNceEntityType || _tallyCoordinator?.IsConnected != true || _tallyCoordinator.IsBusy) return;
         var client = _clientContext.CurrentClient;
         var company = _tallyCoordinator.SelectedCompany;

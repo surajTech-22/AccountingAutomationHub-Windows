@@ -37,6 +37,14 @@ public static class SqliteConnectionPolicy
         return connection;
     }
 
+    public static SqliteConnection OpenReadOnly(string connectionString)
+    {
+        var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        ConfigureConnection(connection, enableForeignKeys: false);
+        return connection;
+    }
+
     public static void ConfigureConnection(SqliteConnection connection, bool enableForeignKeys = true)
     {
         using var command = connection.CreateCommand();

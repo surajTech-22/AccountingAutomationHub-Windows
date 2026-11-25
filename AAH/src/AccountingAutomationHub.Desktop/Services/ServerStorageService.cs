@@ -450,7 +450,7 @@ public sealed class ServerStorageService
     private IEnumerable<(long ClientId,string FinancialYear,string Kind,string Path)> ReadSourceEvidence()
     {
         if (!File.Exists(ApplicationDataPaths.DatabasePath)) yield break;
-        using var connection = new SqliteConnection(_connectionString); connection.Open();
+        using var connection = SqliteConnectionPolicy.OpenReadOnly(_connectionString);
         if (TableExists(connection, "DocumentVault"))
         {
             using var command = connection.CreateCommand();
@@ -484,7 +484,7 @@ public sealed class ServerStorageService
 
     private string FindActiveAutomationFolder(long clientId, string financialYear)
     {
-        using var connection = new SqliteConnection(_connectionString); connection.Open();
+        using var connection = SqliteConnectionPolicy.OpenReadOnly(_connectionString);
         if (!TableExists(connection,"AutomationFolders")) return string.Empty;
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT FolderPath FROM AutomationFolders WHERE ClientId=$Client AND FinancialYear=$Fy COLLATE NOCASE AND IsPaused=0 ORDER BY UpdatedUtc DESC LIMIT 1;";
@@ -494,7 +494,7 @@ public sealed class ServerStorageService
 
     private (string Code,string Name) GetClientIdentity(long clientId)
     {
-        using var connection = new SqliteConnection(_connectionString); connection.Open();
+        using var connection = SqliteConnectionPolicy.OpenReadOnly(_connectionString);
         using var command = connection.CreateCommand(); command.CommandText = "SELECT ClientCode,ClientName FROM Clients WHERE Id=$Id LIMIT 1;"; command.Parameters.AddWithValue("$Id", clientId);
         using var reader = command.ExecuteReader(); return reader.Read() ? (reader.GetString(0),reader.GetString(1)) : ($"CL{clientId:0000}",$"Client {clientId}");
     }

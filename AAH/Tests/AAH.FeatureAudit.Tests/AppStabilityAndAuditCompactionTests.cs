@@ -1,7 +1,11 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Clients;
+using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Audit;
 using AccountingAutomationHub.Infrastructure.Banking;
 using AccountingAutomationHub.Infrastructure.Clients;
@@ -9,6 +13,9 @@ using AccountingAutomationHub.Infrastructure.Finance;
 using AccountingAutomationHub.Infrastructure.Governance;
 using AccountingAutomationHub.Infrastructure.Imports;
 using AccountingAutomationHub.Infrastructure.Persistence;
+using AccountingAutomationHub.Infrastructure.Purchases;
+using AccountingAutomationHub.Infrastructure.Sales;
+using AccountingAutomationHub.Infrastructure.Tally;
 using Microsoft.Data.Sqlite;
 
 internal static class AppStabilityAndAuditCompactionTests
@@ -26,7 +33,12 @@ internal static class AppStabilityAndAuditCompactionTests
         RunAuditRepositoryPolicyTest();
         RunPerformanceTraceRotationTest();
         RunInvoiceVisionChildUnlinkedContractTest();
-        Console.WriteLine("PASS AppStabilityAndAuditCompaction: trigger no-op guard, startup audit compaction, non-pooled verified backup, branch GST skip, Audit SQLite policy, trace rotation & InvoiceVisionChild unlink.");
+        RunCorruptBackupRecoveryTest();
+        RunTallyAuthorityGzipCompressionTest();
+        RunEmptyRecordJsonStockSnapshotTest();
+        RunCrossThreadDispatcherContractTest();
+        RunLogRetentionPruningTest();
+        Console.WriteLine("PASS AppStabilityAndAuditCompaction: trigger no-op guard, startup audit compaction, non-pooled verified backup + corrupt recovery, branch GST skip, Audit SQLite policy, trace & log retention, Tally XML/JSON gzip compaction, legacy empty RecordJson handling, cross-thread dispatcher marshalling & InvoiceVisionChild unlink.");
     }
 
     private static void RunAuditTriggerAndCompactionTest()
@@ -318,6 +330,256 @@ internal static class AppStabilityAndAuditCompactionTests
         Check(dumpView.Contains("Review in InvoiceVision", StringComparison.Ordinal) &&
               dumpView.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal),
             "UniversalDumpWindow must hide the Review in InvoiceVision button.");
+    }
+
+    private static void RunCorruptBackupRecoveryTest()
+    {
+        var tempRoot = CreateTempRoot("corrupt_backup");
+        try
+        {
+            ApplicationDataPaths.ConfigureRootOverride(tempRoot);
+            ApplicationDataPaths.EnsureFolders();
+
+            var clientRepo = new SqliteClientRepository();
+            clientRepo.Initialize();
+            clientRepo.Save(new ClientProfile
+            {
+                ClientCode = "SYNCORR01",
+                ClientName = "Synthetic Corrupt Backup Co",
+                FinancialYear = "2025-26"
+            });
+            var auditRepo = new SqliteAuditRepository();
+            auditRepo.Initialize();
+            var govRepo = new SqliteGovernanceRepository();
+            govRepo.Initialize();
+
+            Directory.CreateDirectory(ApplicationDataPaths.VerifiedBackupFolder);
+            var poisonName = $"AAH-Daily-{DateTime.Now:yyyyMMdd}-010203.aahbackup";
+            var poisonPath = Path.Combine(ApplicationDataPaths.VerifiedBackupFolder, poisonName);
+            File.WriteAllBytes(poisonPath, new byte[22]);
+
+            var service = new VerifiedBackupService(govRepo);
+            var record = service.RunScheduledBackupAsync().GetAwaiter().GetResult();
+            Check(record is not null && record.IsVerified,
+                $"Expected corrupt 22-byte backup to be pruned and replaced with a valid Daily backup, got IsVerified={record?.IsVerified}, Integrity={record?.IntegrityResult}.");
+            Check(!File.Exists(poisonPath), "Expected 22-byte corrupt backup file to be deleted.");
+            Check(File.Exists(record!.BackupPath) && new FileInfo(record.BackupPath).Length >= VerifiedBackupService.MinimumValidBackupBytes,
+                $"Expected valid backup >= {VerifiedBackupService.MinimumValidBackupBytes} bytes at {record.BackupPath}.");
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    private static void RunTallyAuthorityGzipCompressionTest()
+    {
+        var tempRoot = CreateTempRoot("tally_gzip");
+        try
+        {
+            ApplicationDataPaths.ConfigureRootOverride(tempRoot);
+            ApplicationDataPaths.EnsureFolders();
+
+            var clientRepo = new SqliteClientRepository();
+            clientRepo.Initialize();
+            var savedClient = clientRepo.Save(new ClientProfile
+            {
+                ClientCode = "SYNTLY01",
+                ClientName = "Synthetic Tally Co",
+                FinancialYear = "2025-26"
+            });
+
+            var tallyRepo = new SqliteTallyRepository();
+            tallyRepo.Initialize();
+
+            var largeXml = "<VOUCHER REMOTEID=\"syn-1\" VCHTYPE=\"Payment\">" +
+                           string.Concat(Enumerable.Repeat("<ALLLEDGERENTRIES.LIST><LEDGERNAME>Synthetic Bank Ledger</LEDGERNAME><AMOUNT>-1250.00</AMOUNT></ALLLEDGERENTRIES.LIST>", 16)) +
+                           "</VOUCHER>";
+            var expectedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(largeXml)));
+
+            tallyRepo.UpsertVoucherXmlAuthority("COMP_KEY_1", "2025-26",
+            [
+                new TallyVoucherXmlSnapshot("101", "guid-101", "Payment", new DateTime(2025, 4, 15), largeXml) { AlterId = "10" }
+            ]);
+
+            using (var conn = new SqliteConnection($"Data Source={ApplicationDataPaths.DatabasePath};Pooling=False;"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT OriginalXml, ContentHash FROM TallyVoucherXmlAuthority WHERE MasterId='101';";
+                using var r = cmd.ExecuteReader();
+                Check(r.Read(), "Expected saved voucher XML row.");
+                Check(r.GetString(0).StartsWith("AAH_GZIP_V1:", StringComparison.Ordinal),
+                    "Expected TallyVoucherXmlAuthority.OriginalXml to be gzip-prefixed.");
+                Check(r.GetString(1).Equals(expectedHash, StringComparison.OrdinalIgnoreCase),
+                    "Expected ContentHash to remain SHA256 of plain XML.");
+            }
+
+            var loadedXml = tallyRepo.GetVoucherXmlAuthorityByMasterIds("COMP_KEY_1", "2025-26", ["101"]).Single();
+            Check(loadedXml.OriginalXml == largeXml, "Expected decompressed voucher XML to match plain XML exactly.");
+
+            var snapshot = new TallyReportSnapshot
+            {
+                DisplayName = "Statistics",
+                ReportId = "Statistics",
+                FromDate = new DateTime(2025, 4, 1),
+                ToDate = new DateTime(2026, 3, 31),
+                IsAvailable = true,
+                Status = "Ready",
+                RawResponse = string.Concat(Enumerable.Repeat("<LEDGER>Synthetic Ledger Line</LEDGER>", 30))
+            };
+            tallyRepo.UpsertReportAuthority("COMP_KEY_1", "2025-26", 55, snapshot);
+            var loadedReport = tallyRepo.GetReportAuthority("COMP_KEY_1", "2025-26", "Statistics", new DateTime(2025, 4, 1), new DateTime(2026, 3, 31), 50);
+            Check(loadedReport is not null && loadedReport.RawResponse == snapshot.RawResponse, "Expected decompressed TallyReportSnapshot to round-trip.");
+
+            // Seed legacy uncompressed rows and run startup compaction
+            using (var conn = new SqliteConnection($"Data Source={ApplicationDataPaths.DatabasePath};Pooling=False;"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    """
+                    INSERT INTO TallyVoucherIndex(CompanyKey,FinancialYear,MasterId,AlterId,Guid,VoucherDate,VoucherType,VoucherNumber,Reference,PartyLedger,DebitLedgers,CreditLedgers,Amount,Narration,ContentHash,LastSeenUtc)
+                    VALUES('COMP_KEY_1','2025-26','101','10','guid-101','2025-04-15','Payment','1','','Bank','','',100,'','','2026-01-01T00:00:00Z'),
+                          ('COMP_KEY_1','2025-26','102','11','guid-102','2025-04-16','Payment','2','','Bank','','',100,'','','2026-01-01T00:00:00Z');
+                    INSERT INTO TallyVoucherXmlAuthority(CompanyKey,FinancialYear,MasterId,AlterId,Guid,VoucherDate,VoucherType,OriginalXml,ContentHash,LastSeenUtc)
+                    VALUES('COMP_KEY_1','2025-26','102','11','guid-102','2025-04-16','Payment',$Xml,$Hash,'2026-01-01T00:00:00Z');
+                    INSERT INTO TallyReportAuthority(CompanyKey,FinancialYear,ReportName,FromDate,ToDate,AuthorityAlterId,SnapshotJson,RefreshedUtc)
+                    VALUES('COMP_KEY_1','2025-26','Day Book','2025-04-01','2026-03-31',55,$Json,'2026-01-01T00:00:00Z');
+                    """;
+                cmd.Parameters.AddWithValue("$Xml", largeXml);
+                cmd.Parameters.AddWithValue("$Hash", expectedHash);
+                cmd.Parameters.AddWithValue("$Json", JsonSerializer.Serialize(snapshot));
+                cmd.ExecuteNonQuery();
+            }
+
+            Check(tallyRepo.HasCompleteVoucherXmlAuthority("COMP_KEY_1", "2025-26", 2),
+                "Expected HasCompleteVoucherXmlAuthority true for mixed compressed + plain rows.");
+
+            var firstRun = SqliteTallyRepository.RunStartupAuthorityCompressionIfNeeded(ApplicationDataPaths.DatabasePath);
+            Check(firstRun.CompressedVoucherRows == 1 && firstRun.CompressedReportRows == 1,
+                $"Expected 1 voucher & 1 report legacy row compressed, got v={firstRun.CompressedVoucherRows}, r={firstRun.CompressedReportRows}. Status={firstRun.Status}");
+            Check(tallyRepo.GetVoucherXmlAuthorityByMasterIds("COMP_KEY_1", "2025-26", ["102"]).Single().OriginalXml == largeXml,
+                "Expected startup-compressed voucher XML to round-trip identically.");
+            var secondRun = SqliteTallyRepository.RunStartupAuthorityCompressionIfNeeded(ApplicationDataPaths.DatabasePath);
+            Check(secondRun.CompressedVoucherRows == 0 && secondRun.CompressedReportRows == 0,
+                "Startup Tally authority compression must be idempotent.");
+            _ = savedClient;
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    private static void RunEmptyRecordJsonStockSnapshotTest()
+    {
+        var tempRoot = CreateTempRoot("empty_record_json");
+        try
+        {
+            ApplicationDataPaths.ConfigureRootOverride(tempRoot);
+            ApplicationDataPaths.EnsureFolders();
+
+            var clientRepo = new SqliteClientRepository();
+            clientRepo.Initialize();
+            var client = clientRepo.Save(new ClientProfile
+            {
+                ClientCode = "SYNJSON01",
+                ClientName = "Synthetic Stock JSON Co",
+                FinancialYear = "2025-26"
+            });
+
+            var purchaseRepo = new SqlitePurchaseRecordRepository();
+            purchaseRepo.Initialize();
+            var salesRepo = new SqliteSalesRecordRepository();
+            salesRepo.Initialize();
+
+            using (var conn = new SqliteConnection($"Data Source={ApplicationDataPaths.DatabasePath};Pooling=False;"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    """
+                    INSERT INTO PurchaseImportBatches(Id,ClientId,ClientGstin,FinancialYear,ImportMode,Status,CreatedUtc)
+                    VALUES(1,$C,'','2025-26','Auto Import','Imported','2026-01-01T00:00:00Z');
+                    INSERT INTO PurchaseRecords(BatchId,ClientId,ClientGstin,CompanyName,FinancialYear,ImportMode,Destination,ReconciliationStatus,GstApplicability,SupplierGstin,SupplierName,DocumentType,DocumentNumber,DocumentDate,GstDate,SourceDocumentValue,DocumentValue,Rate,TaxableValue,Igst,Cgst,Sgst,Cess,RoundOff,PurchaseLedger,IgstLedger,CgstLedger,SgstLedger,SourceSection,IsAmendment,OriginalDocumentNumber,OriginalDocumentDate,PlaceOfSupply,ReverseCharge,InvoiceType,ItcAvailability,ImsStatus,TwoBReason,TwoAReturnPeriod,TwoBReturnPeriod,TwoBAcceptance,Source2AFile,Source2APath,Source2BFile,Source2BPath,TwoBInvoiceValue,TwoBTaxableValue,TwoBIgst,TwoBCgst,TwoBSgst,DifferenceInvoiceValue,DifferenceTaxableValue,DifferenceIgst,DifferenceCgst,DifferenceSgst,DifferenceDetails,ItemSequence,CreatedUtc,UpdatedUtc,IsUserEdited,RecordJson)
+                    VALUES
+                    (1,$C,'','','2025-26','Auto Import','Purchase','','Included in Purchase','','Sup','','INV-LEGACY','2025-04-01','',100,100,18,100,18,0,0,0,0,'Purchase @ 18%','','','','B2B',0,'','','','No','','','','','','','','','','','',0,0,0,0,0,0,0,0,0,0,'',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,''),
+                    (1,$C,'','','2025-26','Auto Import','Purchase','','Included in Purchase','','Sup','','INV-VALID','2025-04-02','',100,100,18,100,18,0,0,0,0,'Purchase @ 18%','','','','B2B',0,'','','','No','','','','','','','','','','','',0,0,0,0,0,0,0,0,0,0,'',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,'{"DocumentNumber":"INV-VALID","CompanyName":"Synthetic"}'),
+                    (1,$C,'','','2025-26','Auto Import','Purchase','','Included in Purchase','','Sup','','INV-BAD','2025-04-03','',100,100,18,100,18,0,0,0,0,'Purchase @ 18%','','','','B2B',0,'','','','No','','','','','','','','','','','',0,0,0,0,0,0,0,0,0,0,'',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,'{');
+                    INSERT INTO SalesImportBatches(Id,ClientId,ClientGstin,FinancialYear,ImportMode,Status,CreatedUtc)
+                    VALUES(1,$C,'','2025-26','Auto Import','Imported','2026-01-01T00:00:00Z');
+                    INSERT INTO SalesRecords(BatchId,ClientId,ClientGstin,CompanyName,FinancialYear,ImportMode,Destination,CustomerGstin,CustomerName,CustomerNameSource,DocumentType,DocumentNumber,DocumentDate,GstDate,SourceDocumentValue,DocumentValue,Rate,TaxableValue,Igst,Cgst,Sgst,Cess,RoundOff,SalesLedger,IgstLedger,CgstLedger,SgstLedger,SourceSection,IsAmendment,OriginalDocumentNumber,OriginalDocumentDate,PlaceOfSupply,ReturnPeriod,SourceFile,SourcePath,SourceOrigin,SourceBranch,SourceScope,SourceHash,ResponseTimestamp,SalesMasterFile,ItemSequence,CreatedUtc,UpdatedUtc,IsUserEdited,RecordJson)
+                    VALUES
+                    (1,$C,'','','2025-26','Auto Import','Sales','','Cust','','INV','S-LEGACY','2025-04-01','',100,100,18,100,18,0,0,0,0,'Sales @ 18%','','','','B2B',0,'','','','','','','','','','','','',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,''),
+                    (1,$C,'','','2025-26','Auto Import','Sales','','Cust','','INV','S-BAD','2025-04-02','',100,100,18,100,18,0,0,0,0,'Sales @ 18%','','','','B2B',0,'','','','','','','','','','','','',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,'{');
+                    """;
+                cmd.Parameters.AddWithValue("$C", client.Id);
+                cmd.ExecuteNonQuery();
+            }
+
+            var purchaseSnapshots = purchaseRepo.GetStockProjectionSnapshots(client.Id, "2025-26");
+            Check(purchaseSnapshots.Count == 2 && purchaseSnapshots.Count(s => s.Record is null) == 1 && purchaseSnapshots.Count(s => s.Record is not null) == 1,
+                $"Expected blank Purchase RecordJson skipped and 1 valid + 1 malformed retained, got total={purchaseSnapshots.Count}.");
+
+            var salesSnapshots = salesRepo.GetStockProjectionSnapshots(client.Id, "2025-26");
+            Check(salesSnapshots.Count == 1 && salesSnapshots[0].Record is null,
+                $"Expected blank Sales RecordJson skipped and 1 malformed retained, got total={salesSnapshots.Count}.");
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
+    }
+
+    private static void RunCrossThreadDispatcherContractTest()
+    {
+        var root = FindRepoRoot();
+        var viewModelsDir = Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "ViewModels");
+        foreach (var file in new[] { "DashboardViewModel.cs", "TallyClientViewModel.cs", "FinancialStatementsViewModel.cs", "BankingViewModel.cs" })
+        {
+            var src = File.ReadAllText(Path.Combine(viewModelsDir, file));
+            Check(src.Contains("uiDispatcher.CheckAccess()", StringComparison.Ordinal) &&
+                  src.Contains("uiDispatcher.BeginInvoke(", StringComparison.Ordinal),
+                $"Expected dispatcher marshalling guard in {file}.");
+        }
+
+        var salesVm = File.ReadAllText(Path.Combine(viewModelsDir, "SalesImportViewModel.cs"));
+        Check(!salesVm.Contains("SaveB2CCustomerNameFromPanelAsync(sourceKey, customerName).GetAwaiter().GetResult()", StringComparison.Ordinal),
+            "Removed sync-over-async SaveB2CCustomerNameFromPanel wrapper must not be reintroduced.");
+    }
+
+    private static void RunLogRetentionPruningTest()
+    {
+        var tempRoot = CreateTempRoot("log_retention");
+        try
+        {
+            ApplicationDataPaths.ConfigureRootOverride(tempRoot);
+            ApplicationDataPaths.EnsureFolders();
+            var logsDir = Path.Combine(tempRoot, "Logs");
+            Directory.CreateDirectory(logsDir);
+
+            var fatalPath = Path.Combine(logsDir, "fatal-error.log");
+            File.WriteAllBytes(fatalPath, new byte[2 * 1024 * 1024 + 512]);
+            var activeAutoImport = Path.Combine(logsDir, "AutoImport.log");
+            File.WriteAllText(activeAutoImport, "active-line");
+            var oldRotated = Path.Combine(logsDir, "AutoImport-20250101-000000.log");
+            File.WriteAllBytes(oldRotated, new byte[1024 * 1024]);
+            File.SetLastWriteTimeUtc(oldRotated, DateTime.UtcNow.AddDays(-20));
+            var largeRotated = Path.Combine(logsDir, "performance-trace-20261124-000000.csv");
+            File.WriteAllBytes(largeRotated, new byte[41 * 1024 * 1024]);
+
+            ApplicationStorageMaintenanceService.RunSafeMaintenance();
+
+            Check(!File.Exists(fatalPath), "Expected > 2 MB fatal-error.log to be rotated.");
+            Check(!File.Exists(oldRotated), "Expected > 14-day rotated log to be pruned.");
+            Check(!File.Exists(largeRotated), "Expected > 40 MB rotated log archive to be pruned.");
+            Check(File.Exists(activeAutoImport), "Expected active AutoImport.log to be preserved.");
+        }
+        finally
+        {
+            CleanupTempRoot(tempRoot);
+        }
     }
 
     private static long CountAuditEvents(string dbPath) =>

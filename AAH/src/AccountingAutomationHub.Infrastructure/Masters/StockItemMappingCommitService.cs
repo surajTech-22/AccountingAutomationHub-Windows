@@ -25,8 +25,7 @@ public static class StockItemMappingCommitService
             Cache = SqliteCacheMode.Private,
             DefaultTimeout = 30
         }.ToString();
-        using var connection = new SqliteConnection(connectionString);
-        connection.Open();
+        using var connection = SqliteConnectionPolicy.Open(connectionString);
         return StockItemMappingPersistence.Apply(connection, table, clientId, financialYear,
             company, sourceLabel, selections);
     }

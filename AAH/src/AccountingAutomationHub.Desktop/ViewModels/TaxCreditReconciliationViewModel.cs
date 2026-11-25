@@ -736,11 +736,12 @@ public sealed class TaxCreditReconciliationViewModel : PageViewModel
                row.BooksSourceType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                row.BooksReference.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                row.BooksParty.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-               row.StatementAmount.ToString("N2", CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
-               row.StatementTds.ToString("N2", CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
                FlexibleFilterMatcher.MatchesAmount(row.StatementAmount, search) ||
                FlexibleFilterMatcher.MatchesAmount(row.StatementTds, search) ||
-               FlexibleFilterMatcher.MatchesAmount(row.StatementDeposited, search);
+               FlexibleFilterMatcher.MatchesAmount(row.StatementDeposited, search) ||
+               (row.BookingDate is DateTime bd && FlexibleFilterMatcher.MatchesDate(bd, search)) ||
+               (row.StatementDate is DateTime sd && FlexibleFilterMatcher.MatchesDate(sd, search)) ||
+               (row.BooksDate is DateTime bkd && FlexibleFilterMatcher.MatchesDate(bkd, search));
     }
 
     private void ApplyVisibleSummary(IReadOnlyCollection<TaxCreditReconciliationRow> visible)

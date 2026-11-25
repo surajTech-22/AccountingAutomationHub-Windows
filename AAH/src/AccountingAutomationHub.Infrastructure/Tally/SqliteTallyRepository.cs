@@ -1,12 +1,25 @@
 ﻿using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
 using AccountingAutomationHub.Domain.Tally;
 using AccountingAutomationHub.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
 
 namespace AccountingAutomationHub.Infrastructure.Tally;
 
+public sealed record TallyAuthorityCompactionResult(
+    long CompressedVoucherRows,
+    long CompressedReportRows,
+    long BytesBefore,
+    long BytesAfter,
+    bool Vacuumed,
+    string Status);
+
 public sealed class SqliteTallyRepository
 {
+    private const string GzipPayloadPrefix = "AAH_GZIP_V1:";
+    private const int MinCompressLength = 512;
     private readonly string _connectionString;
     private readonly string _auditConnectionString;
 
@@ -321,7 +334,7 @@ public sealed class SqliteTallyRepository
         command.Parameters.AddWithValue("$FromDate", snapshot.FromDate.Date.ToString("yyyy-MM-dd"));
         command.Parameters.AddWithValue("$ToDate", snapshot.ToDate.Date.ToString("yyyy-MM-dd"));
         command.Parameters.AddWithValue("$AlterId", authorityAlterId);
-        command.Parameters.AddWithValue("$Json", System.Text.Json.JsonSerializer.Serialize(snapshot));
+        command.Parameters.AddWithValue("$Json", CompressPayload(System.Text.Json.JsonSerializer.Serialize(snapshot)));
         command.Parameters.AddWithValue("$Utc", DateTime.UtcNow.ToString("O"));
         command.ExecuteNonQuery();
     }
@@ -353,7 +366,7 @@ public sealed class SqliteTallyRepository
         if (!reader.Read() || reader.GetInt64(1) < minimumAuthorityAlterId) return null;
         try
         {
-            return System.Text.Json.JsonSerializer.Deserialize<TallyReportSnapshot>(reader.GetString(0));
+            return System.Text.Json.JsonSerializer.Deserialize<TallyReportSnapshot>(DecompressPayload(reader.GetString(0)));
         }
         catch
         {
@@ -1541,7 +1554,7 @@ public sealed class SqliteTallyRepository
             command.Parameters.AddWithValue("$Guid", snapshot.Guid.Trim());
             command.Parameters.AddWithValue("$VoucherDate", snapshot.VoucherDate is DateTime d ? d.Date.ToString("yyyy-MM-dd") : string.Empty);
             command.Parameters.AddWithValue("$VoucherType", snapshot.VoucherType.Trim());
-            command.Parameters.AddWithValue("$OriginalXml", snapshot.OriginalXml);
+            command.Parameters.AddWithValue("$OriginalXml", CompressPayload(snapshot.OriginalXml));
             command.Parameters.AddWithValue("$ContentHash", ComputeXmlHash(snapshot.OriginalXml));
             command.Parameters.AddWithValue("$LastSeenUtc", now);
             command.ExecuteNonQuery();
@@ -1578,7 +1591,7 @@ public sealed class SqliteTallyRepository
                 reader.GetString(2),
                 reader.GetString(4),
                 ParseDateNullable(reader.GetString(3)),
-                reader.GetString(5))
+                DecompressPayload(reader.GetString(5)))
             {
                 AlterId = reader.GetString(1)
             });
@@ -3383,6 +3396,248 @@ public sealed class SqliteTallyRepository
         command.Parameters.AddWithValue("$UnitCount", company.UnitCount);
         command.Parameters.AddWithValue("$GodownCount", company.GodownCount);
         command.Parameters.AddWithValue("$VoucherCount", company.VoucherCount);
+    }
+
+    internal static string CompressPayload(string plainText)
+    {
+        if (string.IsNullOrEmpty(plainText) ||
+            plainText.Length < MinCompressLength ||
+            plainText.StartsWith(GzipPayloadPrefix, StringComparison.Ordinal))
+        {
+            return plainText;
+        }
+
+        var rawBytes = Encoding.UTF8.GetBytes(plainText);
+        using var ms = new MemoryStream();
+        using (var gzip = new GZipStream(ms, CompressionLevel.Optimal, leaveOpen: true))
+            gzip.Write(rawBytes, 0, rawBytes.Length);
+        var encoded = GzipPayloadPrefix + Convert.ToBase64String(ms.ToArray());
+        return encoded.Length < plainText.Length ? encoded : plainText;
+    }
+
+    internal static string DecompressPayload(string stored)
+    {
+        if (string.IsNullOrEmpty(stored) || !stored.StartsWith(GzipPayloadPrefix, StringComparison.Ordinal))
+            return stored;
+
+        var compressedBytes = Convert.FromBase64String(stored.Substring(GzipPayloadPrefix.Length));
+        using var input = new MemoryStream(compressedBytes);
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        using var output = new MemoryStream();
+        gzip.CopyTo(output);
+        return Encoding.UTF8.GetString(output.ToArray());
+    }
+
+    public static TallyAuthorityCompactionResult RunStartupAuthorityCompressionIfNeeded(string? databasePath = null)
+    {
+        var dbPath = string.IsNullOrWhiteSpace(databasePath)
+            ? ApplicationDataPaths.DatabasePath
+            : Path.GetFullPath(databasePath);
+        if (!File.Exists(dbPath))
+            return new TallyAuthorityCompactionResult(0, 0, 0, 0, false, "Database not present.");
+
+        var bytesBefore = new FileInfo(dbPath).Length;
+        SqliteConnection? connection = null;
+        try
+        {
+            connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false,
+                DefaultTimeout = 15
+            }.ToString());
+            connection.Open();
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=15000;";
+                pragma.ExecuteNonQuery();
+            }
+
+            EnsureAuthorityMaintenanceStateTable(connection);
+
+            long compressedVouchers = 0;
+            long compressedReports = 0;
+            if (!HasAuthorityMaintenanceMarker(connection, "FIX-TALLY-AUTHORITY-GZIP-COMPACT-V1"))
+            {
+                if (AuthorityTableExists(connection, "TallyVoucherXmlAuthority"))
+                    compressedVouchers = CompressAuthorityTable(connection, "TallyVoucherXmlAuthority", "OriginalXml", batchSize: 500);
+                if (AuthorityTableExists(connection, "TallyReportAuthority"))
+                    compressedReports = CompressAuthorityTable(connection, "TallyReportAuthority", "SnapshotJson", batchSize: 10);
+                TrySetAuthorityMaintenanceMarker(connection, "FIX-TALLY-AUTHORITY-GZIP-COMPACT-V1");
+            }
+
+            var vacuumed = false;
+            if (!HasAuthorityMaintenanceMarker(connection, "FIX-TALLY-AUTHORITY-VACUUM-V1"))
+            {
+                var (didVacuum, canMarkDone) = TryVacuumAuthorityFreelistIfNeeded(connection, dbPath);
+                vacuumed = didVacuum;
+                if (canMarkDone)
+                    TrySetAuthorityMaintenanceMarker(connection, "FIX-TALLY-AUTHORITY-VACUUM-V1");
+            }
+
+            var bytesAfter = File.Exists(dbPath) ? new FileInfo(dbPath).Length : bytesBefore;
+            return new TallyAuthorityCompactionResult(
+                compressedVouchers,
+                compressedReports,
+                bytesBefore,
+                bytesAfter,
+                vacuumed,
+                $"Startup Tally authority compression completed (vouchers={compressedVouchers:N0}, reports={compressedReports:N0}, vacuumed={vacuumed}, bytes={bytesBefore:N0}->{bytesAfter:N0}).");
+        }
+        catch (Exception exception)
+        {
+            TryWriteAuthorityMaintenanceLog($"RunStartupAuthorityCompressionIfNeeded error: {exception.Message}");
+            var currentBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : bytesBefore;
+            return new TallyAuthorityCompactionResult(0, 0, bytesBefore, currentBytes, false, exception.Message);
+        }
+        finally
+        {
+            if (connection is not null)
+            {
+                try { connection.Close(); } catch { }
+                try { SqliteConnection.ClearPool(connection); } catch { }
+                connection.Dispose();
+            }
+        }
+    }
+
+    private static long CompressAuthorityTable(SqliteConnection connection, string table, string column, int batchSize)
+    {
+        long compressedCount = 0;
+        long lastRowId = 0;
+        while (true)
+        {
+            var batch = new List<(long RowId, string PlainText)>(batchSize);
+            using (var select = connection.CreateCommand())
+            {
+                select.CommandText =
+                    $"SELECT rowid, {column} FROM {table} " +
+                    $"WHERE rowid > $LastRowId AND LENGTH({column}) >= $MinLen AND {column} NOT LIKE $PrefixLike " +
+                    $"ORDER BY rowid ASC LIMIT $Limit;";
+                select.Parameters.AddWithValue("$LastRowId", lastRowId);
+                select.Parameters.AddWithValue("$MinLen", MinCompressLength);
+                select.Parameters.AddWithValue("$PrefixLike", GzipPayloadPrefix + "%");
+                select.Parameters.AddWithValue("$Limit", batchSize);
+                using var reader = select.ExecuteReader();
+                while (reader.Read())
+                {
+                    var rowId = reader.GetInt64(0);
+                    var value = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                    batch.Add((rowId, value));
+                    lastRowId = rowId;
+                }
+            }
+
+            if (batch.Count == 0) break;
+
+            using var tx = connection.BeginTransaction();
+            foreach (var (rowId, plain) in batch)
+            {
+                var compressed = CompressPayload(plain);
+                if (ReferenceEquals(compressed, plain) || compressed.Equals(plain, StringComparison.Ordinal))
+                    continue;
+
+                using var update = connection.CreateCommand();
+                update.Transaction = tx;
+                update.CommandText = $"UPDATE {table} SET {column}=$Compressed WHERE rowid=$RowId;";
+                update.Parameters.AddWithValue("$Compressed", compressed);
+                update.Parameters.AddWithValue("$RowId", rowId);
+                compressedCount += update.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        return compressedCount;
+    }
+
+    private static (bool Vacuumed, bool CanMarkDone) TryVacuumAuthorityFreelistIfNeeded(SqliteConnection connection, string dbPath)
+    {
+        long pageSize, pageCount, freelistCount;
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA page_size;";
+            pageSize = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            cmd.CommandText = "PRAGMA page_count;";
+            pageCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            cmd.CommandText = "PRAGMA freelist_count;";
+            freelistCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        var freedBytes = freelistCount * pageSize;
+        if (freedBytes < 32L * 1024 * 1024) return (false, true);
+
+        var liveBytes = Math.Max(0L, pageCount - freelistCount) * pageSize;
+        var root = Path.GetPathRoot(Path.GetFullPath(dbPath));
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            var available = new DriveInfo(root).AvailableFreeSpace;
+            var required = Math.Max(liveBytes * 2L, 512L * 1024 * 1024) + 512L * 1024 * 1024;
+            if (available < required)
+            {
+                TryWriteAuthorityMaintenanceLog(
+                    $"Skipping Tally authority VACUUM on {dbPath}: available free space {available:N0} bytes < required {required:N0} bytes.");
+                return (false, false);
+            }
+        }
+
+        using (var vac = connection.CreateCommand())
+        {
+            vac.CommandTimeout = 300;
+            vac.CommandText = "PRAGMA auto_vacuum = INCREMENTAL; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);";
+            vac.ExecuteNonQuery();
+        }
+        return (true, true);
+    }
+
+    private static bool AuthorityTableExists(SqliteConnection connection, string tableName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=$Name LIMIT 1);";
+        cmd.Parameters.AddWithValue("$Name", tableName);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static void EnsureAuthorityMaintenanceStateTable(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "CREATE TABLE IF NOT EXISTS FinanceMaintenanceState (RepairKey TEXT PRIMARY KEY, CompletedUtc TEXT NOT NULL);";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static bool HasAuthorityMaintenanceMarker(SqliteConnection connection, string key)
+    {
+        if (!AuthorityTableExists(connection, "FinanceMaintenanceState")) return false;
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM FinanceMaintenanceState WHERE RepairKey=$Key LIMIT 1);";
+        cmd.Parameters.AddWithValue("$Key", key);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static void TrySetAuthorityMaintenanceMarker(SqliteConnection connection, string key)
+    {
+        if (!AuthorityTableExists(connection, "FinanceMaintenanceState")) return;
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "INSERT INTO FinanceMaintenanceState(RepairKey,CompletedUtc) VALUES($Key,$Utc) " +
+            "ON CONFLICT(RepairKey) DO UPDATE SET CompletedUtc=excluded.CompletedUtc;";
+        cmd.Parameters.AddWithValue("$Key", key);
+        cmd.Parameters.AddWithValue("$Utc", DateTime.UtcNow.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void TryWriteAuthorityMaintenanceLog(string message)
+    {
+        try
+        {
+            var logFolder = Path.Combine(ApplicationDataPaths.RootFolder, "Logs");
+            Directory.CreateDirectory(logFolder);
+            File.AppendAllText(
+                Path.Combine(logFolder, "storage-maintenance.log"),
+                $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private SqliteConnection OpenConnection()

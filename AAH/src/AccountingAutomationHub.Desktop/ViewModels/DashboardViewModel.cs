@@ -8,6 +8,8 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Threading;
 using System.Xml.Linq;
 using AccountingAutomationHub.Application.Banking;
 using AccountingAutomationHub.Application.Clients;
@@ -6045,6 +6047,14 @@ public sealed class DashboardViewModel :
 
     private void OnTallyCoordinatorChanged(object? sender, EventArgs e)
     {
+        if (_disposed) return;
+        var uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (uiDispatcher is not null && !uiDispatcher.CheckAccess())
+        {
+            _ = uiDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => OnTallyCoordinatorChanged(sender, e)));
+            return;
+        }
+
         RefreshTallySection();
         // Fix37: coordinator changes update connection/authority UI only. They must
         // never trigger hidden Statistics/supporting-report traffic.

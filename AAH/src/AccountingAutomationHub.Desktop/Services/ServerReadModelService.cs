@@ -96,7 +96,14 @@ public sealed class ServerReadModelService
         return Convert.ToInt32(command.ExecuteScalar()??0,CultureInfo.InvariantCulture);
     }
 
-    private SqliteConnection OpenConnection(){var c=new SqliteConnection(_connectionString);c.Open();using var p=c.CreateCommand();p.CommandText="PRAGMA query_only=ON; PRAGMA busy_timeout=5000;";p.ExecuteNonQuery();return c;}
+    private SqliteConnection OpenConnection()
+    {
+        var c = SqliteConnectionPolicy.OpenReadOnly(_connectionString);
+        using var p = c.CreateCommand();
+        p.CommandText = "PRAGMA query_only=ON;";
+        p.ExecuteNonQuery();
+        return c;
+    }
     private static bool TableExists(SqliteConnection c,string table){using var q=c.CreateCommand();q.CommandText="SELECT 1 FROM sqlite_master WHERE type='table' AND name=$Name LIMIT 1;";q.Parameters.AddWithValue("$Name",table);return q.ExecuteScalar() is not null;}
     private static HashSet<string> Columns(SqliteConnection c,string table){using var q=c.CreateCommand();q.CommandText=$"PRAGMA table_info([{table}]);";using var r=q.ExecuteReader();var s=new HashSet<string>(StringComparer.OrdinalIgnoreCase);while(r.Read())s.Add(r.GetString(1));return s;}
     private static string Csv(string value){var v=value??string.Empty;return v.IndexOfAny([',','"','\r','\n'])>=0?'"'+v.Replace("\"","\"\"")+'"':v;}
