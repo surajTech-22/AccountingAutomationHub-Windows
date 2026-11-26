@@ -15,7 +15,7 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// </summary>
 public sealed class ServerStorageService
 {
-    public const string CurrentAndroidReleaseVersion = "4.0.0.658-mobile36";
+    public const string CurrentAndroidReleaseVersion = "4.0.0.659-mobile37";
     private readonly ApplicationPreferenceService _settings;
     private readonly ServerSecurityRepository _security;
     private readonly string _connectionString;
