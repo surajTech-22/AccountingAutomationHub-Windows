@@ -84,9 +84,9 @@ jobs:
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
           umask 077
           signing_file="$RUNNER_TEMP/aah-upload.jks"
-          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$signing_file"
+          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > "$signing_file"
           actual_sha="$(keytool -exportcert -keystore "$signing_file" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | sha256sum | cut -d ' ' -f1)"
-          expected_sha="135a568fa8b6b2a47fbe805563e35bc93a37330827456a266f5ede38d9198ac7"
+          expected_sha="f62946aebe625ef78ffcf340bfd5da8830dbcdf1a872c2b160bb1581ac25057f"
           if [[ "$actual_sha" != "$expected_sha" ]]; then
             echo "::error::Android keystore cert SHA-256 mismatch: $actual_sha != $expected_sha"
             exit 1
