@@ -15,7 +15,7 @@ namespace AccountingAutomationHub.Desktop.Services;
 /// </summary>
 public sealed class ServerStorageService
 {
-    public const string CurrentAndroidReleaseVersion = "4.0.0.659-mobile37";
+    public const string CurrentAndroidReleaseVersion = "4.0.0.660-mobile38";
     private readonly ApplicationPreferenceService _settings;
     private readonly ServerSecurityRepository _security;
     private readonly string _connectionString;
@@ -454,7 +454,7 @@ public sealed class ServerStorageService
         if (TableExists(connection, "DocumentVault"))
         {
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT ClientId,FinancialYear,CASE WHEN TRIM(VaultPath)<>'' THEN VaultPath ELSE OriginalPath END FROM DocumentVault WHERE IsAvailable=1;";
+            command.CommandText = "SELECT ClientId,FinancialYear,CASE WHEN TRIM(VaultPath)<>'' THEN VaultPath ELSE OriginalPath END FROM DocumentVault WHERE TRIM(COALESCE(VaultPath,''))<>'' OR TRIM(COALESCE(OriginalPath,''))<>'';";
             using var reader = command.ExecuteReader();
             while (reader.Read()) yield return (reader.GetInt64(0),reader.GetString(1),"DocumentVault",reader.GetString(2));
         }

@@ -1223,6 +1223,9 @@ public sealed class SecureLanServerService : IDisposable
         app.MapPost("/api/v1/android/qr/user", (Func<HttpContext, Task<IResult>>)UseAndroidUserQrAsync);
         app.MapGet("/api/v1/android/admin/users", GetAndroidAdminUsers);
         app.MapPost("/api/v1/android/admin/users/{userName}", (Func<HttpContext,string,Task<IResult>>)UpdateAndroidAdminUserAsync);
+        app.MapGet("/api/v1/android/release-policy", GetAndroidReleasePolicy);
+        app.MapGet("/api/v1/android/settings", GetAndroidSettings);
+        app.MapPost("/api/v1/android/settings", (Func<HttpContext, Task<IResult>>)SaveAndroidSettingsAsync);
         app.MapPost("/api/v1/auth/challenge", (Func<HttpContext, Task<IResult>>)CreateLoginChallengeAsync);
         app.MapPost("/api/v1/auth/password-preflight", (Func<HttpContext, Task<IResult>>)PasswordPreflightAsync);
         app.MapPost("/api/v1/auth/login", (Func<HttpContext, Task<IResult>>)LoginAsync);
@@ -3126,6 +3129,96 @@ public sealed class SecureLanServerService : IDisposable
         var safe=Path.GetFileName(fileName??string.Empty);if(safe.Length==0)return "File name is required.";
         var blocked=new HashSet<string>(StringComparer.OrdinalIgnoreCase){".exe",".dll",".com",".bat",".cmd",".ps1",".psm1",".vbs",".js",".jse",".wsf",".msi",".msp",".scr",".lnk",".url",".hta",".reg",".py",".pyw",".jar",".apk"};
         return blocked.Contains(Path.GetExtension(safe))?"Executable/script/application packages cannot be shared through AAH Messages.":string.Empty;
+    }
+
+    private IResult GetAndroidReleasePolicy(HttpContext context)
+    {
+        var device = AuthenticateDeviceFromHeaders(context, touch: true);
+        if (device is null) return Results.Unauthorized();
+
+        _storage?.RegisterConfiguredPackages(Endpoint, RemoteAssistInternetEndpoint);
+        var package = _serverSecurity.GetPackage("Android");
+        var approvedVersion = ServerStorageService.CurrentAndroidReleaseVersion;
+        var updatePackageAvailable = package is not null &&
+                                     File.Exists(package.FilePath) &&
+                                     package.Version.Equals(approvedVersion, StringComparison.OrdinalIgnoreCase);
+        var updateRequired = approvedVersion.Length > 0 &&
+                             !approvedVersion.Equals(device.AppVersion, StringComparison.OrdinalIgnoreCase);
+        var releaseChannel = _settings.Get("Security.AndroidReleaseChannel").Trim();
+        if (releaseChannel.Length == 0) releaseChannel = "Main Server Build + Publish";
+        var configuredMinimumVersion = _settings.Get("Security.AndroidMinimumVersion").Trim();
+        if (configuredMinimumVersion.Length == 0) configuredMinimumVersion = approvedVersion;
+        var qrValidityMinutes = Math.Clamp(_settings.GetInt("Security.AndroidQrValidityMinutes", 5), 1, 60);
+
+        return Results.Json(new
+        {
+            releaseChannel,
+            minimumVersion = approvedVersion,
+            configuredMinimumVersion,
+            requiredVersion = approvedVersion,
+            approvedVersion,
+            approvedSha256 = updatePackageAvailable ? package!.Sha256 : string.Empty,
+            installedVersion = device.AppVersion,
+            immediate = updateRequired,
+            updateRequired,
+            updatePackageAvailable,
+            downloadPath = "/api/v1/packages/android/download",
+            installUrl = string.Empty,
+            qrValidityMinutes
+        });
+    }
+
+    private IResult GetAndroidSettings(HttpContext context)
+    {
+        var session = AuthenticateSession(context, out var currentUser, out var device);
+        if (session is null || currentUser is null || device is null) return Results.Unauthorized();
+        if (!device.DeviceType.Equals(ServerDeviceTypes.Android, StringComparison.OrdinalIgnoreCase) ||
+            !currentUser.RoleName.Equals(GovernanceRoles.Administrator, StringComparison.OrdinalIgnoreCase))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        var approvedVersion = ServerStorageService.CurrentAndroidReleaseVersion;
+        var releaseChannel = _settings.Get("Security.AndroidReleaseChannel").Trim();
+        if (releaseChannel.Length == 0) releaseChannel = "Main Server Build + Publish";
+        var minimumVersion = _settings.Get("Security.AndroidMinimumVersion").Trim();
+        if (minimumVersion.Length == 0) minimumVersion = approvedVersion;
+        var qrValidityMinutes = Math.Clamp(_settings.GetInt("Security.AndroidQrValidityMinutes", 5), 1, 60);
+        var installUrl = string.IsNullOrWhiteSpace(Endpoint) ? "/api/v1/packages/android/download" : Endpoint.TrimEnd('/') + "/api/v1/packages/android/download";
+
+        return Results.Json(new
+        {
+            releaseChannel,
+            minimumVersion,
+            qrValidityMinutes,
+            installUrl,
+            approvedVersion
+        });
+    }
+
+    private async Task<IResult> SaveAndroidSettingsAsync(HttpContext context)
+    {
+        var session = AuthenticateSession(context, out var currentUser, out var device);
+        if (session is null || currentUser is null || device is null) return Results.Unauthorized();
+        if (!device.DeviceType.Equals(ServerDeviceTypes.Android, StringComparison.OrdinalIgnoreCase) ||
+            !currentUser.RoleName.Equals(GovernanceRoles.Administrator, StringComparison.OrdinalIgnoreCase))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        AndroidSettingsUpdateRequest? request;
+        try { request = await context.Request.ReadFromJsonAsync<AndroidSettingsUpdateRequest>(context.RequestAborted).ConfigureAwait(false); }
+        catch { return Results.BadRequest(new { error = "Invalid Android release policy request." }); }
+        if (request is null) return Results.BadRequest(new { error = "Android release policy request is required." });
+
+        var releaseChannel = (request.ReleaseChannel ?? string.Empty).Trim();
+        if (releaseChannel.Length == 0) releaseChannel = "Main Server Build + Publish";
+        var minimumVersion = (request.MinimumVersion ?? string.Empty).Trim();
+        if (minimumVersion.Length == 0) minimumVersion = ServerStorageService.CurrentAndroidReleaseVersion;
+        var qrValidityMinutes = Math.Clamp(request.QrValidityMinutes <= 0 ? 5 : request.QrValidityMinutes, 1, 60);
+
+        _settings.Set("Security.AndroidReleaseChannel", releaseChannel);
+        _settings.Set("Security.AndroidMinimumVersion", minimumVersion);
+        _settings.Set("Security.AndroidQrValidityMinutes", qrValidityMinutes.ToString(CultureInfo.InvariantCulture));
+        SafeLogEvent("AndroidReleasePolicySaved", currentUser.WindowsUserName, device.DeviceId, $"Channel={releaseChannel}; Minimum={minimumVersion}; QrMinutes={qrValidityMinutes}", true);
+
+        return Results.Json(new { saved = true, releaseChannel, minimumVersion, qrValidityMinutes });
     }
 
     private IResult GetPackageMetadata(HttpContext context,string kind)
@@ -5531,6 +5624,7 @@ public sealed class SecureLanServerService : IDisposable
     private sealed record ChallengeLoginRequest(string DeviceId,string DeviceToken,string ChallengeId,string OtpCode,string AppVersion);
     private sealed record HeartbeatContextRequest(long ClientId,string? FinancialYear,string? Module);
     private sealed record WorkTaskUpdateRequest(string? AssignedTo,string? Status,string? Priority,DateTime? DueUtc,string? Description);
+    private sealed record AndroidSettingsUpdateRequest(string? ReleaseChannel,string? MinimumVersion,int QrValidityMinutes);
 }
 
 public sealed class MobileLinkConfiguration
