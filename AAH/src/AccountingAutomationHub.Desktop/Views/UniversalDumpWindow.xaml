@@ -23,7 +23,7 @@
             <Button Content="Add Folder…" Click="AddFolder_Click" Padding="12,7" Margin="8,0,0,0"/>
             <Button Content="Remove Selected" Click="RemoveSelected_Click" Padding="12,7" Margin="8,0,0,0"/>
             <Button Content="Clear" Click="Clear_Click" Padding="12,7" Margin="8,0,0,0"/>
-            <Button Content="Review in InvoiceVision" Click="OpenInvoiceVision_Click" Padding="12,7" Margin="8,0,0,0" Visibility="Collapsed"/>
+            <Button Content="Review in InvoiceVision" Click="OpenInvoiceVision_Click" Padding="12,7" Margin="8,0,0,0" Visibility="Visible"/>
         </WrapPanel>
 
         <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Background="{DynamicResource SurfaceBrush}">

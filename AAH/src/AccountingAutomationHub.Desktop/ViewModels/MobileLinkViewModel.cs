@@ -1,8 +1,16 @@
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using AccountingAutomationHub.Desktop.Commands;
 using AccountingAutomationHub.Desktop.Services;
 
@@ -27,11 +35,19 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     private string _rawOcr = string.Empty;
     private string _payloadPreview = string.Empty;
     private string _scanImagePath = string.Empty;
+    private ImageSource? _scanImageSource;
+    private int _currentScanPageIndex;
     // R76: Review stays in the authenticated Phone/Mobile Link FIFO. No second
     // Purchase/Sales scanner, ZIP selector, XLSX intermediary or import exit.
     private string _verifiedDirection = string.Empty;
+    private string _verifiedRecognitionMode = "Accounting Invoice";
     private string _invoiceSourceParties = string.Empty;
     private string _accountingReviewFocus = "Waiting for a Phone Link invoice.";
+    private string _aiMemoryBadgeText = "AI Memory: select an invoice to see learned supplier rules.";
+    private Visibility _aiAnalysisVisibility = Visibility.Collapsed;
+    private string _aiAnalysisVerdictText = string.Empty;
+    private string _aiAnalysisBodyText = string.Empty;
+    private bool _isAiAnalyzing;
 
     private bool _loading;
     private bool _disposed;
@@ -43,6 +59,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     // R90 review is per selected scan; never persists across scans or Clients/FYs.
     private readonly List<string> _ocrSourceFlags = new();
     private bool _reviewedOcrDiscrepancies;
+    private bool _allowDuplicateOverride;
     private bool _isOnnxReview;
 
     private string _documentOcrStatusText = "Windows document OCR has not started.";
@@ -72,6 +89,17 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             !scan.DocumentOcrState.Equals("Processing", StringComparison.OrdinalIgnoreCase));
         ConfirmAndNextCommand = new RelayCommand(() => CompleteCurrent(true), CanConfirmCurrent);
         RejectAndNextCommand = new RelayCommand(() => CompleteCurrent(false), () => SelectedScan is not null);
+        LinkSelectedScansCommand = new RelayCommand(LinkCheckedScans, () => Queue.Count(x => x.IsCheckedForLink) >= 2);
+        AutoLinkMultiPageCommand = new RelayCommand(AutoLinkMultiPage, () => Queue.Any(x => x.HasMultiPageHint));
+        LinkSuggestedGroupCommand = new RelayCommand(LinkSuggestedGroup, () => SelectedScan is { HasMultiPageHint: true });
+        UnlinkSelectedScanCommand = new RelayCommand(UnlinkSelectedScan, () => SelectedScan is { IsMultiPage: true } && SelectedScan.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase));
+        RemoveDuplicateCommand = new RelayCommand(RemoveSelectedDuplicate, () => SelectedScan is not null && SelectedScan.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase) && SelectedScan.IsDuplicate);
+        PrevScanPageCommand = new RelayCommand(() => NavigateScanPage(-1), () => SelectedScanPageCount > 1 && _currentScanPageIndex > 0);
+        NextScanPageCommand = new RelayCommand(() => NavigateScanPage(1), () => SelectedScanPageCount > 1 && _currentScanPageIndex < SelectedScanPageCount - 1);
+        AnalyzeWithAiCommand = new RelayCommand(() => _ = AnalyzeSelectedWithAiAsync(), () => SelectedScan is not null && !IsAiAnalyzing);
+        TeachAiMemoryCommand = new RelayCommand(TeachSelectedSupplierMemory, () => SelectedScan is not null && HeaderFields.Count > 0);
+        CloseAiAnalysisCommand = new RelayCommand(() => AiAnalysisVisibility = Visibility.Collapsed);
+        ImportLocalPhotosCommand = new RelayCommand(ImportLocalPhotos);
         if (_server is not null)
         {
             _server.MobileLinkChanged += OnMobileLinkChanged;
@@ -95,6 +123,17 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     public RelayCommand RetryOcrCommand { get; }
     public RelayCommand ConfirmAndNextCommand { get; }
     public RelayCommand RejectAndNextCommand { get; }
+    public RelayCommand LinkSelectedScansCommand { get; }
+    public RelayCommand AutoLinkMultiPageCommand { get; }
+    public RelayCommand LinkSuggestedGroupCommand { get; }
+    public RelayCommand UnlinkSelectedScanCommand { get; }
+    public RelayCommand RemoveDuplicateCommand { get; }
+    public RelayCommand PrevScanPageCommand { get; }
+    public RelayCommand NextScanPageCommand { get; }
+    public RelayCommand AnalyzeWithAiCommand { get; }
+    public RelayCommand TeachAiMemoryCommand { get; }
+    public RelayCommand CloseAiAnalysisCommand { get; }
+    public RelayCommand ImportLocalPhotosCommand { get; }
 
     public string AutomaticMobileIdentityText { get => _automaticMobileIdentityText; private set => SetProperty(ref _automaticMobileIdentityText, value); }
     public bool ShowMappingHere
@@ -145,7 +184,19 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     public Brush PresenceBrush => SameClientOnline ? Brushes.LimeGreen : MobileOnline ? Brushes.Orange : Brushes.Gray;
     public string PresenceDotText => SameClientOnline ? "ONLINE" : MobileOnline ? "OTHER CLIENT/FY" : "OFFLINE";
     public int PendingCount { get => _pendingCount; private set => SetProperty(ref _pendingCount, value); }
-    public string QueueSummary => PendingCount == 1 ? "1 invoice waiting" : $"{PendingCount:N0} invoices waiting";
+    public string QueueSummary
+    {
+        get
+        {
+            var baseText = PendingCount == 1 ? "1 invoice waiting" : $"{PendingCount:N0} invoices waiting";
+            var dups = Queue.Count(x => x.IsDuplicate);
+            var linkable = Queue.Count(x => x.HasMultiPageHint);
+            var extra = new List<string>();
+            if (linkable > 0) extra.Add($"{linkable} linkable");
+            if (dups > 0) extra.Add($"{dups} dup");
+            return extra.Count > 0 ? baseText + " · " + string.Join(" · ", extra) : baseText;
+        }
+    }
     public string StatusText { get => _statusText; private set => SetProperty(ref _statusText, value); }
     public string MappingValidationText { get => _mappingValidationText; private set => SetProperty(ref _mappingValidationText, value); }
     public string DocumentOcrStatusText { get => _documentOcrStatusText; private set => SetProperty(ref _documentOcrStatusText, value); }
@@ -154,7 +205,30 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     public string RawOcr { get => _rawOcr; private set => SetProperty(ref _rawOcr, value); }
     public string PayloadPreview { get => _payloadPreview; private set => SetProperty(ref _payloadPreview, value); }
     public string ScanImagePath { get => _scanImagePath; private set => SetProperty(ref _scanImagePath, value); }
+    public ImageSource? ScanImageSource { get => _scanImageSource; private set => SetProperty(ref _scanImageSource, value); }
+    public int SelectedScanPageCount => SelectedScan?.ImagePaths.Count ?? 0;
+    public int CurrentScanPageNumber => SelectedScanPageCount > 0 ? _currentScanPageIndex + 1 : 0;
+    public string ScanPageIndicatorText => SelectedScanPageCount > 1
+        ? $"Page {CurrentScanPageNumber} of {SelectedScanPageCount}"
+        : (SelectedScanPageCount == 1 ? "Page 1 of 1" : "No image");
+    public Visibility MultiPageViewerToolbarVisibility => SelectedScanPageCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility DuplicateBannerVisibility => SelectedScan?.IsDuplicate == true ? Visibility.Visible : Visibility.Collapsed;
+    public string DuplicateBannerText => SelectedScan?.IsDuplicate == true
+        ? $"{SelectedScan.DuplicateBadgeText}: {SelectedScan.DuplicateDetail}"
+        : string.Empty;
+    public Visibility MultiPageHintVisibility => SelectedScan?.HasMultiPageHint == true ? Visibility.Visible : Visibility.Collapsed;
+    public string MultiPageHintText => SelectedScan?.HasMultiPageHint == true ? SelectedScan.MultiPageHint : string.Empty;
+    public bool AllowDuplicateOverride
+    {
+        get => _allowDuplicateOverride;
+        set
+        {
+            if (!SetProperty(ref _allowDuplicateOverride, value) || _loading) return;
+            UpdateValidationState();
+        }
+    }
     public IReadOnlyList<string> InvoiceDirectionOptions { get; } = ["Purchase", "Sales"];
+    public IReadOnlyList<string> InvoiceModeOptions { get; } = ["Accounting Invoice", "Item Invoice"];
     public string VerifiedDirection
     {
         get => _verifiedDirection;
@@ -162,9 +236,50 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         {
             if (!SetProperty(ref _verifiedDirection, value ?? string.Empty) || _loading) return;
             SyncCounterpartyFromVerifiedIdentity();
+            RefreshAiMemoryBadge();
             UpdateValidationState();
         }
     }
+    public string VerifiedRecognitionMode
+    {
+        get => _verifiedRecognitionMode;
+        set
+        {
+            var normalized = NormalizeRecognitionMode(value);
+            if (!SetProperty(ref _verifiedRecognitionMode, normalized)) return;
+            if (SelectedScan is not null)
+                SelectedScan.RecognitionMode = normalized;
+            OnPropertyChanged(nameof(IsAccountingInvoice));
+            OnPropertyChanged(nameof(IsInventoryInvoice));
+            OnPropertyChanged(nameof(AccountingRowsVisibility));
+            OnPropertyChanged(nameof(InventoryRowsVisibility));
+            OnPropertyChanged(nameof(PostingModePreviewText));
+            if (!_loading)
+                UpdateValidationState();
+        }
+    }
+    public string PostingModePreviewText => IsAccountingInvoice
+        ? $"Accounting Invoice mode · Imports {(TaxSlabs.Count > 0 ? TaxSlabs.Count : 1)} GST-slab ledger row(s) with ZERO inventory items."
+        : $"Item Invoice mode · Imports {Lines.Count} inventory item row(s) with Qty, Unit & Rate.";
+    public string AiMemoryBadgeText { get => _aiMemoryBadgeText; private set => SetProperty(ref _aiMemoryBadgeText, value); }
+    public Visibility AiAnalysisVisibility { get => _aiAnalysisVisibility; set => SetProperty(ref _aiAnalysisVisibility, value); }
+    public string AiAnalysisVerdictText { get => _aiAnalysisVerdictText; private set => SetProperty(ref _aiAnalysisVerdictText, value); }
+    public string AiAnalysisBodyText { get => _aiAnalysisBodyText; private set => SetProperty(ref _aiAnalysisBodyText, value); }
+    public bool IsAiAnalyzing
+    {
+        get => _isAiAnalyzing;
+        private set
+        {
+            if (!SetProperty(ref _isAiAnalyzing, value)) return;
+            AnalyzeWithAiCommand.RaiseCanExecuteChanged();
+        }
+    }
+    private static string NormalizeRecognitionMode(string? mode) =>
+        !string.IsNullOrWhiteSpace(mode) &&
+        (mode.Trim().Equals("Item Invoice", StringComparison.OrdinalIgnoreCase) ||
+         mode.Trim().Equals("Inventory Invoice", StringComparison.OrdinalIgnoreCase))
+            ? "Item Invoice"
+            : "Accounting Invoice";
     public string InvoiceSourceParties { get => _invoiceSourceParties; private set => SetProperty(ref _invoiceSourceParties, value); }
     public string AccountingReviewFocus { get => _accountingReviewFocus; private set => SetProperty(ref _accountingReviewFocus, value); }
     public Visibility OcrDiscrepancyVisibility => _ocrSourceFlags.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -182,7 +297,9 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     }
 
 
-    public bool IsAccountingInvoice => SelectedScan?.RecognitionMode.Equals("Accounting Invoice", StringComparison.OrdinalIgnoreCase) == true;
+    public bool IsAccountingInvoice =>
+        !VerifiedRecognitionMode.Equals("Item Invoice", StringComparison.OrdinalIgnoreCase) &&
+        !VerifiedRecognitionMode.Equals("Inventory Invoice", StringComparison.OrdinalIgnoreCase);
     public bool IsInventoryInvoice => !IsAccountingInvoice;
     public Visibility AccountingRowsVisibility => IsAccountingInvoice ? Visibility.Visible : Visibility.Collapsed;
     public Visibility InventoryRowsVisibility => IsInventoryInvoice ? Visibility.Visible : Visibility.Collapsed;
@@ -199,10 +316,13 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             RetryOcrCommand.RaiseCanExecuteChanged();
             OpenInInvoiceOcrCommand.RaiseCanExecuteChanged();
             RetryChildStage1Command.RaiseCanExecuteChanged();
+            AnalyzeWithAiCommand.RaiseCanExecuteChanged();
+            TeachAiMemoryCommand.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(IsAccountingInvoice));
             OnPropertyChanged(nameof(IsInventoryInvoice));
             OnPropertyChanged(nameof(AccountingRowsVisibility));
             OnPropertyChanged(nameof(InventoryRowsVisibility));
+            OnPropertyChanged(nameof(PostingModePreviewText));
         }
     }
 
@@ -253,9 +373,18 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 x.LineTotal, x.StockItem, x.Ledger }).ToArray();
             var previousDirection = VerifiedDirection;
             var previousReviewed = ReviewedOcrDiscrepancies;
-            Queue.Clear(); foreach (var row in rows) Queue.Add(row);
+            var checkedIds = Queue.Where(x => x.IsCheckedForLink).Select(x => x.ScanId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var old in Queue) old.PropertyChanged -= OnQueueItemPropertyChanged;
+            Queue.Clear();
+            foreach (var row in rows)
+            {
+                row.IsCheckedForLink = checkedIds.Contains(row.ScanId);
+                row.PropertyChanged += OnQueueItemPropertyChanged;
+                Queue.Add(row);
+            }
             PendingCount = rows.Length;
             OnPropertyChanged(nameof(QueueSummary));
+            RaiseQueueActionCanExecuteChanged();
             // Fix137 R46 R3: Mobile Link verifies OCR/header evidence and Inventory Stock/Unit
             // choices only. Posting Ledger allocation belongs to Sales/Purchase and is not loaded here.
             StockItemOptions.ReplaceWith(_server.GetInvoiceStockItemNames(client.Id, client.FinancialYear));
@@ -330,29 +459,44 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     {
         if (SelectedScan is not { } scan) return;
         try {
-            var verifiedStage1 = InvoiceOcrChildBridge.OpenReview(scan.ImagePaths, scan.ClientId, scan.FinancialYear, scan.ScanId, scan.ChildStage1Archive, scan.EvidenceFolder);
-            StatusText = verifiedStage1 ? "Opened original photo AND verified provisional Stage 1 layout in Invoice OCR Child." : "Opened the original Phone Link photograph. Stage 1 has not returned a verified handoff result; see Child status.";
+            var active = _clientContext.CurrentClient;
+            var verified = InvoiceOcrChildBridge.OpenReview(
+                scan.ImagePaths, scan.ClientId, scan.FinancialYear, scan.ScanId,
+                scan.ChildStage1Archive, scan.EvidenceFolder, active?.Gstin, active?.ClientName);
+            StatusText = verified
+                ? "Opened original photo AND InvoiceVision v2 extracted result side-by-side."
+                : "Opened original Phone Link photo in InvoiceVision Child v2.";
         } catch (Exception ex) {
-            StatusText = "Invoice OCR Child could not open: " + ex.Message;
+            StatusText = "InvoiceVision Child could not open: " + ex.Message;
         }
     }
 
     private void LoadSelectedScan()
     {
-        HeaderFields.Clear(); Lines.Clear(); TaxSlabs.Clear(); _recognizedSlabRates.Clear(); _authoritativeTaxSlabs.Clear(); _summaryLayoutAuthority = false; RawOcr = string.Empty; PayloadPreview = string.Empty; ScanImagePath = string.Empty;
-        _ocrSourceFlags.Clear(); _reviewedOcrDiscrepancies = false; _isOnnxReview = false;
+        HeaderFields.Clear(); Lines.Clear(); TaxSlabs.Clear(); _recognizedSlabRates.Clear(); _authoritativeTaxSlabs.Clear(); _summaryLayoutAuthority = false; RawOcr = string.Empty; PayloadPreview = string.Empty; ScanImagePath = string.Empty; ScanImageSource = null; _currentScanPageIndex = 0;
+        _ocrSourceFlags.Clear(); _reviewedOcrDiscrepancies = false; _allowDuplicateOverride = false; _isOnnxReview = false;
         OnPropertyChanged(nameof(ReviewedOcrDiscrepancies));
+        OnPropertyChanged(nameof(AllowDuplicateOverride));
         OnPropertyChanged(nameof(OcrDiscrepancyVisibility));
         OnPropertyChanged(nameof(OcrDiscrepancyText));
-        VerifiedDirection = string.Empty; InvoiceSourceParties = string.Empty; AccountingReviewFocus = "Waiting for a Phone Link invoice.";
-        var scan = SelectedScan; if (scan is null) { DocumentOcrStatusText = "No invoice selected."; ChildStage1StatusText = "Invoice OCR Child: no scan selected."; return; }
+        OnPropertyChanged(nameof(DuplicateBannerVisibility));
+        OnPropertyChanged(nameof(DuplicateBannerText));
+        OnPropertyChanged(nameof(MultiPageHintVisibility));
+        OnPropertyChanged(nameof(MultiPageHintText));
+        OnPropertyChanged(nameof(SelectedScanPageCount));
+        OnPropertyChanged(nameof(CurrentScanPageNumber));
+        OnPropertyChanged(nameof(ScanPageIndicatorText));
+        OnPropertyChanged(nameof(MultiPageViewerToolbarVisibility));
+        RaiseQueueActionCanExecuteChanged();
+        VerifiedDirection = string.Empty; _verifiedRecognitionMode = NormalizeRecognitionMode(SelectedScan?.RecognitionMode); OnPropertyChanged(nameof(VerifiedRecognitionMode)); OnPropertyChanged(nameof(IsAccountingInvoice)); OnPropertyChanged(nameof(IsInventoryInvoice)); OnPropertyChanged(nameof(AccountingRowsVisibility)); OnPropertyChanged(nameof(InventoryRowsVisibility)); OnPropertyChanged(nameof(PostingModePreviewText)); InvoiceSourceParties = string.Empty; AccountingReviewFocus = "Waiting for a Phone Link invoice."; AiAnalysisVisibility = Visibility.Collapsed;
+        var scan = SelectedScan; if (scan is null) { DocumentOcrStatusText = "No invoice selected."; ChildStage1StatusText = "Invoice OCR Child: no scan selected."; AiMemoryBadgeText = "AI Memory: select an invoice to inspect."; return; }
         ChildStage1StatusText = "Invoice OCR Child · " + scan.ChildStage1Status +
             (File.Exists(scan.ChildStage1Archive) ? "  |  Open in Invoice OCR Child to inspect Stage 1" : "");
         DocumentOcrStatusText = $"Document OCR: {scan.DocumentOcrState} · {scan.DocumentOcrMessage}";
         try
         {
             RawOcr = scan.RawOcr;
-            ScanImagePath = scan.ImagePaths.FirstOrDefault(File.Exists) ?? string.Empty;
+            LoadScanPageAt(0);
             PayloadPreview = scan.PayloadJson;
 
             // R46 R37: phone ML Kit is preview evidence only. Until the dedicated Windows invoice
@@ -377,10 +521,11 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             var sourceIdentity = MobileInvoicePartyIdentityResolver.Select(root,
                 _clientContext.CurrentClient?.Gstin, sourceDirection);
             VerifiedDirection = sourceIdentity.Direction;
-            _isOnnxReview = root["ocrEngine"]?.ToString() == "AAH-RAPIDOCR-ONNX-R90";
-            if (_isOnnxReview && root["ocrBlockingFlags"] is JsonArray r90Flags)
+            var engineId = root["ocrEngine"]?.ToString();
+            _isOnnxReview = engineId == "AAH-RAPIDOCR-ONNX-R90";
+            if ((_isOnnxReview || engineId == "AAH-INVOICEVISION-V2") && root["ocrBlockingFlags"] is JsonArray reviewFlags)
             {
-                foreach (var flag in r90Flags)
+                foreach (var flag in reviewFlags)
                 {
                     var value = flag?.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(value)) _ocrSourceFlags.Add(value);
@@ -467,8 +612,10 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 if (TryAmount(line.GstRate, out var rate) && IsSupportedGstRate(rate)) _recognizedSlabRates.Add(rate);
             ReconcileTaxEvidenceFromLines();
             RebuildTaxSlabs();
+            RefreshAiMemoryBadge();
             var completeRows = Lines.Count(x => x.Description.Length > 0 && AmountOrZero(x.Taxable) > 0m);
             AccountingReviewFocus = $"Accounting fields: invoice number/date, supplier and buyer, {completeRows}/{Lines.Count} taxable item rows, HSN, quantities, rates, GST slabs and payable. QR, stamps and footer terms are non-posting evidence.";
+            TeachAiMemoryCommand.RaiseCanExecuteChanged();
             UpdateValidationState();
         }
         catch (Exception exception) { StatusText = "Could not open the selected scan: " + exception.Message; MappingValidationText = "Mapping could not be validated."; }
@@ -579,6 +726,8 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     private List<string> ValidateCurrentMapping()
     {
         var issues = new List<string>();
+        if (SelectedScan is { IsDuplicate: true } dupScan && !AllowDuplicateOverride)
+            issues.Add($"Duplicate detected ({dupScan.DuplicateDetail}) — remove duplicate or confirm override");
         if (SelectedScan is { } scan && scan.ImagePaths.Count > 0 && !scan.DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase))
         {
             issues.Add(scan.DocumentOcrState.Equals("Processing", StringComparison.OrdinalIgnoreCase)
@@ -896,6 +1045,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         }
         foreach (var rate in _recognizedSlabRates.OrderBy(x => x))
             if (!seen.Contains(rate)) TaxSlabs.Add(new MobileInvoiceTaxSlabRow(rate, 0m, 0m, 0m, 0m, "Recognized slab · row allocation missing"));
+        OnPropertyChanged(nameof(PostingModePreviewText));
     }
 
     private static string ReadDocumentType(string payloadJson)
@@ -932,6 +1082,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         var result = new MobileInvoiceMappedResult
         {
             Direction = direction,
+            RecognitionMode = IsAccountingInvoice ? "Accounting Invoice" : "Item Invoice",
             DocumentType = documentType,
             InvoiceNumber = Header("invoiceNo"),
             InvoiceDate = invoiceDate,
@@ -945,7 +1096,11 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             CessTotal = AmountOrZero(Header("cessTotal")),
             RoundOff = SignedAmountOrZero(Header("roundOff")),
             SourceDiscrepanciesReviewed = ReviewedOcrDiscrepancies,
-            SourceImageSha256 = root["ocrSourceSha256"]?.ToString() ?? string.Empty
+            DuplicateOverrideAcknowledged = AllowDuplicateOverride,
+            SourceImageSha256 = root["ocrSourceSha256"]?.ToString() ?? string.Empty,
+            SourceImageSha256List = root["ocrSourceSha256List"] is JsonArray shaArr
+                ? shaArr.Select(x => x?.ToString() ?? string.Empty).Where(x => x.Length > 0).ToList()
+                : new List<string>()
         };
         foreach (var line in Lines)
         {
@@ -983,6 +1138,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
     {
         var root = JsonNode.Parse(original)?.AsObject() ?? new JsonObject();
         root["direction"] = VerifiedDirection.Trim();
+        root["recognitionMode"] = IsAccountingInvoice ? "Accounting Invoice" : "Item Invoice";
         foreach (var field in HeaderFields)
         {
             switch (field.Key)
@@ -1049,9 +1205,241 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         else _ = dispatcher.BeginInvoke(new Action(Refresh), System.Windows.Threading.DispatcherPriority.Background);
     }
 
+    private void OnQueueItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MobileInvoiceQueueItem.IsCheckedForLink))
+            LinkSelectedScansCommand.RaiseCanExecuteChanged();
+    }
+
+    private void RaiseQueueActionCanExecuteChanged()
+    {
+        LinkSelectedScansCommand.RaiseCanExecuteChanged();
+        AutoLinkMultiPageCommand.RaiseCanExecuteChanged();
+        LinkSuggestedGroupCommand.RaiseCanExecuteChanged();
+        UnlinkSelectedScanCommand.RaiseCanExecuteChanged();
+        RemoveDuplicateCommand.RaiseCanExecuteChanged();
+        PrevScanPageCommand.RaiseCanExecuteChanged();
+        NextScanPageCommand.RaiseCanExecuteChanged();
+    }
+
+    private void NavigateScanPage(int delta) => LoadScanPageAt(_currentScanPageIndex + delta);
+
+    private void LoadScanPageAt(int pageIndex)
+    {
+        var paths = SelectedScan?.ImagePaths ?? [];
+        if (paths.Count == 0)
+        {
+            _currentScanPageIndex = 0;
+            ScanImagePath = string.Empty;
+            ScanImageSource = null;
+        }
+        else
+        {
+            _currentScanPageIndex = Math.Clamp(pageIndex, 0, paths.Count - 1);
+            var candidate = paths[_currentScanPageIndex];
+            if (!File.Exists(candidate))
+                candidate = paths.FirstOrDefault(File.Exists) ?? string.Empty;
+            ScanImagePath = candidate;
+            ScanImageSource = LoadBitmapNoLock(candidate);
+        }
+        OnPropertyChanged(nameof(SelectedScanPageCount));
+        OnPropertyChanged(nameof(CurrentScanPageNumber));
+        OnPropertyChanged(nameof(ScanPageIndicatorText));
+        OnPropertyChanged(nameof(MultiPageViewerToolbarVisibility));
+        PrevScanPageCommand.RaiseCanExecuteChanged();
+        NextScanPageCommand.RaiseCanExecuteChanged();
+    }
+
+    private static ImageSource? LoadBitmapNoLock(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = stream;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            return bitmap;
+        }
+        catch { return null; }
+    }
+
+    private void LinkCheckedScans()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client) return;
+        var checkedIds = Queue.Where(x => x.IsCheckedForLink).Select(x => x.ScanId).ToArray();
+        if (checkedIds.Length < 2) return;
+        try
+        {
+            var msg = _server.LinkMobileInvoiceScans(client.Id, client.FinancialYear, checkedIds);
+            StatusText = msg;
+            Refresh();
+        }
+        catch (Exception ex) { StatusText = "Could not link pages: " + ex.Message; }
+    }
+
+    private void AutoLinkMultiPage()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client) return;
+        try
+        {
+            StatusText = _server.AutoLinkMultiPageCandidates(client.Id, client.FinancialYear);
+            Refresh();
+        }
+        catch (Exception ex) { StatusText = "Auto-link failed: " + ex.Message; }
+    }
+
+    private void LinkSuggestedGroup()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client || SelectedScan is not { HasMultiPageHint: true } scan) return;
+        try
+        {
+            StatusText = _server.LinkMobileInvoiceScans(client.Id, client.FinancialYear, scan.MultiPageCandidateScanIds);
+            Refresh();
+        }
+        catch (Exception ex) { StatusText = "Could not link suggested pages: " + ex.Message; }
+    }
+
+    private void UnlinkSelectedScan()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client || SelectedScan is not { IsMultiPage: true } scan) return;
+        try
+        {
+            StatusText = _server.UnlinkMobileInvoiceScan(client.Id, client.FinancialYear, scan.ScanId);
+            Refresh();
+        }
+        catch (Exception ex) { StatusText = "Could not unlink pages: " + ex.Message; }
+    }
+
+    private void RemoveSelectedDuplicate()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client || SelectedScan is null) return;
+        try
+        {
+            StatusText = _server.RemoveDuplicateMobileScan(client.Id, client.FinancialYear, SelectedScan.ScanId);
+            Refresh();
+        }
+        catch (Exception ex) { StatusText = "Could not remove scan: " + ex.Message; }
+    }
+
+    private void RefreshAiMemoryBadge()
+    {
+        var gstin = HeaderFields.FirstOrDefault(x => x.Key.Equals("counterpartyGstin", StringComparison.OrdinalIgnoreCase))?.SelectedValue;
+        var mem = MobileSupplierMemoryStore.GetSupplierSummary(gstin);
+        AiMemoryBadgeText = mem.Found
+            ? $"AI Memory Active: {mem.CanonicalName} ({mem.ConfirmedCount} confirmed bill(s), {mem.HsnRateCount} HSN rule(s), pref: {(string.IsNullOrWhiteSpace(mem.PreferredRecognitionMode) ? "Accounting Invoice" : mem.PreferredRecognitionMode)})"
+            : "AI Memory: new supplier — confirming or clicking 'Teach AI' learns rules in 1 shot.";
+    }
+
+    private void TeachSelectedSupplierMemory()
+    {
+        if (SelectedScan is not { } scan || HeaderFields.Count == 0) return;
+        try
+        {
+            var mapped = BuildMappedResult(scan);
+            var msg = MobileSupplierMemoryStore.RecordConfirmedInvoice(scan, mapped);
+            RefreshAiMemoryBadge();
+            StatusText = msg;
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Could not update AI Memory: " + ex.Message;
+        }
+    }
+
+    private async Task AnalyzeSelectedWithAiAsync()
+    {
+        if (SelectedScan is not { } scan || _clientContext.CurrentClient is not { } client || IsAiAnalyzing) return;
+        IsAiAnalyzing = true;
+        AiAnalysisVerdictText = "Offline AI Analyst · Running GST audit & local Qwen3-VL-4B summary...";
+        AiAnalysisBodyText = "Inspecting GSTIN checksums, state codes, tax slabs, Accounting-vs-Inventory posting mode, supplier memory, and OCR text...";
+        AiAnalysisVisibility = Visibility.Visible;
+        try
+        {
+            var mapped = BuildMappedResult(scan);
+            var root = JsonNode.Parse(scan.PayloadJson)?.AsObject();
+            var sellerName = root?["seller"]?["name"]?.ToString() ?? (mapped.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? client.ClientName : mapped.CounterpartyName);
+            var sellerGstin = root?["seller"]?["gstin"]?.ToString() ?? (mapped.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase) ? client.Gstin : mapped.CounterpartyGstin);
+            var buyerName = root?["buyer"]?["name"]?.ToString() ?? (mapped.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? client.ClientName : mapped.CounterpartyName);
+            var buyerGstin = root?["buyer"]?["gstin"]?.ToString() ?? (mapped.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? client.Gstin : mapped.CounterpartyGstin);
+
+            var analysis = await InvoiceOcrChildBridge.AnalyzeForPhoneLinkAsync(
+                scan, mapped, client, sellerName, sellerGstin, buyerName, buyerGstin,
+                useLlm: true, CancellationToken.None).ConfigureAwait(true);
+
+            AiAnalysisVerdictText = $"AI Analyst · {analysis.Verdict} · {analysis.LlmEngineUsed} ({analysis.ElapsedSec:0.0}s)";
+            var sb = new System.Text.StringBuilder();
+            if (!string.IsNullOrWhiteSpace(analysis.PostingPreview))
+                sb.AppendLine("Posting Preview: " + analysis.PostingPreview);
+            if (!string.IsNullOrWhiteSpace(analysis.SupplierMemoryStatus))
+                sb.AppendLine("Self-Learning Memory: " + analysis.SupplierMemoryStatus);
+            if (!string.IsNullOrWhiteSpace(analysis.LlmExplanation))
+            {
+                sb.AppendLine();
+                sb.AppendLine("AI Explanation:");
+                sb.AppendLine(analysis.LlmExplanation);
+            }
+            if (analysis.Findings.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Audit Checks:");
+                foreach (var f in analysis.Findings) sb.AppendLine(" • " + f);
+            }
+            if (analysis.Recommendations.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Recommendations:");
+                foreach (var rec in analysis.Recommendations) sb.AppendLine(" → " + rec);
+            }
+            AiAnalysisBodyText = sb.ToString().Trim();
+            StatusText = analysis.Summary;
+        }
+        catch (Exception ex)
+        {
+            AiAnalysisVerdictText = "AI Analyst · Error";
+            AiAnalysisBodyText = ex.Message;
+            StatusText = "AI analysis failed: " + ex.Message;
+        }
+        finally
+        {
+            IsAiAnalyzing = false;
+        }
+    }
+
+    private void ImportLocalPhotos()
+    {
+        if (_server is null || _clientContext.CurrentClient is not { } client)
+        {
+            StatusText = "Select an active Client/FY before importing invoice photos.";
+            return;
+        }
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select invoice photos or PDFs to import into Mobile Link queue",
+            Multiselect = true,
+            Filter = "Invoice images & PDFs|*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.tif;*.tiff;*.pdf|All files (*.*)|*.*"
+        };
+        if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0) return;
+        try
+        {
+            var (_, _, msg) = _server.ImportLocalInvoicePhotos(
+                client.Id, client.FinancialYear, dialog.FileNames, VerifiedRecognitionMode, triggerOcr: true);
+            Refresh();
+            StatusText = msg;
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Local photo import failed: " + ex.Message;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return; _disposed = true;
+        foreach (var item in Queue) item.PropertyChanged -= OnQueueItemPropertyChanged;
         if (_server is not null)
         {
             _server.MobileLinkChanged -= OnMobileLinkChanged;

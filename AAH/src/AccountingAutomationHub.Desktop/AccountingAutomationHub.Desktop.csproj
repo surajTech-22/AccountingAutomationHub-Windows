@@ -5,9 +5,9 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Version>4.0.0.650</Version>
-    <AssemblyVersion>4.0.0.650</AssemblyVersion>
-    <FileVersion>4.0.0.650</FileVersion>
+    <Version>4.0.0.655</Version>
+    <AssemblyVersion>4.0.0.655</AssemblyVersion>
+    <FileVersion>4.0.0.655</FileVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RootNamespace>AccountingAutomationHub.Desktop</RootNamespace>
     <AssemblyName>AccountingAutomationHub</AssemblyName>
@@ -45,5 +45,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AAH.MobileLink.Tests" />
   </ItemGroup>
 </Project>

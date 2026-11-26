@@ -41,35 +41,100 @@
                 <Button Grid.Column="3" Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,5" Margin="10,0,6,0"/>
                 <Button Grid.Column="4" Content="Retry OCR" Command="{Binding RetryOcrCommand}" Padding="10,5"
                         ToolTip="Retry the selected queued scan using the existing independent ONNX invoice OCR runtime; no duplicate import."/>
-                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="7,0,0,0" Visibility="Collapsed">
-                    <Button Content="Run Child Stage 1" Command="{Binding RetryChildStage1Command}" Padding="9,5" Margin="0,0,6,0"
-                            ToolTip="Backfill Stage 1 on an existing Phone Link scan without reuploading or rerunning AAH accounting OCR."/>
-                    <Button Content="View in Invoice OCR Child" Command="{Binding OpenInInvoiceOcrCommand}" Padding="9,5"
-                            ToolTip="Open the original AAH Phone Link photo in the existing Invoice OCR Child for Stage 1 review."/>
+                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="7,0,0,0" Visibility="Visible">
+                    <Button Content="Run InvoiceVision OCR" Command="{Binding RetryChildStage1Command}" Padding="9,5" Margin="0,0,6,0"
+                            ToolTip="Re-run local InvoiceVision v2 (LightOnOCR-2-1B + Qwen3-VL-4B) on this existing Phone Link photo."/>
+                    <Button Content="View in InvoiceVision" Command="{Binding OpenInInvoiceOcrCommand}" Padding="9,5" Margin="0,0,6,0"
+                            ToolTip="Open the original Phone Link photo and extracted rows side-by-side in InvoiceVision Child v2."/>
+                    <Button Content="AI Analyze" Command="{Binding AnalyzeWithAiCommand}" Padding="9,5" Margin="0,0,6,0"
+                            ToolTip="Run offline AI GST diagnostic + local Qwen3-VL-4B explanation on this invoice."/>
+                    <Button Content="Teach AI" Command="{Binding TeachAiMemoryCommand}" Padding="9,5"
+                            ToolTip="Save verified supplier name, GSTIN, mode &amp; HSN rates into local Self-Learning AI Memory."/>
                     <Button Content="ⓘ" Width="22" Height="22" Padding="0" Margin="6,0,0,0"
-                            Tag="AAH sends the authenticated original image to Invoice OCR Child first. Child Stage 1 is provisional; existing ONNX OCR remains the verified accounting review fallback until Stages 2–4 pass."
+                            Tag="AAH sends the authenticated Phone Link photo to InvoiceVision Child v2 (LightOnOCR-2-1B + Qwen3-VL-4B hybrid) and uses Offline AI Memory + AI Analyst for 1-shot supplier learning."
                             Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="235"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="275"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{StaticResource CardBorderStyle}">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <StackPanel Margin="0,0,0,8">
                         <TextBlock Text="Invoice Queue" FontSize="16" FontWeight="SemiBold"/>
-                        <TextBlock Text="{Binding QueueSummary}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+                        <TextBlock Text="{Binding QueueSummary}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3,0,6" TextWrapping="Wrap"/>
+                        <UniformGrid Columns="2" Rows="2" Margin="0,0,0,2">
+                            <Button Content="Link Pages" Command="{Binding LinkSelectedScansCommand}" Padding="6,4" Margin="0,0,3,4" FontSize="11"
+                                    ToolTip="Check 2 or more pages below and click to combine into one multi-page invoice."/>
+                            <Button Content="Auto-Link" Command="{Binding AutoLinkMultiPageCommand}" Padding="6,4" Margin="3,0,0,4" FontSize="11"
+                                    ToolTip="Automatically link detected multi-page invoice candidates in the queue."/>
+                            <Button Content="Unlink" Command="{Binding UnlinkSelectedScanCommand}" Padding="6,4" Margin="0,0,3,4" FontSize="11"
+                                    ToolTip="Split a multi-page linked scan back into separate queued scans."/>
+                            <Button Content="Remove Dup" Command="{Binding RemoveDuplicateCommand}" Padding="6,4" Margin="3,0,0,4" FontSize="11"
+                                    ToolTip="Remove the selected duplicate scan from the queue without importing."/>
+                        </UniformGrid>
+                        <Button Content="Import Photos..." Command="{Binding ImportLocalPhotosCommand}" Padding="6,4" Margin="0,2,0,0" FontSize="11"
+                                ToolTip="Import local invoice photos/PDFs into the Mobile Link queue in Accounting Invoice mode."/>
                     </StackPanel>
                     <ListBox Grid.Row="1" ItemsSource="{Binding Queue}" SelectedItem="{Binding SelectedScan}" BorderThickness="0">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="2,5">
-                                    <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding RecognitionMode}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                                    <TextBlock Text="{Binding ReceivedUtc, StringFormat={}{0:dd.MM.yyyy HH:mm:ss}}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                                </StackPanel>
+                                <Grid Margin="2,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsCheckedForLink, Mode=TwoWay}" VerticalAlignment="Top" Margin="0,2,6,0"
+                                              ToolTip="Check 2 or more scans to link into one multi-page invoice"/>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                        <WrapPanel Margin="0,2,0,0">
+                                            <Border Background="#DBEAFE" CornerRadius="3" Padding="4,1" Margin="0,0,4,2">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PageBadgeText}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding PageBadgeText}" FontSize="9" FontWeight="Bold" Foreground="#1E40AF"/>
+                                            </Border>
+                                            <Border Background="#CCFBF1" CornerRadius="3" Padding="4,1" Margin="0,0,4,2" ToolTip="{Binding MultiPageHint}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding MultiPageHintBadgeText}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding MultiPageHintBadgeText}" FontSize="9" FontWeight="Bold" Foreground="#0F766E"/>
+                                            </Border>
+                                            <Border Background="#FEE2E2" CornerRadius="3" Padding="4,1" Margin="0,0,4,2" ToolTip="{Binding DuplicateDetail}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding DuplicateBadgeText}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding DuplicateBadgeText}" FontSize="9" FontWeight="Bold" Foreground="#B91C1C"/>
+                                            </Border>
+                                        </WrapPanel>
+                                        <TextBlock Text="{Binding RecognitionMode}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="{Binding ReceivedUtc, StringFormat={}{0:dd.MM.yyyy HH:mm:ss}}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -78,9 +143,42 @@
 
             <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
                 <DockPanel LastChildFill="True">
-                    <Border DockPanel.Dock="Top" Background="#EDF4FF" CornerRadius="5" Padding="8,5" Margin="0,0,0,7" Visibility="Collapsed">
-                        <TextBlock Text="{Binding ChildStage1StatusText}" FontWeight="SemiBold" Foreground="#194A76"
-                                   FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChildStage1StatusText}"/>
+                    <Border DockPanel.Dock="Top" Background="#EDF4FF" CornerRadius="5" Padding="8,5" Margin="0,0,0,5" Visibility="Visible">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding ChildStage1StatusText}" FontWeight="SemiBold" Foreground="#194A76"
+                                       FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChildStage1StatusText}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding AiMemoryBadgeText}" FontSize="10" FontWeight="SemiBold" Foreground="#0F766E"
+                                       Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding AiMemoryBadgeText}"/>
+                        </Grid>
+                    </Border>
+                    <Border DockPanel.Dock="Top" Background="#F5F3FF" BorderBrush="#C4B5FD" BorderThickness="1" CornerRadius="5" Padding="8,6" Margin="0,0,0,5"
+                            Visibility="{Binding AiAnalysisVisibility}">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding AiAnalysisVerdictText}" FontWeight="Bold" Foreground="#5B21B6" FontSize="11" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Content="Close" Command="{Binding CloseAiAnalysisCommand}" Padding="7,2" FontSize="10"/>
+                            <TextBox Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding AiAnalysisBodyText, Mode=OneWay}" IsReadOnly="True"
+                                     BorderThickness="0" Background="Transparent" TextWrapping="Wrap" MaxHeight="135"
+                                     VerticalScrollBarVisibility="Auto" FontSize="11" Margin="0,4,0,0" Foreground="#1E1B4B"/>
+                        </Grid>
+                    </Border>
+                    <Border DockPanel.Dock="Top" Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,0,0,5"
+                            Visibility="{Binding DuplicateBannerVisibility}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding DuplicateBannerText}" Foreground="#991B1B" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            <Button Grid.Column="1" Content="Remove Duplicate" Command="{Binding RemoveDuplicateCommand}" Padding="9,3" Margin="8,0,0,0" FontSize="11"/>
+                        </Grid>
+                    </Border>
+                    <Border DockPanel.Dock="Top" Background="#F0FDFA" BorderBrush="#5EEAD4" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,0,0,5"
+                            Visibility="{Binding MultiPageHintVisibility}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding MultiPageHintText}" Foreground="#115E59" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            <Button Grid.Column="1" Content="Link Suggested Pages" Command="{Binding LinkSuggestedGroupCommand}" Padding="9,3" Margin="8,0,0,0" FontSize="11"/>
+                        </Grid>
                     </Border>
                 <TabControl>
                     <TabItem Header="Mapping">
@@ -88,15 +186,22 @@
                             <StackPanel Margin="3">
                                 <!-- R94 compact mapping: actual editable fields first, guides behind info. -->
                                 <Grid Margin="0,0,0,5">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBlock Text="Direction:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="SemiBold"/>
-                                    <ComboBox Grid.Column="1" Width="132" ItemsSource="{Binding InvoiceDirectionOptions}"
+                                    <ComboBox Grid.Column="1" Width="118" ItemsSource="{Binding InvoiceDirectionOptions}"
                                               SelectedItem="{Binding VerifiedDirection, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,12,0"/>
-                                    <TextBlock Grid.Column="2" Text="{Binding InvoiceSourceParties}" VerticalAlignment="Center"
+                                    <TextBlock Grid.Column="2" Text="Mode:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="SemiBold"/>
+                                    <ComboBox Grid.Column="3" Width="154" ItemsSource="{Binding InvoiceModeOptions}"
+                                              SelectedItem="{Binding VerifiedRecognitionMode, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,12,0"
+                                              ToolTip="Accounting Invoice imports GST-slab ledger rows with ZERO inventory items. Item Invoice imports per-item Qty/Unit/Rate inventory entries."/>
+                                    <TextBlock Grid.Column="4" Text="{Binding InvoiceSourceParties}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                                    <Button Grid.Column="3" Content="ⓘ" Width="25" Height="23" Padding="0" Margin="6,0,0,0"
+                                    <Button Grid.Column="5" Content="ⓘ" Width="25" Height="23" Padding="0" Margin="6,0,0,0"
                                             Tag="Android camera → authorised Client/FY queue → Windows invoice OCR → manual verification → existing Purchase/Sales import. No Excel staging or alternate accounting exit."
                                             Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
+                                    <TextBlock Grid.Row="1" Grid.ColumnSpan="6" Text="{Binding PostingModePreviewText}" FontSize="11" FontWeight="SemiBold"
+                                               Foreground="#1D4ED8" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                                 </Grid>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
                                     <TextBlock Text="OCR status" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,5,0"/>
@@ -180,20 +285,30 @@
                     <TabItem Header="Scan Image">
                         <!-- R93: preserve/source-display original pixels. Fit does not downsample
                              the stored file; Actual pixels permits checking small characters. -->
-                        <TabControl Background="#111827">
-                            <TabItem Header="Fit page">
-                                <Grid Background="#111827">
-                                    <TextBlock Text="No image evidence is available for this queued scan." Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    <Image Source="{Binding ScanImagePath}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
-                                </Grid>
-                            </TabItem>
-                            <TabItem Header="Actual pixels (100%)">
-                                <ScrollViewer Background="#111827" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                                    <Image Source="{Binding ScanImagePath}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
-                                           RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
-                                </ScrollViewer>
-                            </TabItem>
-                        </TabControl>
+                        <DockPanel Background="#111827">
+                            <Border DockPanel.Dock="Top" Background="#1F2937" Padding="8,5" Visibility="{Binding MultiPageViewerToolbarVisibility}">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button Content="◀ Prev" Command="{Binding PrevScanPageCommand}" Padding="10,3" Margin="0,0,10,0"/>
+                                    <TextBlock Text="{Binding ScanPageIndicatorText}" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <Button Content="Next ▶" Command="{Binding NextScanPageCommand}" Padding="10,3" Margin="0,0,16,0"/>
+                                    <Button Content="Unlink Pages" Command="{Binding UnlinkSelectedScanCommand}" Padding="10,3"/>
+                                </StackPanel>
+                            </Border>
+                            <TabControl Background="#111827">
+                                <TabItem Header="Fit page">
+                                    <Grid Background="#111827">
+                                        <TextBlock Text="No image evidence is available for this queued scan." Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <Image Source="{Binding ScanImageSource}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
+                                    </Grid>
+                                </TabItem>
+                                <TabItem Header="Actual pixels (100%)">
+                                    <ScrollViewer Background="#111827" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                        <Image Source="{Binding ScanImageSource}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                               RenderOptions.BitmapScalingMode="HighQuality" Margin="8"/>
+                                    </ScrollViewer>
+                                </TabItem>
+                            </TabControl>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="Raw OCR">
                         <TextBox Text="{Binding RawOcr, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" ContextMenu="{x:Null}" ToolTipService.IsEnabled="False" behaviors:OverflowToolTipManager.SuppressAutoToolTip="True"/>
@@ -213,10 +328,10 @@
         </Grid>
 
         <Grid Grid.Row="2" Margin="0,5,0,0">
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <!-- R93: review authority is always visible immediately above Confirm. The
                  checkbox still triggers the original validation and server-side gates. -->
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,7"
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,5"
                         Visibility="{Binding OcrDiscrepancyVisibility}">
                 <CheckBox Content="I checked the original invoice photograph and manually resolved the R89 discrepancies"
                           IsChecked="{Binding ReviewedOcrDiscrepancies, UpdateSourceTrigger=PropertyChanged}" FontWeight="SemiBold"
@@ -224,7 +339,13 @@
                 <Button Content="ⓘ" Width="26" Height="24" Padding="0" Margin="8,0,0,0"
                         Tag="Acknowledgement applies only to the exact selected source scan. It cannot override missing fields, invalid identity, unreconciled GST/totals or server validation." Click="InfoButton_Click" ToolTipService.IsEnabled="False"/>
             </StackPanel>
-            <Grid Grid.Row="1">
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,5"
+                        Visibility="{Binding DuplicateBannerVisibility}">
+                <CheckBox Content="I verified this is NOT an accidental double entry — allow duplicate confirmation"
+                          IsChecked="{Binding AllowDuplicateOverride, UpdateSourceTrigger=PropertyChanged}" FontWeight="SemiBold"
+                          Foreground="#991B1B" VerticalAlignment="Center"/>
+            </StackPanel>
+            <Grid Grid.Row="2">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="{Binding MappingValidationText}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" Margin="0,0,0,3"/>

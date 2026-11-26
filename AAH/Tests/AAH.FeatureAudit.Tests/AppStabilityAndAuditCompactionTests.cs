@@ -317,19 +317,30 @@ internal static class AppStabilityAndAuditCompactionTests
         var mobileView = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "MobileLinkView.xaml"));
         var dumpView = File.ReadAllText(Path.Combine(root, "AAH", "src", "AccountingAutomationHub.Desktop", "Views", "UniversalDumpWindow.xaml"));
 
-        Check(bridge.Contains("public const bool IsLinked = false;", StringComparison.Ordinal) &&
-              !bridge.Contains("Process.Start", StringComparison.Ordinal),
-            "InvoiceOcrChildBridge must be unlinked (IsLinked = false) and must not spawn child processes.");
-        Check(launcher.Contains("public const bool IsLinked = false;", StringComparison.Ordinal) &&
-              !launcher.Contains("Process.Start", StringComparison.Ordinal),
-            "InvoiceVisionChildLauncher must be unlinked (IsLinked = false) and must not spawn child processes.");
-        Check(!server.Contains("InvoiceOcrChildBridge.TryStage1Async", StringComparison.Ordinal),
-            "SecureLanServerService must not invoke InvoiceOcrChildBridge.TryStage1Async.");
-        Check(mobileView.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal),
-            "MobileLinkView must hide Invoice OCR Child buttons and banner.");
+        Check(bridge.Contains("public const bool IsLinked = true;", StringComparison.Ordinal) &&
+              bridge.Contains("AAH-INVOICEVISION-REQUEST-V1", StringComparison.Ordinal),
+            "InvoiceOcrChildBridge must be linked (IsLinked = true) to InvoiceVision Child v2.");
+        Check(launcher.Contains("public const bool IsLinked = true;", StringComparison.Ordinal) &&
+              launcher.Contains("Process.Start", StringComparison.Ordinal),
+            "InvoiceVisionChildLauncher must be linked (IsLinked = true).");
+        Check(server.Contains("InvoiceOcrChildBridge.ExtractForPhoneLinkAsync", StringComparison.Ordinal),
+            "SecureLanServerService must invoke InvoiceOcrChildBridge.ExtractForPhoneLinkAsync for Phone Link photos.");
+        Check(!mobileView.Contains("OpenInInvoiceOcrCommand\" Padding=\"9,5\"") || mobileView.Contains("Visibility=\"Visible\"", StringComparison.Ordinal),
+            "MobileLinkView must display InvoiceVision Child buttons and status banner.");
+        Check(mobileView.Contains("LinkSelectedScansCommand", StringComparison.Ordinal) &&
+              mobileView.Contains("AutoLinkMultiPageCommand", StringComparison.Ordinal) &&
+              mobileView.Contains("UnlinkSelectedScanCommand", StringComparison.Ordinal) &&
+              mobileView.Contains("RemoveDuplicateCommand", StringComparison.Ordinal) &&
+              mobileView.Contains("AllowDuplicateOverride", StringComparison.Ordinal),
+            "MobileLinkView must expose Multi-Page Link/Unlink and Duplicate handling controls.");
+        Check(server.Contains("RecomputeQueueLinkAndDuplicateFlags", StringComparison.Ordinal) &&
+              server.Contains("LinkMobileInvoiceScans", StringComparison.Ordinal) &&
+              server.Contains("UnlinkMobileInvoiceScan", StringComparison.Ordinal) &&
+              server.Contains("ocrSourceSha256List", StringComparison.Ordinal),
+            "SecureLanServerService must enforce multi-page linking, SHA-256 verification, and duplicate detection.");
         Check(dumpView.Contains("Review in InvoiceVision", StringComparison.Ordinal) &&
-              dumpView.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal),
-            "UniversalDumpWindow must hide the Review in InvoiceVision button.");
+              dumpView.Contains("Visibility=\"Visible\"", StringComparison.Ordinal),
+            "UniversalDumpWindow must show the Review in InvoiceVision button.");
     }
 
     private static void RunCorruptBackupRecoveryTest()

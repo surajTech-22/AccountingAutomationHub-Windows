@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -7,6 +9,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using AccountingAutomationHub.Domain.Banking;
 using AccountingAutomationHub.Domain.Journals;
 using AccountingAutomationHub.Domain.Governance;
@@ -84,9 +87,14 @@ public sealed class SecureLanServerService : IDisposable
     private readonly SqliteMasterRepository _invoiceMasterRepository = new();
     private readonly SqliteStockMasterRepository _invoiceStockRepository = new();
     private readonly object _mobileLinkGate = new();
+    private readonly object _mobileQueueAnalysisLock = new();
+    private readonly object _mobileHistoryLock = new();
+    private readonly object _mobileAutoImportLock = new();
+    private int _initialAutoImportSwept;
     private readonly ConcurrentDictionary<string, MobileInvoiceQueueItem> _mobileInvoiceQueue = new(StringComparer.OrdinalIgnoreCase);
     // R79: one recognition attempt per authenticated Client/FY scan ID; retry never reuploads or reposts.
     private readonly ConcurrentDictionary<string, byte> _mobileInvoiceOcrInFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _mobileInvoiceChildOnlyInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly SqlitePurchaseRecordRepository _mobilePurchaseRepository = new();
     private readonly SqliteSalesRecordRepository _mobileSalesRepository = new();
     // R46 R29: reuse the production Bank PaddleOCR-VL raw-recognition engine for invoice
@@ -616,10 +624,13 @@ public sealed class SecureLanServerService : IDisposable
         MobileLinkChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public IReadOnlyList<MobileInvoiceQueueItem> GetMobileInvoiceQueue(long clientId, string financialYear) =>
-        _mobileInvoiceQueue.Values
+    public IReadOnlyList<MobileInvoiceQueueItem> GetMobileInvoiceQueue(long clientId, string financialYear)
+    {
+        SweepLocalAutoImportInbox(clientId, financialYear, triggerOcr: true);
+        return _mobileInvoiceQueue.Values
             .Where(x => x.ClientId == clientId && x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.ReceivedUtc).ThenBy(x => x.ScanId, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     public MobileInvoiceQueueItem? GetMobileInvoiceQueueItem(long clientId, string financialYear, string scanId) =>
         _mobileInvoiceQueue.TryGetValue(MobileQueueKey(clientId, financialYear, scanId), out var row) ? row : null;
@@ -642,16 +653,77 @@ public sealed class SecureLanServerService : IDisposable
         if (client is null || client.IsArchived ||
             !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
             return "The original Client/FY is no longer available for this scan.";
-        var issue = InvoiceOnnxDocumentOcrRecognitionService.GetRuntimeReadinessIssue();
-        if (issue.Length > 0) return "Cannot retry OCR: " + issue;
+        if (!InvoiceOcrChildBridge.IsChildInstalled())
+        {
+            var issue = InvoiceOnnxDocumentOcrRecognitionService.GetRuntimeReadinessIssue();
+            if (issue.Length > 0) return "Cannot retry OCR: " + issue;
+        }
         _ = RunMobileInvoiceDocumentOcrAsync(row, client);
         return "OCR retry submitted for the existing scan. No new upload or accounting entry was created.";
     }
 
-    // R97: Backfill/retry Child Stage 1 on the selected EXISTING scan, independently of
-    // DocumentOcrState=Ready. Never re-upload, duplicate or alter ONNX accounting data.
-    public string RetryMobileInvoiceChildStage1(long clientId, string financialYear, string scanId) =>
-        "InvoiceVision Child is unlinked from AAH. Use Retry OCR to run AAH ONNX invoice OCR.";
+    public string RetryMobileInvoiceChildStage1(long clientId, string financialYear, string scanId)
+    {
+        var key = MobileQueueKey(clientId, financialYear, scanId);
+        if (!_mobileInvoiceQueue.TryGetValue(key, out var row) ||
+            !row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+            return "The selected scan is no longer in this Client/FY review queue.";
+        var client = _clients.GetById(clientId);
+        if (client is null || client.IsArchived ||
+            !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+            return "The selected Client/FY is not available.";
+        if (row.ImagePaths.Count == 0 || row.ImagePaths.Any(p => !File.Exists(p)))
+            return "The original Phone Link photo is missing; InvoiceVision was not started.";
+        if (!InvoiceOcrChildBridge.IsChildInstalled())
+            return "InvoiceVision Child v2 executable was not found at " + InvoiceOcrChildBridge.InstalledExe;
+        if (_mobileInvoiceOcrInFlight.ContainsKey(key))
+            return "OCR is already processing this scan; wait for it to finish.";
+        if (!_mobileInvoiceChildOnlyInFlight.TryAdd(key, 0))
+            return "InvoiceVision Child v2 is already processing this scan.";
+        row.ChildStage1Status = "Queued existing Phone Link photo for InvoiceVision v2 extraction...";
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        _ = RunExistingChildExtractAsync(row, client, key);
+        return "Queued existing Phone Link scan for InvoiceVision v2 (LightOnOCR-2-1B / Hybrid Qwen3-VL-4B).";
+    }
+
+    private async Task RunExistingChildExtractAsync(MobileInvoiceQueueItem row, AccountingAutomationHub.Domain.Clients.ClientProfile client, string key)
+    {
+        try
+        {
+            var (status, docResult) = await InvoiceOcrChildBridge.ExtractForPhoneLinkAsync(
+                row.ImagePaths, client, row.ScanId, row.EvidenceFolder,
+                row.PayloadJson, row.PhoneRawOcr,
+                msg =>
+                {
+                    row.ChildStage1Status = msg;
+                    MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+                },
+                _mobileInvoiceOcrCancellation.Token).ConfigureAwait(false);
+            if (_mobileInvoiceQueue.TryGetValue(key, out var current) && ReferenceEquals(current, row) &&
+                row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+            {
+                row.ChildStage1Status = status.Message;
+                row.ChildStage1Archive = status.Stage1Succeeded ? status.Stage1Archive : string.Empty;
+                if (docResult is { WasSuccessful: true })
+                {
+                    ApplyPhoneLinkOcrResult(row, docResult);
+                    RecomputeQueueLinkAndDuplicateFlags(row.ClientId, row.FinancialYear);
+                }
+                MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            row.ChildStage1Status = "InvoiceVision extraction stopped with AAH.";
+            MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            row.ChildStage1Status = "InvoiceVision extraction failed: " + ex.Message;
+            MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        }
+        finally { _mobileInvoiceChildOnlyInFlight.TryRemove(key, out _); }
+    }
 
     public void CompleteMobileInvoiceReview(long clientId, string financialYear, string scanId, bool confirmed, MobileInvoiceMappedResult? mappedResult)
     {
@@ -668,8 +740,57 @@ public sealed class SecureLanServerService : IDisposable
             using (var sourceDocument = System.Text.Json.JsonDocument.Parse(row.PayloadJson))
             {
                 var sourceRoot = sourceDocument.RootElement;
-                if (sourceRoot.TryGetProperty("ocrEngine", out var engine) &&
-                    engine.GetString() == "AAH-RAPIDOCR-ONNX-R90")
+                var engineName = sourceRoot.TryGetProperty("ocrEngine", out var engine) ? engine.GetString() : string.Empty;
+                if (engineName == "AAH-INVOICEVISION-V2")
+                {
+                    var originalSha = sourceRoot.GetProperty("ocrSourceSha256").GetString() ?? "";
+                    if (row.ImagePaths.Count == 0 || !File.Exists(row.ImagePaths[0]) ||
+                        !Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(row.ImagePaths[0])))
+                            .Equals(originalSha, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Source invoice photograph changed or disappeared after InvoiceVision extraction.");
+                    if (sourceRoot.TryGetProperty("ocrSourceSha256List", out var shaListEl) &&
+                        shaListEl.ValueKind == System.Text.Json.JsonValueKind.Array && shaListEl.GetArrayLength() > 0)
+                    {
+                        if (row.ImagePaths.Count != shaListEl.GetArrayLength())
+                            throw new InvalidOperationException("Linked multi-page count no longer matches InvoiceVision extraction.");
+                        for (var pageIdx = 0; pageIdx < row.ImagePaths.Count; pageIdx++)
+                        {
+                            var expectedHash = shaListEl[pageIdx].GetString() ?? string.Empty;
+                            if (!File.Exists(row.ImagePaths[pageIdx]) ||
+                                !Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(row.ImagePaths[pageIdx])))
+                                    .Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidOperationException($"Source invoice page {pageIdx + 1} changed or disappeared after InvoiceVision extraction.");
+                        }
+                    }
+                    if (!mappedResult.SourceImageSha256.Equals(originalSha, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The confirmed invoice did not preserve its source-photo SHA-256.");
+                    var flags = sourceRoot.GetProperty("ocrBlockingFlags");
+                    if (flags.ValueKind == System.Text.Json.JsonValueKind.Array && flags.GetArrayLength() > 0 &&
+                        !mappedResult.SourceDiscrepanciesReviewed)
+                        throw new InvalidOperationException("Review and acknowledge the InvoiceVision verification notes before confirming.");
+                    if (mappedResult.Lines.Count > 0 &&
+                        Math.Abs(mappedResult.Lines.Sum(line => line.Taxable) - mappedResult.TaxableTotal) > 0.25m)
+                        throw new InvalidOperationException("Extracted item rows and taxable summary do not reconcile; no posting is permitted.");
+                    if (Math.Abs(mappedResult.InvoiceTotal - (mappedResult.TaxableTotal + mappedResult.CgstTotal +
+                        mappedResult.SgstTotal + mappedResult.IgstTotal + mappedResult.CessTotal + mappedResult.RoundOff)) > 0.25m)
+                        throw new InvalidOperationException("InvoiceVision invoice totals do not reconcile.");
+                    var account = _clients.GetById(clientId);
+                    var activeGstin = new string((account?.Gstin ?? "").ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
+                    var seller = sourceRoot.GetProperty("seller").GetProperty("gstin").GetString() ?? "";
+                    var buyer = sourceRoot.GetProperty("buyer").GetProperty("gstin").GetString() ?? "";
+                    if (activeGstin.Length == 15 && seller.Length == 15 && buyer.Length == 15)
+                    {
+                        if (!(mappedResult.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? activeGstin == buyer :
+                              mappedResult.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase) && activeGstin == seller))
+                            throw new InvalidOperationException("Client GSTIN and Purchase/Sales direction disagree with the source document.");
+                        var sourceOpposite = mappedResult.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase) ? seller : buyer;
+                        if (!MobileInvoicePartyIdentityResolver.ValidGstin(sourceOpposite) ||
+                            !MobileInvoicePartyIdentityResolver.NormalizeGstin(mappedResult.CounterpartyGstin)
+                                .Equals(sourceOpposite, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("Verified counterparty GSTIN must match the opposite invoice party before Sales/Purchase handoff.");
+                    }
+                }
+                else if (engineName == "AAH-RAPIDOCR-ONNX-R90")
                 {
                     if (!sourceRoot.TryGetProperty("ocrR89Preview", out var review) ||
                         review.GetProperty("schema").GetString() != "AAH-R89-ACCOUNTING-BLOCK-PREVIEW-V1" ||
@@ -707,11 +828,27 @@ public sealed class SecureLanServerService : IDisposable
                         throw new InvalidOperationException("Verified counterparty GSTIN must match the opposite invoice party before Sales/Purchase handoff.");
                 }
             }
+            RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+            if (row.IsDuplicate && !mappedResult.DuplicateOverrideAcknowledged)
+                throw new InvalidOperationException($"Duplicate invoice blocked: {row.DuplicateDetail}. Remove duplicate or explicitly acknowledge duplicate override before confirming.");
+
             HandOffMobileInvoiceDirect(clientId, financialYear, scanId, mappedResult);
+            EnsurePageSha256List(row);
+            AppendMobileConfirmedHistory(clientId, financialYear, new MobileConfirmedScanHistoryEntry(
+                row.ScanId,
+                mappedResult.InvoiceNumber,
+                MobileInvoicePartyIdentityResolver.NormalizeGstin(mappedResult.CounterpartyGstin),
+                mappedResult.Direction,
+                mappedResult.InvoiceTotal,
+                DateTime.UtcNow,
+                row.PageSha256List.ToList()));
+            try { MobileSupplierMemoryStore.RecordConfirmedInvoice(row, mappedResult); }
+            catch { /* Best-effort self-learning memory must never block a confirmed accounting entry. */ }
         }
 
         _mobileInvoiceQueue.TryRemove(key, out _);
         TryDeleteMobileEvidence(row.EvidenceFolder);
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
         MobileLinkChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -767,7 +904,7 @@ public sealed class SecureLanServerService : IDisposable
         else throw new InvalidOperationException("Mobile invoice direction must be Sales or Purchase before confirmation.");
     }
 
-    private static IReadOnlyList<PurchaseImportRecord> BuildMobilePurchaseRecords(MobileInvoiceMappedResult mapped)
+    internal static IReadOnlyList<PurchaseImportRecord> BuildMobilePurchaseRecords(MobileInvoiceMappedResult mapped)
     {
         if (mapped.Lines.Count == 0)
             return new[]
@@ -779,25 +916,74 @@ public sealed class SecureLanServerService : IDisposable
                     DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                     SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, TaxableValue = mapped.TaxableTotal,
                     Cgst = mapped.CgstTotal, Sgst = mapped.SgstTotal, Igst = mapped.IgstTotal, Cess = mapped.CessTotal,
-                    RoundOff = mapped.RoundOff, SourceSection = "Mobile Link", ItemSequence = 1
+                    RoundOff = mapped.RoundOff, SourceSection = "Mobile Link", ItemSequence = 1,
+                    ItemName = string.Empty, OriginalItemName = string.Empty, HsnCode = string.Empty, Unit = string.Empty, OriginalUnit = string.Empty,
+                    ActualQuantity = 0m, BilledQuantity = 0m, ItemRate = 0m, ItemAmount = 0m, DiscountAmount = 0m
                 }
             };
-        return mapped.Lines.Select((r, i) => new PurchaseImportRecord
+
+        if (mapped.IsAccountingInvoiceMode)
         {
-            Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
-            SupplierName = mapped.CounterpartyName, SupplierGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
-            DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
-            SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
-            TaxableValue = r.Taxable, Cgst = r.Cgst, Sgst = r.Sgst, Igst = r.Igst, Cess = r.Cess,
-            RoundOff = i == 0 ? mapped.RoundOff : 0m, SourceSection = "Mobile Link", ItemSequence = i + 1,
-            ItemName = r.Description, HsnCode = r.HsnSac, ItemAmount = r.LineTotal, ItemRate = r.Rate,
-            // R46 R27: Mobile discount is recognition/review evidence only. TaxableValue is
-            // already post-discount accounting authority, so do not post a second discount to Tally.
-            ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, DiscountAmount = 0m
+            var slabGroups = mapped.Lines
+                .GroupBy(line => Math.Round(line.GstRate, 2, MidpointRounding.AwayFromZero))
+                .OrderBy(group => group.Key)
+                .ToArray();
+            return slabGroups.Select((slab, idx) => new PurchaseImportRecord
+            {
+                Destination = "Purchase",
+                ReconciliationStatus = "Manual",
+                GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
+                SupplierName = mapped.CounterpartyName,
+                SupplierGstin = mapped.CounterpartyGstin,
+                DocumentType = mapped.DocumentType,
+                DocumentNumber = mapped.InvoiceNumber,
+                DocumentDate = mapped.InvoiceDate,
+                GstDate = mapped.InvoiceDate,
+                SourceDocumentValue = mapped.InvoiceTotal,
+                DocumentValue = mapped.InvoiceTotal,
+                Rate = slab.Key,
+                TaxableValue = Math.Round(slab.Sum(x => x.Taxable), 2, MidpointRounding.AwayFromZero),
+                Cgst = Math.Round(slab.Sum(x => x.Cgst), 2, MidpointRounding.AwayFromZero),
+                Sgst = Math.Round(slab.Sum(x => x.Sgst), 2, MidpointRounding.AwayFromZero),
+                Igst = Math.Round(slab.Sum(x => x.Igst), 2, MidpointRounding.AwayFromZero),
+                Cess = Math.Round(slab.Sum(x => x.Cess), 2, MidpointRounding.AwayFromZero),
+                RoundOff = idx == 0 ? mapped.RoundOff : 0m,
+                SourceSection = "Mobile Link",
+                ItemSequence = idx + 1,
+                // Accounting Invoice mode: pure GST-slab ledger entry only; zero inventory evidence.
+                ItemName = string.Empty,
+                OriginalItemName = string.Empty,
+                HsnCode = string.Empty,
+                Unit = string.Empty,
+                OriginalUnit = string.Empty,
+                ActualQuantity = 0m,
+                BilledQuantity = 0m,
+                ItemRate = 0m,
+                ItemAmount = 0m,
+                DiscountAmount = 0m
+            }).ToArray();
+        }
+
+        return mapped.Lines.Select((r, i) =>
+        {
+            var resolvedItem = string.IsNullOrWhiteSpace(r.StockItem) ? r.Description : r.StockItem.Trim();
+            return new PurchaseImportRecord
+            {
+                Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
+                SupplierName = mapped.CounterpartyName, SupplierGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
+                DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
+                SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
+                TaxableValue = r.Taxable, Cgst = r.Cgst, Sgst = r.Sgst, Igst = r.Igst, Cess = r.Cess,
+                RoundOff = i == 0 ? mapped.RoundOff : 0m, SourceSection = "Mobile Link", ItemSequence = i + 1,
+                ItemName = resolvedItem, OriginalItemName = r.Description, HsnCode = r.HsnSac, ItemAmount = r.LineTotal, ItemRate = r.Rate,
+                // R46 R27: Mobile discount is recognition/review evidence only. TaxableValue is
+                // already post-discount accounting authority, so do not post a second discount to Tally.
+                ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, OriginalUnit = r.Unit, DiscountAmount = 0m
+            };
         }).ToArray();
     }
 
-    private static IReadOnlyList<SalesImportRecord> BuildMobileSalesRecords(MobileInvoiceMappedResult mapped)
+    internal static IReadOnlyList<SalesImportRecord> BuildMobileSalesRecords(MobileInvoiceMappedResult mapped)
     {
         if (mapped.Lines.Count == 0)
             return new[]
@@ -809,22 +995,73 @@ public sealed class SecureLanServerService : IDisposable
                     DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                     SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, TaxableValue = mapped.TaxableTotal,
                     Cgst = mapped.CgstTotal, Sgst = mapped.SgstTotal, Igst = mapped.IgstTotal, Cess = mapped.CessTotal,
-                    RoundOff = mapped.RoundOff, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ItemSequence = 1
+                    RoundOff = mapped.RoundOff, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ImportMode = "Accounting Invoice", ItemSequence = 1,
+                    ItemName = string.Empty, OriginalItemName = string.Empty, HsnCode = string.Empty, Unit = string.Empty, OriginalUnit = string.Empty,
+                    ActualQuantity = 0m, BilledQuantity = 0m, ItemRate = 0m, ItemAmount = 0m, DiscountAmount = 0m
                 }
             };
-        return mapped.Lines.Select((r, i) => new SalesImportRecord
+
+        if (mapped.IsAccountingInvoiceMode)
         {
-            Destination = "Sales", CustomerName = mapped.CounterpartyName, OriginalCustomerName = mapped.CounterpartyName,
-            CustomerNameSource = "Mobile Link", CustomerGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
-            DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
-            SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
-            TaxableValue = r.Taxable, Cgst = r.Cgst, Sgst = r.Sgst, Igst = r.Igst, Cess = r.Cess,
-            RoundOff = i == 0 ? mapped.RoundOff : 0m, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ItemSequence = i + 1,
-            ItemName = r.Description, OriginalItemName = r.Description, HsnCode = r.HsnSac, ItemAmount = r.LineTotal,
-            ItemRate = r.Rate, ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, OriginalUnit = r.Unit,
-            // R46 R27: Mobile discount is recognition/review evidence only. TaxableValue is
-            // already post-discount accounting authority, so do not post a second discount to Tally.
-            DiscountAmount = 0m
+            var slabGroups = mapped.Lines
+                .GroupBy(line => Math.Round(line.GstRate, 2, MidpointRounding.AwayFromZero))
+                .OrderBy(group => group.Key)
+                .ToArray();
+            return slabGroups.Select((slab, idx) => new SalesImportRecord
+            {
+                Destination = "Sales",
+                CustomerName = mapped.CounterpartyName,
+                OriginalCustomerName = mapped.CounterpartyName,
+                CustomerNameSource = "Mobile Link",
+                CustomerGstin = mapped.CounterpartyGstin,
+                DocumentType = mapped.DocumentType,
+                DocumentNumber = mapped.InvoiceNumber,
+                DocumentDate = mapped.InvoiceDate,
+                GstDate = mapped.InvoiceDate,
+                SourceDocumentValue = mapped.InvoiceTotal,
+                DocumentValue = mapped.InvoiceTotal,
+                Rate = slab.Key,
+                TaxableValue = Math.Round(slab.Sum(x => x.Taxable), 2, MidpointRounding.AwayFromZero),
+                Cgst = Math.Round(slab.Sum(x => x.Cgst), 2, MidpointRounding.AwayFromZero),
+                Sgst = Math.Round(slab.Sum(x => x.Sgst), 2, MidpointRounding.AwayFromZero),
+                Igst = Math.Round(slab.Sum(x => x.Igst), 2, MidpointRounding.AwayFromZero),
+                Cess = Math.Round(slab.Sum(x => x.Cess), 2, MidpointRounding.AwayFromZero),
+                RoundOff = idx == 0 ? mapped.RoundOff : 0m,
+                SourceSection = "Mobile Link",
+                SourceOrigin = "Mobile Link",
+                ImportMode = "Accounting Invoice",
+                ItemSequence = idx + 1,
+                // Accounting Invoice mode: pure GST-slab ledger entry only; zero inventory evidence.
+                ItemName = string.Empty,
+                OriginalItemName = string.Empty,
+                HsnCode = string.Empty,
+                Unit = string.Empty,
+                OriginalUnit = string.Empty,
+                ActualQuantity = 0m,
+                BilledQuantity = 0m,
+                ItemRate = 0m,
+                ItemAmount = 0m,
+                DiscountAmount = 0m
+            }).ToArray();
+        }
+
+        return mapped.Lines.Select((r, i) =>
+        {
+            var resolvedItem = string.IsNullOrWhiteSpace(r.StockItem) ? r.Description : r.StockItem.Trim();
+            return new SalesImportRecord
+            {
+                Destination = "Sales", CustomerName = mapped.CounterpartyName, OriginalCustomerName = mapped.CounterpartyName,
+                CustomerNameSource = "Mobile Link", CustomerGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
+                DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
+                SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
+                TaxableValue = r.Taxable, Cgst = r.Cgst, Sgst = r.Sgst, Igst = r.Igst, Cess = r.Cess,
+                RoundOff = i == 0 ? mapped.RoundOff : 0m, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ImportMode = "Item Invoice", ItemSequence = i + 1,
+                ItemName = resolvedItem, OriginalItemName = r.Description, HsnCode = r.HsnSac, ItemAmount = r.LineTotal,
+                ItemRate = r.Rate, ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, OriginalUnit = r.Unit,
+                // R46 R27: Mobile discount is recognition/review evidence only. TaxableValue is
+                // already post-discount accounting authority, so do not post a second discount to Tally.
+                DiscountAmount = 0m
+            };
         }).ToArray();
     }
 
@@ -849,6 +1086,8 @@ public sealed class SecureLanServerService : IDisposable
             CleanupLegacyMobileInvoiceQueueFiles();
             _repositoriesInitialized = true;
         }
+        if (Interlocked.Exchange(ref _initialAutoImportSwept, 1) == 0)
+            SweepAllAutoImportInboxes();
     }
 
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -2959,6 +3198,974 @@ public sealed class SecureLanServerService : IDisposable
     private static string MobileLinkRoot(long clientId, string financialYear) => Path.Combine(ApplicationDataPaths.RootFolder, "MobileLink", clientId.ToString(System.Globalization.CultureInfo.InvariantCulture), SafeMobileSegment(financialYear));
     private static string MobileLinkConfigurationPath(long clientId, string financialYear) => Path.Combine(MobileLinkRoot(clientId, financialYear), "link.json");
     private static string MobileInvoiceQueueRoot(long clientId, string financialYear) => Path.Combine(MobileLinkRoot(clientId, financialYear), "Queue");
+    private static string MobileConfirmedHistoryPath(long clientId, string financialYear) => Path.Combine(MobileLinkRoot(clientId, financialYear), "confirmed_history.json");
+
+    private sealed record MobileConfirmedScanHistoryEntry(
+        string ScanId,
+        string InvoiceNumber,
+        string CounterpartyGstin,
+        string Direction,
+        decimal InvoiceTotal,
+        DateTime ConfirmedUtc,
+        List<string> PageSha256List);
+
+    private sealed class MobileLinkedScanSnapshot
+    {
+        public string OrigScanId { get; set; } = string.Empty;
+        public string UserId { get; set; } = string.Empty;
+        public string DeviceId { get; set; } = string.Empty;
+        public DateTime ReceivedUtc { get; set; }
+        public string InvoiceNumber { get; set; } = string.Empty;
+        public string InvoiceDate { get; set; } = string.Empty;
+        public string Counterparty { get; set; } = string.Empty;
+        public string Direction { get; set; } = string.Empty;
+        public string RecognitionMode { get; set; } = string.Empty;
+        public string InvoiceTotal { get; set; } = string.Empty;
+        public string PayloadJson { get; set; } = "{}";
+        public string RawOcr { get; set; } = string.Empty;
+        public string PhoneRawOcr { get; set; } = string.Empty;
+        public string CandidatesJson { get; set; } = "{}";
+        public string RelationshipsJson { get; set; } = "{}";
+        public List<string> SavedFiles { get; set; } = new();
+        public List<string> PageSha256List { get; set; } = new();
+    }
+
+    private sealed class MobileLinkedPagesManifest
+    {
+        public int Schema { get; set; } = 1;
+        public List<MobileLinkedScanSnapshot> Entries { get; set; } = new();
+    }
+
+    private List<MobileConfirmedScanHistoryEntry> LoadMobileConfirmedHistory(long clientId, string financialYear)
+    {
+        lock (_mobileHistoryLock)
+        {
+            var path = MobileConfirmedHistoryPath(clientId, financialYear);
+            try
+            {
+                if (File.Exists(path))
+                    return JsonSerializer.Deserialize<List<MobileConfirmedScanHistoryEntry>>(File.ReadAllText(path, Encoding.UTF8)) ?? new();
+            }
+            catch { }
+            return new();
+        }
+    }
+
+    private void AppendMobileConfirmedHistory(long clientId, string financialYear, MobileConfirmedScanHistoryEntry entry)
+    {
+        lock (_mobileHistoryLock)
+        {
+            var path = MobileConfirmedHistoryPath(clientId, financialYear);
+            var list = LoadMobileConfirmedHistory(clientId, financialYear);
+            list.Add(entry);
+            if (list.Count > 5000)
+                list = list.Skip(list.Count - 5000).ToList();
+            WriteMobileJson(path, list);
+        }
+    }
+
+    private static string ComputeSha256Hex(string filePath)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static void EnsurePageSha256List(MobileInvoiceQueueItem row)
+    {
+        if (row.ImagePaths.Count == 0)
+        {
+            row.PageSha256List.Clear();
+            return;
+        }
+        if (row.PageSha256List.Count == row.ImagePaths.Count && row.PageSha256List.All(x => !string.IsNullOrWhiteSpace(x)))
+            return;
+        var hashes = new List<string>(row.ImagePaths.Count);
+        foreach (var path in row.ImagePaths)
+        {
+            hashes.Add(File.Exists(path) ? ComputeSha256Hex(path) : string.Empty);
+        }
+        row.PageSha256List = hashes;
+    }
+
+    private static string NormalizeInvNoForMatch(string? invoiceNo) =>
+        new((invoiceNo ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+
+    private static decimal ParseMoneySafe(string? raw)
+    {
+        var text = (raw ?? string.Empty).Replace(",", "").Replace("₹", "").Replace("INR", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Rs.", "", StringComparison.OrdinalIgnoreCase).Replace("Rs", "", StringComparison.OrdinalIgnoreCase).Trim();
+        return decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? Math.Abs(d) : 0m;
+    }
+
+    private static (int Page, int Total) ExtractPageMarker(MobileInvoiceQueueItem item)
+    {
+        var combined = (item.RawOcr ?? "") + "\n" + (item.PhoneRawOcr ?? "");
+        var m = Regex.Match(combined, @"\bPage\s*[:\-]?\s*(\d{1,2})\s*(?:of|/)\s*(\d{1,2})\b", RegexOptions.IgnoreCase);
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var p) && int.TryParse(m.Groups[2].Value, out var t) && p >= 1 && t >= p && t <= 50)
+            return (p, t);
+        return (0, 0);
+    }
+
+    private static int InferPageOrderRank(MobileInvoiceQueueItem item)
+    {
+        var (page, _) = ExtractPageMarker(item);
+        if (page > 0) return page;
+        if (HasCarryForwardHint(item)) return 100;
+        if (HasBroughtForwardHint(item) || ParseMoneySafe(item.InvoiceTotal) > 0m) return 200;
+        return 150;
+    }
+
+    private static bool HasCarryForwardHint(MobileInvoiceQueueItem item)
+    {
+        var combined = (item.RawOcr ?? "") + "\n" + (item.PhoneRawOcr ?? "");
+        return Regex.IsMatch(combined, @"\b(?:carry\s*forward|carried\s*forward|c/f|continued\s+on|to\s+be\s+continued|contd\.?|cont\.?\s*page\s*\d+)\b", RegexOptions.IgnoreCase);
+    }
+
+    private static bool HasBroughtForwardHint(MobileInvoiceQueueItem item)
+    {
+        var combined = (item.RawOcr ?? "") + "\n" + (item.PhoneRawOcr ?? "");
+        return Regex.IsMatch(combined, @"\b(?:brought\s*forward|b/f|continued\s+from)\b", RegexOptions.IgnoreCase);
+    }
+
+    private static (string SellerGstin, string CounterpartyGstin, HashSet<string> RowSignatures) ExtractMatchMetadata(MobileInvoiceQueueItem item)
+    {
+        var sellerGstin = string.Empty;
+        var counterpartyGstin = string.Empty;
+        var rowSigs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(item.PayloadJson) ? "{}" : item.PayloadJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("seller", out var s) && s.ValueKind == JsonValueKind.Object && s.TryGetProperty("gstin", out var sg))
+                sellerGstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(sg.GetString());
+            if (root.TryGetProperty("counterparty", out var cp) && cp.ValueKind == JsonValueKind.Object && cp.TryGetProperty("gstin", out var cg))
+                counterpartyGstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(cg.GetString());
+            if (string.IsNullOrWhiteSpace(counterpartyGstin))
+                counterpartyGstin = sellerGstin;
+            if (root.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var r in rowsEl.EnumerateArray())
+                {
+                    var hsn = r.TryGetProperty("hsnSac", out var h) ? (h.GetString() ?? "").Trim() : "";
+                    var desc = r.TryGetProperty("description", out var d) ? (d.GetString() ?? "").Trim().ToUpperInvariant() : "";
+                    var tx = r.TryGetProperty("taxable", out var t) ? ParseMoneySafe(t.ToString()).ToString("0.00", CultureInfo.InvariantCulture) : "0.00";
+                    if (desc.Length > 0 || hsn.Length > 0)
+                        rowSigs.Add($"{hsn}|{desc}|{tx}");
+                }
+            }
+        }
+        catch { }
+        return (sellerGstin, counterpartyGstin, rowSigs);
+    }
+
+    public void RecomputeQueueLinkAndDuplicateFlags(long clientId, string financialYear)
+    {
+        lock (_mobileQueueAnalysisLock)
+        {
+            var items = _mobileInvoiceQueue.Values
+                .Where(x => x.ClientId == clientId &&
+                            x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                            x.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(x => x.ReceivedUtc).ThenBy(x => x.ScanId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (items.Length == 0) return;
+
+            var metaByScan = new Dictionary<string, (string SellerGstin, string CpGstin, HashSet<string> RowSigs, string NormInv, (int Page, int Total) Marker, decimal Total)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var it in items)
+            {
+                it.DuplicateKind = "None";
+                it.DuplicateDetail = string.Empty;
+                it.DuplicateTargetId = string.Empty;
+                it.MultiPageGroupKey = string.Empty;
+                it.MultiPageHint = string.Empty;
+                it.MultiPageCandidateScanIds.Clear();
+                EnsurePageSha256List(it);
+                var md = ExtractMatchMetadata(it);
+                metaByScan[it.ScanId] = (md.SellerGstin, md.CounterpartyGstin, md.RowSignatures, NormalizeInvNoForMatch(it.InvoiceNumber), ExtractPageMarker(it), ParseMoneySafe(it.InvoiceTotal));
+            }
+
+            // Pass 1: Exact Photo SHA-256 duplicates (vs confirmed history and earlier queued items)
+            var confirmedHistory = LoadMobileConfirmedHistory(clientId, financialYear);
+            var confirmedShaMap = new Dictionary<string, MobileConfirmedScanHistoryEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in confirmedHistory)
+            {
+                foreach (var sha in entry.PageSha256List)
+                    if (!string.IsNullOrWhiteSpace(sha)) confirmedShaMap.TryAdd(sha, entry);
+            }
+
+            var seenQueueSha = new Dictionary<string, MobileInvoiceQueueItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (var it in items)
+            {
+                var nonEmptyHashes = it.PageSha256List.Where(h => !string.IsNullOrWhiteSpace(h)).ToArray();
+                var hitConfirmed = nonEmptyHashes.Select(h => confirmedShaMap.TryGetValue(h, out var ce) ? ce : null).FirstOrDefault(x => x is not null);
+                if (hitConfirmed is not null)
+                {
+                    it.DuplicateKind = "ExactPhotoConfirmed";
+                    it.DuplicateTargetId = hitConfirmed.ScanId;
+                    it.DuplicateDetail = $"Exact photo already confirmed on {hitConfirmed.ConfirmedUtc:dd-MM-yyyy} (Inv {(string.IsNullOrWhiteSpace(hitConfirmed.InvoiceNumber) ? hitConfirmed.ScanId : hitConfirmed.InvoiceNumber)})";
+                    continue;
+                }
+                var hitQueue = nonEmptyHashes.Select(h => seenQueueSha.TryGetValue(h, out var qe) ? qe : null).FirstOrDefault(x => x is not null);
+                if (hitQueue is not null)
+                {
+                    it.DuplicateKind = "ExactPhotoInQueue";
+                    it.DuplicateTargetId = hitQueue.ScanId;
+                    it.DuplicateDetail = $"Exact duplicate photo of {(string.IsNullOrWhiteSpace(hitQueue.InvoiceNumber) ? hitQueue.ScanId : hitQueue.InvoiceNumber)} already in queue";
+                    continue;
+                }
+                foreach (var h in nonEmptyHashes)
+                    seenQueueSha.TryAdd(h, it);
+            }
+
+            // Pass 2: Semantic duplicate against already-imported PurchaseRecords / SalesRecords & confirmed history
+            var existingPurchase = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
+            var existingSales = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
+            try
+            {
+                EnsureRepositoriesInitialized();
+                foreach (var grp in _mobilePurchaseRepository.GetRecords(clientId, financialYear)
+                    .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
+                    .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.SupplierGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
+                {
+                    if (grp.Key.Item2.Length < 2) continue;
+                    var first = grp.First();
+                    existingPurchase.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
+                }
+                foreach (var grp in _mobileSalesRepository.GetRecords(clientId, financialYear)
+                    .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
+                    .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.CustomerGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
+                {
+                    if (grp.Key.Item2.Length < 2) continue;
+                    var first = grp.First();
+                    existingSales.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
+                }
+            }
+            catch { /* Empty/uninitialized DB should never block Mobile Link queue display */ }
+
+            foreach (var it in items)
+            {
+                if (it.IsDuplicate) continue;
+                var m = metaByScan[it.ScanId];
+                if (m.NormInv.Length < 2) continue;
+
+                (string Register, string RawInv, DateTime? Date, decimal Value)? match = null;
+                bool MatchesRecord(string recGstin, string recNormInv, decimal recVal)
+                {
+                    if (!string.Equals(recNormInv, m.NormInv, StringComparison.OrdinalIgnoreCase)) return false;
+                    if (m.CpGstin.Length == 15 && recGstin.Length == 15)
+                        return string.Equals(m.CpGstin, recGstin, StringComparison.OrdinalIgnoreCase);
+                    return m.Total > 0m && Math.Abs(recVal - m.Total) <= 1.00m;
+                }
+
+                if (!it.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase))
+                {
+                    var pHit = existingPurchase.FirstOrDefault(r => MatchesRecord(r.Gstin, r.NormInv, r.Value));
+                    if (!string.IsNullOrEmpty(pHit.NormInv))
+                        match = ("Purchase", pHit.RawInv, pHit.Date, pHit.Value);
+                }
+                if (match is null && !it.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase))
+                {
+                    var sHit = existingSales.FirstOrDefault(r => MatchesRecord(r.Gstin, r.NormInv, r.Value));
+                    if (!string.IsNullOrEmpty(sHit.NormInv))
+                        match = ("Sales", sHit.RawInv, sHit.Date, sHit.Value);
+                }
+                if (match is { } hit)
+                {
+                    it.DuplicateKind = "AlreadyImported";
+                    it.DuplicateTargetId = hit.RawInv;
+                    var dateText = hit.Date?.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture) ?? it.InvoiceDate;
+                    it.DuplicateDetail = $"Already imported in {hit.Register} register (Inv {hit.RawInv}, {dateText}, ₹{hit.Value:N2})";
+                    continue;
+                }
+
+                var histHit = confirmedHistory.FirstOrDefault(h =>
+                    NormalizeInvNoForMatch(h.InvoiceNumber) == m.NormInv &&
+                    ((m.CpGstin.Length == 15 && h.CounterpartyGstin.Length == 15 && m.CpGstin == h.CounterpartyGstin) ||
+                     (m.Total > 0m && Math.Abs(h.InvoiceTotal - m.Total) <= 1.00m)));
+                if (histHit is not null)
+                {
+                    it.DuplicateKind = "AlreadyImported";
+                    it.DuplicateTargetId = histHit.ScanId;
+                    it.DuplicateDetail = $"Already confirmed on {histHit.ConfirmedUtc:dd-MM-yyyy} (Inv {histHit.InvoiceNumber}, ₹{histHit.InvoiceTotal:N2})";
+                }
+            }
+
+            // Pass 3: Queue items sharing normalized Invoice Number (allowing blank/client-only GSTIN on continuation pages to match)
+            var activeClientGstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(_clients.GetById(clientId)?.Gstin);
+            string EffectiveCounterpartyGstin(MobileInvoiceQueueItem it)
+            {
+                var md = metaByScan[it.ScanId];
+                if (md.CpGstin.Length == 15 && !md.CpGstin.Equals(activeClientGstin, StringComparison.OrdinalIgnoreCase))
+                    return md.CpGstin;
+                if (md.SellerGstin.Length == 15 && !md.SellerGstin.Equals(activeClientGstin, StringComparison.OrdinalIgnoreCase))
+                    return md.SellerGstin;
+                return string.Empty;
+            }
+            var invGroups = new List<(string GroupKey, List<MobileInvoiceQueueItem> Items)>();
+            foreach (var invGrp in items
+                .Where(it => !string.Equals(it.DuplicateKind, "ExactPhotoInQueue", StringComparison.OrdinalIgnoreCase) &&
+                             !string.Equals(it.DuplicateKind, "ExactPhotoConfirmed", StringComparison.OrdinalIgnoreCase) &&
+                             metaByScan[it.ScanId].NormInv.Length >= 2)
+                .GroupBy(it => metaByScan[it.ScanId].NormInv, StringComparer.OrdinalIgnoreCase))
+            {
+                var distinctPartyGstins = invGrp.Select(EffectiveCounterpartyGstin).Where(g => g.Length == 15).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (distinctPartyGstins.Count <= 1)
+                {
+                    var keyGstin = distinctPartyGstins.FirstOrDefault() ?? "";
+                    invGroups.Add(($"{keyGstin}|{invGrp.Key}", invGrp.ToList()));
+                }
+                else
+                {
+                    foreach (var sub in invGrp.GroupBy(EffectiveCounterpartyGstin, StringComparer.OrdinalIgnoreCase))
+                        invGroups.Add(($"{sub.Key}|{invGrp.Key}", sub.ToList()));
+                }
+            }
+
+            foreach (var grp in invGroups)
+            {
+                var list = grp.Items;
+                if (list.Count < 2) continue;
+                var hasPageMarkers = list.Any(x => metaByScan[x.ScanId].Marker.Total > 1);
+                var hasContinuationKeywords = list.Any(x => HasCarryForwardHint(x) || HasBroughtForwardHint(x));
+                var totalsDifferForSplit = list.Any(x => metaByScan[x.ScanId].Total <= 0m) && list.Any(x => metaByScan[x.ScanId].Total > 0m);
+                var lowRowOverlap = false;
+                if (list.All(x => x.DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase) && metaByScan[x.ScanId].RowSigs.Count > 0))
+                {
+                    var s0 = metaByScan[list[0].ScanId].RowSigs;
+                    var s1 = metaByScan[list[1].ScanId].RowSigs;
+                    var inter = s0.Intersect(s1, StringComparer.OrdinalIgnoreCase).Count();
+                    var union = s0.Union(s1, StringComparer.OrdinalIgnoreCase).Count();
+                    if (union > 0 && (double)inter / union < 0.50) lowRowOverlap = true;
+                }
+
+                if (hasPageMarkers || hasContinuationKeywords || totalsDifferForSplit || lowRowOverlap)
+                {
+                    var ordered = list.OrderBy(x => metaByScan[x.ScanId].Marker.Page > 0 ? metaByScan[x.ScanId].Marker.Page : int.MaxValue)
+                        .ThenBy(x => x.ReceivedUtc).ToList();
+                    var scanIds = ordered.Select(x => x.ScanId).ToList();
+                    var groupKey = "INV:" + grp.GroupKey;
+                    foreach (var x in ordered)
+                    {
+                        x.MultiPageGroupKey = groupKey;
+                        x.MultiPageCandidateScanIds = scanIds.ToList();
+                        x.MultiPageHint = $"Multi-page candidate ({ordered.Count} scans share Inv {ordered[0].InvoiceNumber}) — click Link Pages";
+                    }
+                }
+                else
+                {
+                    var orig = list[0];
+                    for (var i = 1; i < list.Count; i++)
+                    {
+                        if (list[i].IsDuplicate) continue;
+                        list[i].DuplicateKind = "InvoiceInQueue";
+                        list[i].DuplicateTargetId = orig.ScanId;
+                        list[i].DuplicateDetail = $"Duplicate of queued invoice {orig.InvoiceNumber} ({orig.Counterparty}, ₹{orig.InvoiceTotal})";
+                    }
+                }
+            }
+
+            // Pass 4: Adjacent scans without repeated invoice numbers (e.g., Page 1/2 followed by Page 2/2 or Brought Forward)
+            var eligible = items.Where(x => !x.IsDuplicate && string.IsNullOrEmpty(x.MultiPageGroupKey)).ToList();
+            var idx = 0;
+            while (idx < eligible.Count - 1)
+            {
+                var chain = new List<MobileInvoiceQueueItem> { eligible[idx] };
+                var cur = idx;
+                while (cur < eligible.Count - 1)
+                {
+                    var a = eligible[cur];
+                    var b = eligible[cur + 1];
+                    if ((b.ReceivedUtc - a.ReceivedUtc).TotalMinutes > 15) break;
+                    var ma = metaByScan[a.ScanId];
+                    var mb = metaByScan[b.ScanId];
+                    var sequentialMarker = ma.Marker.Total > 1 && mb.Marker.Total == ma.Marker.Total && mb.Marker.Page == ma.Marker.Page + 1;
+                    var carryBrought = (HasCarryForwardHint(a) || (ma.Marker.Total > 1 && ma.Marker.Page < ma.Marker.Total) ||
+                                        (a.DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase) && ma.Total <= 0m))
+                        && (HasBroughtForwardHint(b) || (mb.NormInv.Length == 0 && ma.SellerGstin.Length == 15 && mb.SellerGstin == ma.SellerGstin));
+                    if (!sequentialMarker && !carryBrought) break;
+                    chain.Add(b);
+                    cur++;
+                }
+                if (chain.Count >= 2)
+                {
+                    var groupKey = "ADJ:" + chain[0].ScanId;
+                    var scanIds = chain.Select(x => x.ScanId).ToList();
+                    foreach (var x in chain)
+                    {
+                        x.MultiPageGroupKey = groupKey;
+                        x.MultiPageCandidateScanIds = scanIds.ToList();
+                        x.MultiPageHint = $"Multi-page continuation detected ({chain.Count} adjacent pages) — click Link Pages";
+                    }
+                    idx = cur + 1;
+                }
+                else idx++;
+            }
+
+            foreach (var it in items) it.RaiseUiPropertiesChanged();
+        }
+    }
+
+    public string LinkMobileInvoiceScans(long clientId, string financialYear, IReadOnlyList<string> scanIds, bool triggerOcr = true)
+    {
+        if (scanIds is null || scanIds.Count < 2)
+            throw new InvalidOperationException("Select at least 2 queued scans to link into a multi-page invoice.");
+        var distinctIds = scanIds.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (distinctIds.Count < 2)
+            throw new InvalidOperationException("Select at least 2 distinct scans to link.");
+
+        MobileInvoiceQueueItem primary;
+        lock (_mobileQueueAnalysisLock)
+        {
+            var found = new List<MobileInvoiceQueueItem>();
+            foreach (var id in distinctIds)
+            {
+                var k = MobileQueueKey(clientId, financialYear, id);
+                if (!_mobileInvoiceQueue.TryGetValue(k, out var item) || !item.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Scan {id} is no longer in the queue.");
+                if (_mobileInvoiceOcrInFlight.ContainsKey(k) || _mobileInvoiceChildOnlyInFlight.ContainsKey(k))
+                    throw new InvalidOperationException($"OCR is currently running on {id}. Wait until OCR finishes before linking pages.");
+                if (item.ImagePaths.Count == 0 || item.ImagePaths.Any(p => !File.Exists(p)))
+                    throw new InvalidOperationException($"Original photo for {id} is missing.");
+                found.Add(item);
+            }
+
+            var ordered = found
+                .OrderBy(InferPageOrderRank)
+                .ThenBy(x => x.ReceivedUtc)
+                .ThenBy(x => x.ScanId, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            primary = ordered[0];
+            var linkedDir = Path.Combine(primary.EvidenceFolder, "LinkedPages");
+            Directory.CreateDirectory(linkedDir);
+            var manifestPath = Path.Combine(linkedDir, "linked_manifest.json");
+            var manifest = new MobileLinkedPagesManifest();
+            var combinedImagesToCopy = new List<string>();
+            var combinedPhoneOcr = new List<string>();
+            var cachedPages = new List<string>();
+            var allCachedValid = true;
+
+            foreach (var scan in ordered)
+            {
+                EnsurePageSha256List(scan);
+                if (!string.IsNullOrWhiteSpace(scan.PhoneRawOcr))
+                    combinedPhoneOcr.Add(scan.PhoneRawOcr);
+                var cachedList = TryExtractCachedLightOnPages(scan);
+                if (cachedList is not null && cachedList.Count == scan.ImagePaths.Count)
+                    cachedPages.AddRange(cachedList);
+                else
+                    allCachedValid = false;
+
+                var existingManifestPath = Path.Combine(scan.EvidenceFolder, "LinkedPages", "linked_manifest.json");
+                if (File.Exists(existingManifestPath))
+                {
+                    var subManifest = JsonSerializer.Deserialize<MobileLinkedPagesManifest>(File.ReadAllText(existingManifestPath, Encoding.UTF8));
+                    if (subManifest is { Entries.Count: > 0 })
+                    {
+                        foreach (var snap in subManifest.Entries)
+                        {
+                            var dstSnapDir = Path.Combine(linkedDir, SafeMobileSegment(snap.OrigScanId));
+                            Directory.CreateDirectory(dstSnapDir);
+                            var srcSnapDir = Path.Combine(scan.EvidenceFolder, "LinkedPages", SafeMobileSegment(snap.OrigScanId));
+                            var relNames = new List<string>();
+                            foreach (var rel in snap.SavedFiles)
+                            {
+                                var srcFile = Path.Combine(srcSnapDir, rel);
+                                var dstFile = Path.Combine(dstSnapDir, rel);
+                                if (!string.Equals(Path.GetFullPath(srcFile), Path.GetFullPath(dstFile), StringComparison.OrdinalIgnoreCase) && File.Exists(srcFile))
+                                    File.Copy(srcFile, dstFile, true);
+                                if (File.Exists(dstFile))
+                                {
+                                    relNames.Add(rel);
+                                    combinedImagesToCopy.Add(dstFile);
+                                }
+                            }
+                            snap.SavedFiles = relNames;
+                            manifest.Entries.Add(snap);
+                        }
+                        continue;
+                    }
+                }
+
+                var snapDir = Path.Combine(linkedDir, SafeMobileSegment(scan.ScanId));
+                Directory.CreateDirectory(snapDir);
+                var savedFiles = new List<string>();
+                for (var i = 0; i < scan.ImagePaths.Count; i++)
+                {
+                    var srcImg = scan.ImagePaths[i];
+                    var ext = Path.GetExtension(srcImg);
+                    if (string.IsNullOrWhiteSpace(ext)) ext = ".jpg";
+                    var rel = $"orig-{i + 1:000}{ext.ToLowerInvariant()}";
+                    var dstBackup = Path.Combine(snapDir, rel);
+                    File.Copy(srcImg, dstBackup, true);
+                    savedFiles.Add(rel);
+                    combinedImagesToCopy.Add(dstBackup);
+                }
+                manifest.Entries.Add(new MobileLinkedScanSnapshot
+                {
+                    OrigScanId = scan.ScanId,
+                    UserId = scan.UserId,
+                    DeviceId = scan.DeviceId,
+                    ReceivedUtc = scan.ReceivedUtc,
+                    InvoiceNumber = scan.InvoiceNumber,
+                    InvoiceDate = scan.InvoiceDate,
+                    Counterparty = scan.Counterparty,
+                    Direction = scan.Direction,
+                    RecognitionMode = scan.RecognitionMode,
+                    InvoiceTotal = scan.InvoiceTotal,
+                    PayloadJson = scan.PayloadJson,
+                    RawOcr = scan.RawOcr,
+                    PhoneRawOcr = scan.PhoneRawOcr,
+                    CandidatesJson = scan.CandidatesJson,
+                    RelationshipsJson = scan.RelationshipsJson,
+                    SavedFiles = savedFiles,
+                    PageSha256List = scan.PageSha256List.ToList()
+                });
+            }
+
+            WriteMobileJson(manifestPath, manifest);
+
+            foreach (var oldPage in Directory.GetFiles(primary.EvidenceFolder, "page-*"))
+            {
+                try { File.Delete(oldPage); } catch { }
+            }
+
+            var newImagePaths = new List<string>(combinedImagesToCopy.Count);
+            for (var i = 0; i < combinedImagesToCopy.Count; i++)
+            {
+                var ext = Path.GetExtension(combinedImagesToCopy[i]);
+                if (string.IsNullOrWhiteSpace(ext)) ext = ".jpg";
+                var dst = Path.Combine(primary.EvidenceFolder, $"page-{i + 1:000}{ext.ToLowerInvariant()}");
+                File.Copy(combinedImagesToCopy[i], dst, true);
+                newImagePaths.Add(dst);
+            }
+
+            primary.ImagePaths = newImagePaths;
+            primary.PageSha256List.Clear();
+            EnsurePageSha256List(primary);
+            primary.LinkedScanIds = manifest.Entries.Select(e => e.OrigScanId).ToList();
+            primary.PhoneRawOcr = string.Join(Environment.NewLine + Environment.NewLine + "<!-- PAGE BREAK -->" + Environment.NewLine + Environment.NewLine, combinedPhoneOcr);
+            primary.PendingCachedPageOcrTexts = (allCachedValid && cachedPages.Count == primary.ImagePaths.Count) ? cachedPages : null;
+            primary.IsCheckedForLink = false;
+            primary.ChildStage1Archive = string.Empty;
+            primary.ChildStage1Status = primary.PendingCachedPageOcrTexts is not null
+                ? $"Linked {primary.ImagePaths.Count} pages ({string.Join(" + ", primary.LinkedScanIds)}); stitching cached OCR..."
+                : $"Linked {primary.ImagePaths.Count} pages ({string.Join(" + ", primary.LinkedScanIds)}); queued for multi-page OCR...";
+            primary.DocumentOcrState = triggerOcr ? "Processing" : "NeedsAction";
+            primary.DocumentOcrMessage = primary.ChildStage1Status;
+            primary.DocumentOcrAuthority = "Multi-page OCR pending";
+
+            foreach (var sec in ordered.Skip(1))
+            {
+                _mobileInvoiceQueue.TryRemove(MobileQueueKey(clientId, financialYear, sec.ScanId), out _);
+                TryDeleteMobileEvidence(sec.EvidenceFolder);
+            }
+        }
+
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+
+        if (triggerOcr)
+        {
+            var client = _clients.GetById(clientId);
+            if (client is not null && !client.IsArchived && client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+                _ = RunMobileInvoiceDocumentOcrAsync(primary, client);
+        }
+        return $"Linked {primary.ImagePaths.Count} pages into {primary.ScanId} and started multi-page OCR.";
+    }
+
+    public string AutoLinkMultiPageCandidates(long clientId, string financialYear, bool triggerOcr = true)
+    {
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        var groups = _mobileInvoiceQueue.Values
+            .Where(x => x.ClientId == clientId &&
+                        x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                        x.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(x.MultiPageGroupKey) &&
+                        x.MultiPageCandidateScanIds.Count >= 2)
+            .GroupBy(x => x.MultiPageGroupKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Select(x => x.ScanId).ToList())
+            .Where(ids => ids.Count >= 2)
+            .ToList();
+        if (groups.Count == 0)
+            return "No multi-page candidate groups found in queue.";
+        var linkedGroups = 0;
+        foreach (var ids in groups)
+        {
+            if (ids.Any(id => { var k = MobileQueueKey(clientId, financialYear, id); return _mobileInvoiceOcrInFlight.ContainsKey(k) || _mobileInvoiceChildOnlyInFlight.ContainsKey(k); }))
+                continue;
+            LinkMobileInvoiceScans(clientId, financialYear, ids, triggerOcr);
+            linkedGroups++;
+        }
+        return linkedGroups > 0
+            ? $"Auto-linked {linkedGroups} multi-page invoice group(s)."
+            : "Multi-page candidates are currently running OCR; try Auto-Link once OCR completes.";
+    }
+
+    public string UnlinkMobileInvoiceScan(long clientId, string financialYear, string scanId, bool triggerOcr = true)
+    {
+        var key = MobileQueueKey(clientId, financialYear, scanId);
+        var restoredItems = new List<MobileInvoiceQueueItem>();
+        lock (_mobileQueueAnalysisLock)
+        {
+            if (!_mobileInvoiceQueue.TryGetValue(key, out var row) || !row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The selected scan is not in this queue.");
+            if (row.ImagePaths.Count < 2)
+                throw new InvalidOperationException("Only multi-page scans (2+ pages) can be unlinked.");
+            if (_mobileInvoiceOcrInFlight.ContainsKey(key) || _mobileInvoiceChildOnlyInFlight.ContainsKey(key))
+                throw new InvalidOperationException("Wait for OCR to finish before unlinking pages.");
+
+            var linkedDir = Path.Combine(row.EvidenceFolder, "LinkedPages");
+            var manifestPath = Path.Combine(linkedDir, "linked_manifest.json");
+            MobileLinkedPagesManifest? manifest = null;
+            if (File.Exists(manifestPath))
+            {
+                try { manifest = JsonSerializer.Deserialize<MobileLinkedPagesManifest>(File.ReadAllText(manifestPath, Encoding.UTF8)); } catch { }
+            }
+
+            if (manifest is { Entries.Count: >= 2 })
+            {
+                var first = manifest.Entries[0];
+                var firstSnapDir = Path.Combine(linkedDir, SafeMobileSegment(first.OrigScanId));
+                var tempFirstFiles = new List<string>();
+                for (var i = 0; i < first.SavedFiles.Count; i++)
+                {
+                    var src = Path.Combine(firstSnapDir, first.SavedFiles[i]);
+                    if (!File.Exists(src)) continue;
+                    var ext = Path.GetExtension(src);
+                    var dst = Path.Combine(row.EvidenceFolder, $"restored-{i + 1:000}{ext}");
+                    File.Copy(src, dst, true);
+                    tempFirstFiles.Add(dst);
+                }
+                foreach (var oldPage in Directory.GetFiles(row.EvidenceFolder, "page-*"))
+                {
+                    try { File.Delete(oldPage); } catch { }
+                }
+                var firstImages = new List<string>();
+                for (var i = 0; i < tempFirstFiles.Count; i++)
+                {
+                    var ext = Path.GetExtension(tempFirstFiles[i]);
+                    var finalPath = Path.Combine(row.EvidenceFolder, $"page-{i + 1:000}{ext}");
+                    File.Move(tempFirstFiles[i], finalPath, true);
+                    firstImages.Add(finalPath);
+                }
+                row.ImagePaths = firstImages;
+                row.PageSha256List.Clear();
+                EnsurePageSha256List(row);
+                row.LinkedScanIds = [row.ScanId];
+                row.PayloadJson = first.PayloadJson;
+                row.PhoneRawOcr = first.PhoneRawOcr;
+                row.RawOcr = first.RawOcr;
+                row.CandidatesJson = first.CandidatesJson;
+                row.RelationshipsJson = first.RelationshipsJson;
+                row.InvoiceNumber = first.InvoiceNumber;
+                row.InvoiceDate = first.InvoiceDate;
+                row.Counterparty = first.Counterparty;
+                row.Direction = first.Direction;
+                row.RecognitionMode = first.RecognitionMode;
+                row.InvoiceTotal = first.InvoiceTotal;
+                row.ChildStage1Archive = string.Empty;
+                row.DocumentOcrState = triggerOcr ? "Processing" : "NeedsAction";
+                row.DocumentOcrMessage = "Unlinked page 1; OCR queued.";
+                row.ChildStage1Status = row.DocumentOcrMessage;
+                restoredItems.Add(row);
+
+                var queueRoot = MobileInvoiceQueueRoot(clientId, financialYear);
+                foreach (var snap in manifest.Entries.Skip(1))
+                {
+                    var snapDir = Path.Combine(linkedDir, SafeMobileSegment(snap.OrigScanId));
+                    var newId = _mobileInvoiceQueue.ContainsKey(MobileQueueKey(clientId, financialYear, snap.OrigScanId))
+                        ? SafeMobileSegment($"{snap.OrigScanId}-{Guid.NewGuid():N}")
+                        : snap.OrigScanId;
+                    var secFolder = Path.Combine(queueRoot, newId);
+                    Directory.CreateDirectory(secFolder);
+                    var secImages = new List<string>();
+                    for (var i = 0; i < snap.SavedFiles.Count; i++)
+                    {
+                        var src = Path.Combine(snapDir, snap.SavedFiles[i]);
+                        if (!File.Exists(src)) continue;
+                        var ext = Path.GetExtension(src);
+                        var dst = Path.Combine(secFolder, $"page-{i + 1:000}{ext}");
+                        File.Copy(src, dst, true);
+                        secImages.Add(dst);
+                    }
+                    var restored = new MobileInvoiceQueueItem
+                    {
+                        ScanId = newId, ClientId = clientId, FinancialYear = financialYear, UserId = snap.UserId, DeviceId = snap.DeviceId,
+                        ReceivedUtc = snap.ReceivedUtc, Status = "Queued", PayloadJson = snap.PayloadJson, RawOcr = snap.RawOcr,
+                        PhoneRawOcr = snap.PhoneRawOcr, CandidatesJson = snap.CandidatesJson, RelationshipsJson = snap.RelationshipsJson,
+                        EvidenceFolder = secFolder, ImagePaths = secImages, LinkedScanIds = [newId],
+                        InvoiceNumber = snap.InvoiceNumber, InvoiceDate = snap.InvoiceDate, Counterparty = snap.Counterparty,
+                        Direction = snap.Direction, RecognitionMode = snap.RecognitionMode, InvoiceTotal = snap.InvoiceTotal,
+                        DocumentOcrState = triggerOcr ? "Processing" : "NeedsAction",
+                        DocumentOcrMessage = "Unlinked page; OCR queued.", ChildStage1Status = "Unlinked page; OCR queued.",
+                        DocumentOcrAuthority = "Pending"
+                    };
+                    EnsurePageSha256List(restored);
+                    _mobileInvoiceQueue[MobileQueueKey(clientId, financialYear, newId)] = restored;
+                    restoredItems.Add(restored);
+                }
+                TryDeleteMobileEvidence(linkedDir);
+            }
+            else
+            {
+                // Multi-page scan uploaded in a single mobile submission: split pages 2..N out cleanly
+                var origPaths = row.ImagePaths.Where(File.Exists).ToList();
+                row.ImagePaths = [origPaths[0]];
+                row.PageSha256List.Clear();
+                EnsurePageSha256List(row);
+                row.LinkedScanIds = [row.ScanId];
+                row.ChildStage1Archive = string.Empty;
+                row.DocumentOcrState = triggerOcr ? "Processing" : "NeedsAction";
+                row.DocumentOcrMessage = "Split page 1; OCR queued.";
+                row.ChildStage1Status = row.DocumentOcrMessage;
+                restoredItems.Add(row);
+
+                var queueRoot = MobileInvoiceQueueRoot(clientId, financialYear);
+                for (var i = 1; i < origPaths.Count; i++)
+                {
+                    var newId = SafeMobileSegment($"{row.ScanId}-P{i + 1}");
+                    var secFolder = Path.Combine(queueRoot, newId);
+                    Directory.CreateDirectory(secFolder);
+                    var ext = Path.GetExtension(origPaths[i]);
+                    var dst = Path.Combine(secFolder, $"page-001{ext}");
+                    File.Move(origPaths[i], dst, true);
+                    var sec = new MobileInvoiceQueueItem
+                    {
+                        ScanId = newId, ClientId = clientId, FinancialYear = financialYear, UserId = row.UserId, DeviceId = row.DeviceId,
+                        ReceivedUtc = row.ReceivedUtc.AddMilliseconds(i), Status = "Queued", PayloadJson = row.PayloadJson,
+                        RawOcr = row.PhoneRawOcr, PhoneRawOcr = row.PhoneRawOcr, CandidatesJson = "{}", RelationshipsJson = "{}",
+                        EvidenceFolder = secFolder, ImagePaths = [dst], LinkedScanIds = [newId],
+                        RecognitionMode = row.RecognitionMode, DocumentOcrState = triggerOcr ? "Processing" : "NeedsAction",
+                        DocumentOcrMessage = $"Split page {i + 1}; OCR queued.", ChildStage1Status = $"Split page {i + 1}; OCR queued.",
+                        DocumentOcrAuthority = "Pending"
+                    };
+                    EnsurePageSha256List(sec);
+                    _mobileInvoiceQueue[MobileQueueKey(clientId, financialYear, newId)] = sec;
+                    restoredItems.Add(sec);
+                }
+            }
+        }
+
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+
+        if (triggerOcr)
+        {
+            var client = _clients.GetById(clientId);
+            if (client is not null && !client.IsArchived && client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var it in restoredItems)
+                    _ = RunMobileInvoiceDocumentOcrAsync(it, client);
+            }
+        }
+        return $"Unlinked {restoredItems.Count} individual page(s) back into the queue.";
+    }
+
+    public string RemoveDuplicateMobileScan(long clientId, string financialYear, string scanId)
+    {
+        var key = MobileQueueKey(clientId, financialYear, scanId);
+        lock (_mobileQueueAnalysisLock)
+        {
+            if (!_mobileInvoiceQueue.TryGetValue(key, out var row) || !row.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The selected scan is not in this queue.");
+            if (_mobileInvoiceOcrInFlight.ContainsKey(key) || _mobileInvoiceChildOnlyInFlight.ContainsKey(key))
+                throw new InvalidOperationException("Wait for OCR to finish before removing this scan.");
+            _mobileInvoiceQueue.TryRemove(key, out _);
+            TryDeleteMobileEvidence(row.EvidenceFolder);
+        }
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        return $"Removed scan {scanId} from the Mobile Link queue.";
+    }
+
+    internal MobileInvoiceQueueItem RegisterQueuedMobileScanForTest(
+        long clientId,
+        string financialYear,
+        string scanId,
+        IReadOnlyList<string> sourceImagePaths,
+        string payloadJson,
+        string rawOcr,
+        string documentOcrState = "Ready",
+        DateTime? receivedUtc = null)
+    {
+        var folder = Path.Combine(MobileInvoiceQueueRoot(clientId, financialYear), SafeMobileSegment(scanId));
+        Directory.CreateDirectory(folder);
+        var copied = new List<string>();
+        for (var i = 0; i < sourceImagePaths.Count; i++)
+        {
+            var ext = Path.GetExtension(sourceImagePaths[i]);
+            if (string.IsNullOrWhiteSpace(ext)) ext = ".jpg";
+            var dst = Path.Combine(folder, $"page-{i + 1:000}{ext.ToLowerInvariant()}");
+            File.Copy(sourceImagePaths[i], dst, true);
+            copied.Add(dst);
+        }
+        var summary = ParseMobileInvoiceSummary(payloadJson);
+        var item = new MobileInvoiceQueueItem
+        {
+            ScanId = scanId, ClientId = clientId, FinancialYear = financialYear, UserId = "test-user", DeviceId = "test-device",
+            ReceivedUtc = receivedUtc ?? DateTime.UtcNow, Status = "Queued", PayloadJson = payloadJson,
+            RawOcr = rawOcr, PhoneRawOcr = rawOcr, EvidenceFolder = folder, ImagePaths = copied, LinkedScanIds = [scanId],
+            InvoiceNumber = summary.InvoiceNumber, InvoiceDate = summary.InvoiceDate, Counterparty = summary.Counterparty,
+            Direction = summary.Direction, RecognitionMode = summary.RecognitionMode, InvoiceTotal = summary.InvoiceTotal,
+            DocumentOcrState = documentOcrState, DocumentOcrMessage = documentOcrState == "Ready" ? "Ready" : "Pending"
+        };
+        EnsurePageSha256List(item);
+        _mobileInvoiceQueue[MobileQueueKey(clientId, financialYear, scanId)] = item;
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        return item;
+    }
+
+    internal static string MobileAutoImportInboxFolder(long clientId, string financialYear) =>
+        Path.Combine(MobileLinkRoot(clientId, financialYear), "AutoImportInbox");
+
+    internal (int QueuedCount, int DuplicateCount, string Summary) ImportLocalInvoicePhotos(
+        long clientId,
+        string financialYear,
+        IReadOnlyList<string> sourceFilePaths,
+        string recognitionMode = "Accounting Invoice",
+        bool triggerOcr = true)
+    {
+        EnsureRepositoriesInitialized();
+        var client = _clients.GetById(clientId);
+        if (client is null || client.IsArchived || !client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Selected Client/FY is not available for Mobile Link import.");
+
+        var allowedExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".pdf" };
+        var validFiles = (sourceFilePaths ?? [])
+            .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p) && allowedExts.Contains(Path.GetExtension(p)))
+            .ToArray();
+        if (validFiles.Length == 0)
+            return (0, 0, "No supported invoice image/PDF files found.");
+
+        var normalizedMode = string.IsNullOrWhiteSpace(recognitionMode) ? "Accounting Invoice" : recognitionMode.Trim();
+        var batchStamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+        var queueRoot = MobileInvoiceQueueRoot(clientId, financialYear);
+        var addedRows = new List<MobileInvoiceQueueItem>();
+        var baseTime = DateTime.UtcNow;
+
+        for (var i = 0; i < validFiles.Length; i++)
+        {
+            var srcPath = validFiles[i];
+            var ext = Path.GetExtension(srcPath).ToLowerInvariant();
+            var stem = SafeMobileSegment(Path.GetFileNameWithoutExtension(srcPath));
+            if (stem.Length > 28) stem = stem[..28];
+            var scanId = SafeMobileSegment($"LOCAL-{batchStamp}-{i + 1:00}-{stem}");
+            while (_mobileInvoiceQueue.ContainsKey(MobileQueueKey(clientId, financialYear, scanId)))
+                scanId = SafeMobileSegment($"LOCAL-{batchStamp}-{i + 1:00}-{Guid.NewGuid().ToString("N")[..6]}");
+
+            var folder = Path.Combine(queueRoot, scanId);
+            Directory.CreateDirectory(folder);
+            var dstPath = Path.Combine(folder, $"page-001{ext}");
+            File.Copy(srcPath, dstPath, true);
+
+            var payloadJson = JsonSerializer.Serialize(new
+            {
+                clientId,
+                financialYear = client.FinancialYear,
+                direction = "Auto",
+                recognitionMode = normalizedMode
+            });
+            var row = new MobileInvoiceQueueItem
+            {
+                ScanId = scanId,
+                ClientId = clientId,
+                FinancialYear = client.FinancialYear,
+                UserId = Environment.UserName,
+                DeviceId = "LOCAL-PC",
+                ReceivedUtc = baseTime.AddMilliseconds(i),
+                Status = "Queued",
+                PayloadJson = payloadJson,
+                RawOcr = string.Empty,
+                PhoneRawOcr = string.Empty,
+                CandidatesJson = "{}",
+                RelationshipsJson = "{}",
+                EvidenceFolder = folder,
+                ImagePaths = [dstPath],
+                LinkedScanIds = [scanId],
+                RecognitionMode = normalizedMode,
+                DocumentOcrState = "Processing",
+                DocumentOcrMessage = $"Auto-imported ({i + 1}/{validFiles.Length}) · queued for InvoiceVision v2.",
+                DocumentOcrAuthority = "InvoiceVision v2 pending"
+            };
+            EnsurePageSha256List(row);
+            _mobileInvoiceQueue[MobileQueueKey(clientId, client.FinancialYear, scanId)] = row;
+            addedRows.Add(row);
+        }
+
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        var dupCount = 0;
+        var ocrStarted = 0;
+        foreach (var row in addedRows)
+        {
+            var exactPhotoDup = string.Equals(row.DuplicateKind, "ExactPhotoInQueue", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(row.DuplicateKind, "ExactPhotoConfirmed", StringComparison.OrdinalIgnoreCase);
+            if (exactPhotoDup)
+            {
+                dupCount++;
+                row.DocumentOcrState = "NeedsAction";
+                row.DocumentOcrMessage = row.DuplicateDetail + " · Remove duplicate or click Retry OCR to extract anyway.";
+                row.DocumentOcrAuthority = "Skipped automatic OCR — exact duplicate photo detected";
+                row.ChildStage1Status = "Skipped automatic OCR — exact duplicate photo detected.";
+                row.RaiseUiPropertiesChanged();
+            }
+            else if (triggerOcr)
+            {
+                ocrStarted++;
+                _ = RunMobileInvoiceDocumentOcrAsync(row, client);
+            }
+        }
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        var msg = $"Queued {addedRows.Count} photo(s) in {normalizedMode} mode ({ocrStarted} extracting" +
+                  (dupCount > 0 ? $", {dupCount} duplicate(s) flagged" : "") + ").";
+        return (addedRows.Count, dupCount, msg);
+    }
+
+    internal int SweepLocalAutoImportInbox(long clientId, string financialYear, bool triggerOcr = true)
+    {
+        if (_disposed) return 0;
+        var inbox = MobileAutoImportInboxFolder(clientId, financialYear);
+        if (!Directory.Exists(inbox)) return 0;
+
+        lock (_mobileAutoImportLock)
+        {
+            var allowedExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".pdf" };
+            var pending = Directory.EnumerateFiles(inbox, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(f => allowedExts.Contains(Path.GetExtension(f)))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (pending.Length == 0) return 0;
+
+            var (queued, _, _) = ImportLocalInvoicePhotos(clientId, financialYear, pending, "Accounting Invoice", triggerOcr);
+            var archiveDir = Path.Combine(inbox, "_Imported");
+            Directory.CreateDirectory(archiveDir);
+            var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+            foreach (var src in pending)
+            {
+                try
+                {
+                    var dest = Path.Combine(archiveDir, $"{stamp}_{Path.GetFileName(src)}");
+                    File.Move(src, dest, overwrite: true);
+                }
+                catch { }
+            }
+            return queued;
+        }
+    }
+
+    private void SweepAllAutoImportInboxes()
+    {
+        if (_disposed) return;
+        try
+        {
+            foreach (var client in _clients.GetAll(includeArchived: false).Where(c => !c.IsArchived && !string.IsNullOrWhiteSpace(c.FinancialYear)))
+            {
+                if (Directory.Exists(MobileAutoImportInboxFolder(client.Id, client.FinancialYear)))
+                    SweepLocalAutoImportInbox(client.Id, client.FinancialYear, triggerOcr: true);
+            }
+        }
+        catch { /* Startup inbox sweep is best-effort. */ }
+    }
     private static string SafeMobileSegment(string value)
     {
         var safe = string.Concat((value ?? string.Empty).Where(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.'));
@@ -3068,37 +4275,220 @@ public sealed class SecureLanServerService : IDisposable
             var pending = GetMobileInvoiceQueue(clientId, client.FinancialYear).Count(x => x.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase));
             return Results.Json(new { accepted = true, duplicate = true, showMappingHere = true, action = "ScanNext", scanId, queuePosition = Math.Max(1, pending), pendingCount = pending });
         }
-        var queueRoot = MobileInvoiceQueueRoot(clientId, client.FinancialYear);
-        var folder = Path.Combine(queueRoot, scanId);
-        Directory.CreateDirectory(folder);
-        var imagePaths = new List<string>();
-        var index = 0;
-        foreach (var file in form.Files)
+        List<MobileInvoiceQueueItem> addedRows;
+        bool anyDup;
+        try
         {
-            index++;
-            var extension = Path.GetExtension(file.FileName); if (extension.Length > 8 || extension.Any(ch => !char.IsLetterOrDigit(ch) && ch != '.')) extension = ".jpg";
-            if (string.IsNullOrWhiteSpace(extension)) extension = ".jpg";
-            var imagePath = Path.Combine(folder, $"page-{index:000}{extension.ToLowerInvariant()}");
-            await using var source = file.OpenReadStream(); await using var target = File.Create(imagePath); await source.CopyToAsync(target, context.RequestAborted).ConfigureAwait(false);
-            imagePaths.Add(imagePath);
+            (addedRows, anyDup) = await IngestMobileInvoiceUploadFilesAsync(
+                client,
+                user.WindowsUserName,
+                device.DeviceId,
+                scanId,
+                payloadJson,
+                rawOcr,
+                normalizedCandidates,
+                normalizedRelationships,
+                form.Files.ToList(),
+                triggerOcr: true,
+                context.RequestAborted).ConfigureAwait(false);
         }
-        var summary = ParseMobileInvoiceSummary(payloadJson);
-        var row = new MobileInvoiceQueueItem
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
-            ScanId = scanId, ClientId = clientId, FinancialYear = client.FinancialYear, UserId = user.WindowsUserName, DeviceId = device.DeviceId,
-            ReceivedUtc = DateTime.UtcNow, Status = "Queued", PayloadJson = payloadJson, RawOcr = rawOcr ?? string.Empty, PhoneRawOcr = rawOcr ?? string.Empty, CandidatesJson = normalizedCandidates, RelationshipsJson = normalizedRelationships,
-            EvidenceFolder = folder, ImagePaths = imagePaths, InvoiceNumber = summary.InvoiceNumber, InvoiceDate = summary.InvoiceDate,
-            Counterparty = summary.Counterparty, Direction = summary.Direction, RecognitionMode = summary.RecognitionMode, InvoiceTotal = summary.InvoiceTotal,
-            DocumentOcrState = imagePaths.Count > 0 ? "Processing" : "NeedsAction",
-            // R46 historic gate: AAH Paddle Invoice OCR + spatial document reconstruction queued.
-            DocumentOcrMessage = imagePaths.Count > 0 ? "Independent ONNX Invoice OCR + polygon reconstruction queued." : "No original invoice image was uploaded for ONNX OCR.",
-            DocumentOcrAuthority = imagePaths.Count > 0 ? "AAH ONNX invoice review pending" : "Unavailable"
-        };
-        _mobileInvoiceQueue[MobileQueueKey(clientId, client.FinancialYear, scanId)] = row;
-        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
-        if (imagePaths.Count > 0) _ = RunMobileInvoiceDocumentOcrAsync(row, client);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            SafeLogEvent("MobileInvoiceUploadError", user.WindowsUserName, device.DeviceId, ex.Message, false);
+            return Results.Json(new { accepted = false, error = "Mobile invoice upload failed: " + ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
+        }
+
         var position = GetMobileInvoiceQueue(clientId, client.FinancialYear).Count(x => x.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase));
-        return Results.Json(new { accepted = true, showMappingHere = true, action = "ScanNext", scanId, queuePosition = position, pendingCount = position, windowsDocumentOcr = row.DocumentOcrState });
+        return Results.Json(new { accepted = true, duplicate = false, duplicatePhoto = anyDup, splitCount = addedRows.Count, showMappingHere = true, action = "ScanNext", scanId, queuePosition = position, pendingCount = position, windowsDocumentOcr = addedRows.FirstOrDefault()?.DocumentOcrState ?? "Processing" });
+    }
+
+    internal async Task<(List<MobileInvoiceQueueItem> AddedRows, bool AnyDuplicatePhoto)> IngestMobileInvoiceUploadFilesAsync(
+        AccountingAutomationHub.Domain.Clients.ClientProfile client,
+        string userId,
+        string deviceId,
+        string scanId,
+        string payloadJson,
+        string rawOcr,
+        string normalizedCandidates,
+        string normalizedRelationships,
+        IReadOnlyList<Microsoft.AspNetCore.Http.IFormFile> uploadedFiles,
+        bool triggerOcr,
+        CancellationToken cancellationToken)
+    {
+        var clientId = client.Id;
+        var queueRoot = MobileInvoiceQueueRoot(clientId, client.FinancialYear);
+        var addedRows = new List<MobileInvoiceQueueItem>();
+        var nowUtc = DateTime.UtcNow;
+
+        if (uploadedFiles.Count <= 1)
+        {
+            var folder = Path.Combine(queueRoot, scanId);
+            Directory.CreateDirectory(folder);
+            var imagePaths = new List<string>();
+            if (uploadedFiles.Count == 1)
+            {
+                var file = uploadedFiles[0];
+                var extension = Path.GetExtension(file.FileName); if (extension.Length > 8 || extension.Any(ch => !char.IsLetterOrDigit(ch) && ch != '.')) extension = ".jpg";
+                if (string.IsNullOrWhiteSpace(extension)) extension = ".jpg";
+                var imagePath = Path.Combine(folder, $"page-001{extension.ToLowerInvariant()}");
+                await using (var source = file.OpenReadStream())
+                await using (var target = File.Create(imagePath))
+                {
+                    await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+                }
+                imagePaths.Add(imagePath);
+            }
+            var summary = ParseMobileInvoiceSummary(payloadJson);
+            var row = new MobileInvoiceQueueItem
+            {
+                ScanId = scanId, ClientId = clientId, FinancialYear = client.FinancialYear, UserId = userId, DeviceId = deviceId,
+                ReceivedUtc = nowUtc, Status = "Queued", PayloadJson = payloadJson, RawOcr = rawOcr ?? string.Empty, PhoneRawOcr = rawOcr ?? string.Empty, CandidatesJson = normalizedCandidates, RelationshipsJson = normalizedRelationships,
+                EvidenceFolder = folder, ImagePaths = imagePaths, InvoiceNumber = summary.InvoiceNumber, InvoiceDate = summary.InvoiceDate,
+                Counterparty = summary.Counterparty, Direction = summary.Direction, RecognitionMode = summary.RecognitionMode, InvoiceTotal = summary.InvoiceTotal,
+                DocumentOcrState = imagePaths.Count > 0 ? "Processing" : "NeedsAction",
+                DocumentOcrMessage = imagePaths.Count > 0 ? "Queued for InvoiceVision v2 extraction." : "No original invoice image was uploaded for ONNX OCR.",
+                DocumentOcrAuthority = imagePaths.Count > 0 ? "InvoiceVision v2 pending" : "Unavailable"
+            };
+            EnsurePageSha256List(row);
+            row.LinkedScanIds = [scanId];
+            _mobileInvoiceQueue[MobileQueueKey(clientId, client.FinancialYear, scanId)] = row;
+            addedRows.Add(row);
+        }
+        else
+        {
+            // Multi-photo selection uploaded in one batch: split into separate queue entries per photo so unrelated bills never mix
+            var splitPayloadJson = BuildSplitChildPlaceholderPayload(payloadJson);
+            var splitMode = ParseMobileInvoiceSummary(payloadJson).RecognitionMode;
+            for (var i = 0; i < uploadedFiles.Count; i++)
+            {
+                var itemScanId = SafeMobileSegment($"{scanId}-P{i + 1:00}");
+                if (_mobileInvoiceQueue.ContainsKey(MobileQueueKey(clientId, client.FinancialYear, itemScanId)))
+                    continue;
+                var folder = Path.Combine(queueRoot, itemScanId);
+                Directory.CreateDirectory(folder);
+                var file = uploadedFiles[i];
+                var extension = Path.GetExtension(file.FileName); if (extension.Length > 8 || extension.Any(ch => !char.IsLetterOrDigit(ch) && ch != '.')) extension = ".jpg";
+                if (string.IsNullOrWhiteSpace(extension)) extension = ".jpg";
+                var imagePath = Path.Combine(folder, $"page-001{extension.ToLowerInvariant()}");
+                await using (var source = file.OpenReadStream())
+                await using (var target = File.Create(imagePath))
+                {
+                    await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+                }
+                var row = new MobileInvoiceQueueItem
+                {
+                    ScanId = itemScanId, ClientId = clientId, FinancialYear = client.FinancialYear, UserId = userId, DeviceId = deviceId,
+                    ReceivedUtc = nowUtc.AddMilliseconds(i), Status = "Queued", PayloadJson = splitPayloadJson,
+                    RawOcr = i == 0 ? (rawOcr ?? string.Empty) : string.Empty,
+                    PhoneRawOcr = i == 0 ? (rawOcr ?? string.Empty) : string.Empty,
+                    CandidatesJson = "{}", RelationshipsJson = "{}", EvidenceFolder = folder, ImagePaths = [imagePath], LinkedScanIds = [itemScanId],
+                    RecognitionMode = splitMode, DocumentOcrState = "Processing",
+                    DocumentOcrMessage = $"Batch photo {i + 1}/{uploadedFiles.Count} queued for InvoiceVision v2.",
+                    DocumentOcrAuthority = "InvoiceVision v2 pending"
+                };
+                EnsurePageSha256List(row);
+                _mobileInvoiceQueue[MobileQueueKey(clientId, client.FinancialYear, itemScanId)] = row;
+                addedRows.Add(row);
+            }
+        }
+
+        RecomputeQueueLinkAndDuplicateFlags(clientId, client.FinancialYear);
+        var anyDup = false;
+        foreach (var row in addedRows)
+        {
+            var exactPhotoDup = string.Equals(row.DuplicateKind, "ExactPhotoInQueue", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(row.DuplicateKind, "ExactPhotoConfirmed", StringComparison.OrdinalIgnoreCase);
+            if (exactPhotoDup)
+            {
+                anyDup = true;
+                row.DocumentOcrState = "NeedsAction";
+                row.DocumentOcrMessage = row.DuplicateDetail + " · Remove duplicate or click Retry OCR to extract anyway.";
+                row.DocumentOcrAuthority = "Skipped automatic OCR — exact duplicate photo detected";
+                row.ChildStage1Status = "Skipped automatic OCR — exact duplicate photo detected.";
+                row.RaiseUiPropertiesChanged();
+            }
+            else if (triggerOcr && row.ImagePaths.Count > 0)
+            {
+                _ = RunMobileInvoiceDocumentOcrAsync(row, client);
+            }
+        }
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+        return (addedRows, anyDup);
+    }
+
+    private static string BuildSplitChildPlaceholderPayload(string originalPayloadJson)
+    {
+        try
+        {
+            var src = JsonNode.Parse(originalPayloadJson)?.AsObject();
+            var obj = new JsonObject();
+            if (src is not null)
+            {
+                if (src["clientId"] is not null) obj["clientId"] = src["clientId"]?.DeepClone();
+                if (src["financialYear"] is not null) obj["financialYear"] = src["financialYear"]?.DeepClone();
+                if (src["recognitionMode"] is not null) obj["recognitionMode"] = src["recognitionMode"]?.DeepClone();
+            }
+            obj["direction"] = "Auto";
+            return obj.ToJsonString();
+        }
+        catch { return "{\"direction\":\"Auto\"}"; }
+    }
+
+    private static List<string>? TryExtractCachedLightOnPages(MobileInvoiceQueueItem scan)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(scan.ChildStage1Archive) || !File.Exists(scan.ChildStage1Archive))
+                return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(scan.ChildStage1Archive, Encoding.UTF8));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("sourceFiles", out var sfEl) || sfEl.ValueKind != JsonValueKind.Array)
+                return null;
+            if (sfEl.GetArrayLength() != scan.ImagePaths.Count)
+                return null;
+            for (var i = 0; i < sfEl.GetArrayLength(); i++)
+            {
+                var hash = sfEl[i].TryGetProperty("sha256", out var hEl) ? hEl.GetString() ?? "" : "";
+                if (i >= scan.PageSha256List.Count || !hash.Equals(scan.PageSha256List[i], StringComparison.OrdinalIgnoreCase))
+                    return null;
+            }
+            var raw = root.TryGetProperty("rawOcrText", out var rEl) ? rEl.GetString() ?? "" : "";
+            var qwenIdx = raw.IndexOf("===== QWEN3-VL-4B", StringComparison.OrdinalIgnoreCase);
+            if (qwenIdx > 0) raw = raw[..qwenIdx];
+            var parts = raw.Split(new[] { "<!-- PAGE BREAK -->" }, StringSplitOptions.None)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0)
+                .ToList();
+            return parts.Count == scan.ImagePaths.Count ? parts : null;
+        }
+        catch { return null; }
+    }
+
+    internal void TryAutoLinkReadyInvoiceGroups(long clientId, string financialYear, bool triggerOcr = true)
+    {
+        try
+        {
+            RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+            var groups = _mobileInvoiceQueue.Values
+                .Where(x => x.ClientId == clientId &&
+                            x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
+                            x.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase) &&
+                            x.MultiPageGroupKey.StartsWith("INV:", StringComparison.OrdinalIgnoreCase) &&
+                            x.MultiPageCandidateScanIds.Count >= 2)
+                .GroupBy(x => x.MultiPageGroupKey, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.ToList())
+                .Where(list => list.Count >= 2 &&
+                               list.All(x => x.DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase)) &&
+                               list.All(x => { var k = MobileQueueKey(clientId, financialYear, x.ScanId); return !_mobileInvoiceOcrInFlight.ContainsKey(k) && !_mobileInvoiceChildOnlyInFlight.ContainsKey(k); }))
+                .ToList();
+            foreach (var grp in groups)
+                LinkMobileInvoiceScans(clientId, financialYear, grp.Select(x => x.ScanId).ToList(), triggerOcr);
+        }
+        catch { /* Best-effort auto-link after OCR completion */ }
     }
 
     private async Task RunMobileInvoiceDocumentOcrAsync(MobileInvoiceQueueItem row, AccountingAutomationHub.Domain.Clients.ClientProfile client)
@@ -3109,13 +4499,42 @@ public sealed class SecureLanServerService : IDisposable
         {
             row.DocumentOcrState = "Processing";
             row.ChildStage1Archive = string.Empty;
-            row.ChildStage1Status = "AAH ONNX Phone Link OCR active (InvoiceVision Child unlinked).";
-            row.DocumentOcrMessage = "AAH ONNX Phone Link OCR is detecting bounded text polygons, classifying document semantics and preparing R89 accounting review evidence.";
-            row.DocumentOcrAuthority = "AAH ONNX source-linked spatial OCR pending";
+            row.ChildStage1Status = InvoiceOcrChildBridge.IsChildInstalled()
+                ? "Original photo received by AAH; running InvoiceVision v2 (LightOnOCR-2-1B / Hybrid)..."
+                : "InvoiceVision Child v2 not installed; using AAH ONNX Phone Link OCR.";
+            row.DocumentOcrMessage = row.ChildStage1Status;
+            row.DocumentOcrAuthority = "InvoiceVision v2 / Phone Link OCR pending";
             MobileLinkChanged?.Invoke(this, EventArgs.Empty);
 
-            // R46 R37: Mobile Link owns a dedicated invoice OCR pipeline. It uses Windows OCR
-            // for word boxes and AAH geometry/table reconstruction; Bank OCR is not involved.
+            if (InvoiceOcrChildBridge.IsChildInstalled())
+            {
+                var cachedOcr = row.PendingCachedPageOcrTexts;
+                row.PendingCachedPageOcrTexts = null;
+                var (childStatus, childResult) = await InvoiceOcrChildBridge.ExtractForPhoneLinkAsync(
+                    row.ImagePaths, client, row.ScanId, row.EvidenceFolder,
+                    row.PayloadJson, row.PhoneRawOcr,
+                    msg =>
+                    {
+                        row.ChildStage1Status = msg;
+                        row.DocumentOcrMessage = msg;
+                        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+                    },
+                    _mobileInvoiceOcrCancellation.Token,
+                    cachedOcr).ConfigureAwait(false);
+                row.ChildStage1Status = childStatus.Message;
+                row.ChildStage1Archive = childStatus.Stage1Succeeded ? childStatus.Stage1Archive : string.Empty;
+                if (childResult is { WasSuccessful: true })
+                {
+                    var activeKey = MobileQueueKey(row.ClientId, row.FinancialYear, row.ScanId);
+                    if (!_mobileInvoiceQueue.ContainsKey(activeKey)) return;
+                    ApplyPhoneLinkOcrResult(row, childResult);
+                    RecomputeQueueLinkAndDuplicateFlags(row.ClientId, row.FinancialYear);
+                    MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+                    return;
+                }
+            }
+
+            // Fallback to AAH ONNX OCR if InvoiceVision Child v2 is absent or failed
             var runRoot = Path.Combine(row.EvidenceFolder, "InvoiceDocumentOcr");
             var result = await _mobileInvoiceDocumentOcr.RecognizeAsync(
                 row.ImagePaths,
@@ -3134,27 +4553,15 @@ public sealed class SecureLanServerService : IDisposable
                 row.DocumentOcrState = "NeedsAction";
                 row.DocumentOcrMessage = row.ChildStage1Status + " " + (result.FailureMessage.Length > 0
                     ? result.FailureMessage
-                    : "Independent ONNX Phone Link OCR did not produce usable spatial evidence.");
+                    : "Phone Link OCR did not produce usable spatial evidence.");
                 row.DocumentOcrAuthority = "Phone ML Kit preview only - confirmation blocked";
                 MobileLinkChanged?.Invoke(this, EventArgs.Empty);
                 return;
             }
 
-            row.PayloadJson = result.PayloadJson;
-            row.CandidatesJson = MergeMobileInvoiceCandidateJson(row.CandidatesJson, result.CandidatesJson);
-            row.RawOcr = result.RawOcrText + (row.PhoneRawOcr.Length > 0
-                ? Environment.NewLine + Environment.NewLine + "===== PHONE ML KIT PREVIEW (NON-AUTHORITATIVE) =====" + Environment.NewLine + row.PhoneRawOcr
-                : string.Empty);
-            row.InvoiceNumber = result.InvoiceNumber;
-            row.InvoiceDate = result.InvoiceDate;
-            row.Counterparty = result.CounterpartyName;
-            row.Direction = result.Direction;
-            row.RecognitionMode = result.RecognitionMode;
-            row.InvoiceTotal = result.InvoiceTotal;
-            row.DocumentOcrState = "Ready";
-            row.DocumentOcrCompletedUtc = DateTime.UtcNow;
-            row.DocumentOcrAuthority = result.Authority;
-            row.DocumentOcrMessage = $"{row.ChildStage1Status} ONNX fallback recognized {result.ItemRowCount:N0} provisional item row(s) and {result.SummarySlabCount:N0} GST slab(s). R89 discrepancies need human review before import.";
+            ApplyPhoneLinkOcrResult(row, result);
+            RecomputeQueueLinkAndDuplicateFlags(row.ClientId, row.FinancialYear);
+            row.DocumentOcrMessage = $"{row.ChildStage1Status} ONNX fallback recognized {result.ItemRowCount:N0} provisional item row(s) and {result.SummarySlabCount:N0} GST slab(s).";
             MobileLinkChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (OperationCanceledException) when (_mobileInvoiceOcrCancellation.IsCancellationRequested)
@@ -3173,8 +4580,33 @@ public sealed class SecureLanServerService : IDisposable
         finally
         {
             _mobileInvoiceOcrInFlight.TryRemove(attemptKey, out _);
+            if (row.DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+                TryAutoLinkReadyInvoiceGroups(row.ClientId, row.FinancialYear);
             MobileLinkChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    internal void ApplyPhoneLinkOcrResultForTest(MobileInvoiceQueueItem row, MobileInvoiceDocumentOcrResult result) =>
+        ApplyPhoneLinkOcrResult(row, result);
+
+    private void ApplyPhoneLinkOcrResult(MobileInvoiceQueueItem row, MobileInvoiceDocumentOcrResult result)
+    {
+        row.PayloadJson = result.PayloadJson;
+        row.CandidatesJson = MergeMobileInvoiceCandidateJson(row.CandidatesJson, result.CandidatesJson);
+        row.RawOcr = result.RawOcrText + (row.PhoneRawOcr.Length > 0
+            ? Environment.NewLine + Environment.NewLine + "===== PHONE ML KIT PREVIEW (NON-AUTHORITATIVE) =====" + Environment.NewLine + row.PhoneRawOcr
+            : string.Empty);
+        row.InvoiceNumber = result.InvoiceNumber;
+        row.InvoiceDate = result.InvoiceDate;
+        row.Counterparty = result.CounterpartyName;
+        row.Direction = result.Direction;
+        row.RecognitionMode = result.RecognitionMode;
+        row.InvoiceTotal = result.InvoiceTotal;
+        row.DocumentOcrState = "Ready";
+        row.DocumentOcrCompletedUtc = DateTime.UtcNow;
+        row.DocumentOcrAuthority = result.Authority;
+        row.DocumentOcrMessage = result.Authority;
+        row.RaiseUiPropertiesChanged();
     }
 
     private static string MergeMobileInvoiceCandidateJson(string originalJson, string documentJson)
@@ -4107,6 +5539,11 @@ public sealed class MobileLinkClientState
 public sealed class MobileInvoiceMappedResult
 {
     public string Direction { get; set; } = string.Empty;
+    public string RecognitionMode { get; set; } = "Accounting Invoice";
+    public bool IsInventoryInvoiceMode =>
+        RecognitionMode.Equals("Item Invoice", StringComparison.OrdinalIgnoreCase) ||
+        RecognitionMode.Equals("Inventory Invoice", StringComparison.OrdinalIgnoreCase);
+    public bool IsAccountingInvoiceMode => !IsInventoryInvoiceMode;
     public string DocumentType { get; set; } = string.Empty;
     public string InvoiceNumber { get; set; } = string.Empty;
     public DateTime? InvoiceDate { get; set; }
@@ -4120,7 +5557,9 @@ public sealed class MobileInvoiceMappedResult
     public decimal CessTotal { get; set; }
     public decimal RoundOff { get; set; }
     public bool SourceDiscrepanciesReviewed { get; set; }
+    public bool DuplicateOverrideAcknowledged { get; set; }
     public string SourceImageSha256 { get; set; } = string.Empty;
+    public List<string> SourceImageSha256List { get; set; } = new();
     public List<MobileInvoiceMappedLine> Lines { get; set; } = new();
 }
 
@@ -4142,8 +5581,11 @@ public sealed class MobileInvoiceMappedLine
     public string StockItem { get; set; } = string.Empty;
 }
 
-public sealed class MobileInvoiceQueueItem
+public sealed class MobileInvoiceQueueItem : INotifyPropertyChanged
 {
+    private bool _isCheckedForLink;
+    public event PropertyChangedEventHandler? PropertyChanged;
+
     public string ScanId { get; set; } = string.Empty;
     public long ClientId { get; set; }
     public string FinancialYear { get; set; } = string.Empty;
@@ -4171,6 +5613,61 @@ public sealed class MobileInvoiceQueueItem
     public string ChildStage1Status { get; set; } = "Not yet sent to Invoice OCR Child";
     public string ChildStage1Archive { get; set; } = "";
     public List<string> ImagePaths { get; set; } = new();
-    public string DisplayName => $"{(InvoiceNumber.Length == 0 ? ScanId : InvoiceNumber)} · {Counterparty} · {InvoiceTotal}" + (DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase) ? string.Empty : $" · OCR {DocumentOcrState}");
+    public List<string> PageSha256List { get; set; } = new();
+    public List<string> LinkedScanIds { get; set; } = new();
+    internal List<string>? PendingCachedPageOcrTexts { get; set; }
+
+    public bool IsCheckedForLink
+    {
+        get => _isCheckedForLink;
+        set
+        {
+            if (_isCheckedForLink == value) return;
+            _isCheckedForLink = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCheckedForLink)));
+        }
+    }
+
+    public int PageCount => Math.Max(1, ImagePaths.Count);
+    public bool IsMultiPage => PageCount > 1;
+    public string PageBadgeText => PageCount > 1 ? $"{PageCount} PAGES" : string.Empty;
+
+    public string DuplicateKind { get; set; } = "None";
+    public string DuplicateDetail { get; set; } = string.Empty;
+    public string DuplicateTargetId { get; set; } = string.Empty;
+    public bool IsDuplicate => !string.Equals(DuplicateKind, "None", StringComparison.OrdinalIgnoreCase);
+    public string DuplicateBadgeText => DuplicateKind switch
+    {
+        "ExactPhotoInQueue" or "ExactPhotoConfirmed" => "DUPLICATE PHOTO",
+        "InvoiceInQueue" => "DUP IN QUEUE",
+        "AlreadyImported" => "ALREADY IMPORTED",
+        _ => string.Empty
+    };
+
+    public string MultiPageGroupKey { get; set; } = string.Empty;
+    public string MultiPageHint { get; set; } = string.Empty;
+    public List<string> MultiPageCandidateScanIds { get; set; } = new();
+    public bool HasMultiPageHint => MultiPageCandidateScanIds.Count >= 2;
+    public string MultiPageHintBadgeText => HasMultiPageHint ? $"LINK {MultiPageCandidateScanIds.Count} PAGES" : string.Empty;
+
+    public string DisplayName =>
+        $"{(InvoiceNumber.Length == 0 ? ScanId : InvoiceNumber)} · {Counterparty} · {InvoiceTotal}" +
+        (PageCount > 1 ? $" · {PageCount}p" : string.Empty) +
+        (DocumentOcrState.Equals("Ready", StringComparison.OrdinalIgnoreCase) ? string.Empty : $" · OCR {DocumentOcrState}");
+
+    internal void RaiseUiPropertiesChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageCount)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsMultiPage)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageBadgeText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DuplicateKind)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DuplicateDetail)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDuplicate)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DuplicateBadgeText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasMultiPageHint)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MultiPageHint)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MultiPageHintBadgeText)));
+    }
 }
 
