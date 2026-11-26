@@ -1,0 +1,123 @@
+name: AAH Android Signed APK Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional GitHub release tag to attach AAHMobile.apk to (blank = latest release)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-signed-android:
+    name: Build and sign permanent AAHMobile APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Restore ancillary Android source
+        run: python3 ci/restore_extra_components.py
+
+      - name: Install Android SDK platform 36
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Verify permanent Android signing secrets and certificate
+        env:
+          KEYSTORE_B64: ${{ secrets.AAH_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.AAH_ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.AAH_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.AAH_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_B64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::Missing AAH Android signing secrets (AAH_ANDROID_KEYSTORE_BASE64, AAH_ANDROID_STORE_PASSWORD, AAH_ANDROID_KEY_ALIAS, AAH_ANDROID_KEY_PASSWORD)."
+            exit 1
+          fi
+          umask 077
+          signing_file="$RUNNER_TEMP/aah-upload.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$signing_file"
+          if [[ ! -s "$signing_file" ]]; then
+            echo "::error::Decoded Android signing keystore is empty."
+            exit 1
+          fi
+          actual_sha="$(keytool -exportcert -keystore "$signing_file" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | sha256sum | cut -d ' ' -f1)"
+          expected_sha="16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775"
+          if [[ "$actual_sha" != "$expected_sha" ]]; then
+            echo "::error::Keystore certificate SHA-256 ($actual_sha) does not match pinned AAH cert ($expected_sha)."
+            exit 1
+          fi
+          echo "AAH_SIGN_STORE_FILE=$signing_file" >> "$GITHUB_ENV"
+          echo "Permanent AAH Android certificate verified."
+
+      - name: Assemble signed release APK and verify signature
+        working-directory: AAH/AndroidSource/AccountingAutomationHubAndroid
+        env:
+          AAH_SIGN_STORE_PASSWORD: ${{ secrets.AAH_ANDROID_STORE_PASSWORD }}
+          AAH_SIGN_KEY_ALIAS: ${{ secrets.AAH_ANDROID_KEY_ALIAS }}
+          AAH_SIGN_KEY_PASSWORD: ${{ secrets.AAH_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --no-daemon --stacktrace
+          apk="app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          test -x "$apksigner"
+          signer="$("$apksigner" verify --print-certs "$apk")"
+          echo "$signer"
+          echo "$signer" | grep -F '16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775'
+          version_name="$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          mkdir -p "$RUNNER_TEMP/android-out"
+          cp "$apk" "$RUNNER_TEMP/android-out/AAHMobile.apk"
+          printf '%s\n' "$version_name" > "$RUNNER_TEMP/android-out/AAHMobile.apk.version"
+          (cd "$RUNNER_TEMP/android-out" && sha256sum AAHMobile.apk > AAHMobile.apk.sha256)
+          ls -lh "$RUNNER_TEMP/android-out"
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-Signed-Android-APK
+          path: ${{ runner.temp }}/android-out/*
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Attach signed APK to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag="$TARGET_TAG"
+          if [[ -z "$tag" ]]; then
+            tag="$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName // ""')"
+          fi
+          if [[ -n "$tag" ]]; then
+            gh release upload "$tag" \
+              "$RUNNER_TEMP/android-out/AAHMobile.apk" \
+              "$RUNNER_TEMP/android-out/AAHMobile.apk.version" \
+              "$RUNNER_TEMP/android-out/AAHMobile.apk.sha256" \
+              --clobber --repo "${{ github.repository }}"
+            echo "Attached AAHMobile.apk to GitHub release $tag"
+          else
+            echo "No target GitHub release found; APK uploaded as workflow artifact only."
+          fi
+
+      - name: Remove temporary signing keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/aah-upload.jks"

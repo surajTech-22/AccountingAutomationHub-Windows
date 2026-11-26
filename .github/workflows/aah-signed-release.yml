@@ -39,7 +39,89 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build-android-signed:
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.657]') }}
+    name: Build signed AAHMobile APK (optional if secrets configured)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      has_signed_apk: ${{ steps.android_sign.outputs.has_signed_apk }}
+    steps:
+      - name: Check out exact main branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Java 17 and Gradle for optional Android signing
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Build and verify permanent-key-signed Android APK if secrets exist
+        id: android_sign
+        env:
+          KEYSTORE_B64: ${{ secrets.AAH_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.AAH_ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.AAH_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.AAH_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_B64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "Android signing secrets are not yet configured; skipping APK bundling for this release."
+            echo "has_signed_apk=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 ci/restore_extra_components.py
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          umask 077
+          signing_file="$RUNNER_TEMP/aah-upload.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$signing_file"
+          actual_sha="$(keytool -exportcert -keystore "$signing_file" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | sha256sum | cut -d ' ' -f1)"
+          expected_sha="16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775"
+          if [[ "$actual_sha" != "$expected_sha" ]]; then
+            echo "::error::Android keystore cert SHA-256 mismatch: $actual_sha != $expected_sha"
+            exit 1
+          fi
+          export AAH_SIGN_STORE_FILE="$signing_file"
+          export AAH_SIGN_STORE_PASSWORD="$STORE_PASSWORD"
+          export AAH_SIGN_KEY_ALIAS="$KEY_ALIAS"
+          export AAH_SIGN_KEY_PASSWORD="$KEY_PASSWORD"
+          (cd AAH/AndroidSource/AccountingAutomationHubAndroid && gradle :app:assembleRelease --no-daemon --stacktrace)
+          apk="AAH/AndroidSource/AccountingAutomationHubAndroid/app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          "$apksigner" verify --print-certs "$apk" | grep -F "$expected_sha"
+          version_name="$(grep -E 'versionName\s*=' AAH/AndroidSource/AccountingAutomationHubAndroid/app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          mkdir -p "$RUNNER_TEMP/android-release"
+          cp "$apk" "$RUNNER_TEMP/android-release/AAHMobile.apk"
+          printf '%s\n' "$version_name" > "$RUNNER_TEMP/android-release/AAHMobile.apk.version"
+          (cd "$RUNNER_TEMP/android-release" && sha256sum AAHMobile.apk > AAHMobile.apk.sha256)
+          echo "has_signed_apk=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed Android release artifact
+        if: ${{ steps.android_sign.outputs.has_signed_apk == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AAH-Signed-Android-Release
+          path: ${{ runner.temp }}/android-release/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Remove temporary signing keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/aah-upload.jks"
+
   build-channel:
+    needs: [build-android-signed]
 # v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with editable selector & Client GSTIN + unlimited continuous Android photo capture/auto-send.
     # pull requests, branch drift, failed builds, or unrelated commits.
     if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.657]') }}
@@ -188,6 +270,25 @@ jobs:
           if ($a -ne $b) { throw 'Embedded updater does not match the latest release updater.' }
           Write-Host 'PASS: new updater is part of app payload and overwrites the installed prior updater.'
 
+      - name: Bundle signed Android APK into Mobile payload and release outputs
+        if: ${{ needs.build-android-signed.outputs.has_signed_apk == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: AAH-Signed-Android-Release
+          path: ci-release/publish/Mobile
+
+      - name: Stage signed Android APK sidecars for GitHub release
+        if: ${{ needs.build-android-signed.outputs.has_signed_apk == 'true' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($f in @('AAHMobile.apk', 'AAHMobile.apk.version', 'AAHMobile.apk.sha256')) {
+            $src = Join-Path 'ci-release/publish/Mobile' $f
+            if (-not (Test-Path $src) -or (Get-Item $src).Length -lt 4) { throw "Missing bundled Android release asset: $src" }
+            Copy-Item -LiteralPath $src -Destination (Join-Path 'ci-release/out' $f) -Force
+          }
+          Write-Host "PASS: Bundled signed Android APK ($(Get-Content ci-release/publish/Mobile/AAHMobile.apk.version)) into desktop payload."
+
       - name: Build conventional AAH Setup.exe
         shell: pwsh
         run: |
@@ -290,7 +391,11 @@ jobs:
           $tag=$env:AAH_TAG
           gh release view $tag -R $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Tag already has a GitHub release: refusing overwrite.' }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
+          $assets = @('ci-release/out/AAH_Setup.exe','ci-release/out/AAH_Setup.sha256.txt','ci-release/out/AAH_Update.exe','ci-release/out/AAH_Update.exe.sha256','ci-release/out/AAH_App-win-x64.zip','ci-release/out/AAH_AutoUpdate.json')
+          foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
+            if (Test-Path $opt) { $assets += $opt }
+          }
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -320,7 +425,11 @@ jobs:
               $manifest.automatic_install_allowed -ne $true) {
             throw 'Release authorization manifest rejected.'
           }
-          gh release create $tag ci-release/out/AAH_Setup.exe ci-release/out/AAH_Setup.sha256.txt ci-release/out/AAH_Update.exe ci-release/out/AAH_Update.exe.sha256 ci-release/out/AAH_App-win-x64.zip ci-release/out/AAH_AutoUpdate.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
+          $assets = @('ci-release/out/AAH_Setup.exe','ci-release/out/AAH_Setup.sha256.txt','ci-release/out/AAH_Update.exe','ci-release/out/AAH_Update.exe.sha256','ci-release/out/AAH_App-win-x64.zip','ci-release/out/AAH_AutoUpdate.json')
+          foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
+            if (Test-Path $opt) { $assets += $opt }
+          }
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
