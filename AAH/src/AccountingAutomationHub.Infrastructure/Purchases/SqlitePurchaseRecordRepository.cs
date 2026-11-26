@@ -446,19 +446,131 @@ public sealed class SqlitePurchaseRecordRepository :
         using var reader = command.ExecuteReader();
         var records = new List<PurchaseImportRecord>();
         var originalJson = new Dictionary<long, string>();
+        var mobileRepairs = new List<PurchaseImportRecord>();
+        var clientIdentity = (Gstin: string.Empty, ClientName: string.Empty);
+        var clientIdentityLoaded = false;
         while (reader.Read())
         {
+            var beforeTreatment = ReadString(reader, "GstApplicability");
+            var beforeClientGstin = ReadString(reader, "ClientGstin");
+            var beforeCompanyName = ReadString(reader, "CompanyName");
+            var beforePurchaseLedger = ReadString(reader, "PurchaseLedger");
+            var beforeIgstLedger = ReadString(reader, "IgstLedger");
+            var beforeCgstLedger = ReadString(reader, "CgstLedger");
+            var beforeSgstLedger = ReadString(reader, "SgstLedger");
             var row = ReadPurchaseRecord(reader);
+            if (!row.IsUserEdited && PurchaseTreatmentPolicy.IsMobileLinkImport(row))
+            {
+                if (!clientIdentityLoaded &&
+                    (string.IsNullOrWhiteSpace(row.ClientGstin) || string.IsNullOrWhiteSpace(row.CompanyName)))
+                {
+                    clientIdentityLoaded = true;
+                    clientIdentity = ReadClientIdentity(connection, clientId);
+                }
+
+                if (string.IsNullOrWhiteSpace(row.GstApplicability) ||
+                    PurchaseTreatmentPolicy.IsNotShownInTwoB(row.GstApplicability))
+                {
+                    row.GstApplicability = PurchaseTreatmentPolicy.ShownInTwoB;
+                }
+
+                if (string.IsNullOrWhiteSpace(row.ClientGstin) && !string.IsNullOrWhiteSpace(clientIdentity.Gstin))
+                    row.ClientGstin = clientIdentity.Gstin;
+                if (string.IsNullOrWhiteSpace(row.CompanyName) && !string.IsNullOrWhiteSpace(clientIdentity.ClientName))
+                    row.CompanyName = clientIdentity.ClientName;
+
+                RepairRateFromTaxEvidence(row);
+                PurchaseTreatmentPolicy.ApplyAccountingShape(row);
+
+                if (!string.Equals(beforeTreatment, row.GstApplicability, StringComparison.Ordinal) ||
+                    !string.Equals(beforeClientGstin, row.ClientGstin, StringComparison.Ordinal) ||
+                    !string.Equals(beforeCompanyName, row.CompanyName, StringComparison.Ordinal) ||
+                    !string.Equals(beforePurchaseLedger, row.PurchaseLedger, StringComparison.Ordinal) ||
+                    !string.Equals(beforeIgstLedger, row.IgstLedger, StringComparison.Ordinal) ||
+                    !string.Equals(beforeCgstLedger, row.CgstLedger, StringComparison.Ordinal) ||
+                    !string.Equals(beforeSgstLedger, row.SgstLedger, StringComparison.Ordinal))
+                {
+                    mobileRepairs.Add(row);
+                }
+            }
             records.Add(row);
             originalJson[row.PersistentId] = ReadString(reader, "RecordJson");
         }
         reader.Close();
+        PersistMobileLinkSelfHeals(connection, clientId, mobileRepairs, originalJson);
         // GSTIN identifies a supplier. Normalize every saved invoice, 2B,
         // debit-note and RCM line using the newest substantive document name.
         // Persist NAME ONLY; do not change financial data or IsUserEdited.
         var changed = GstinLatestPartyNameConsistency.NormalizePurchase(records);
         PersistLatestSupplierNames(connection, clientId, financialYear, changed, originalJson);
         return records;
+    }
+
+    private static (string Gstin, string ClientName) ReadClientIdentity(SqliteConnection connection, long clientId)
+    {
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT Gstin, ClientName FROM Clients WHERE Id=$Id LIMIT 1;";
+            cmd.Parameters.AddWithValue("$Id", clientId);
+            using var r = cmd.ExecuteReader();
+            if (r.Read())
+                return ((r.IsDBNull(0) ? string.Empty : r.GetString(0)).Trim(), (r.IsDBNull(1) ? string.Empty : r.GetString(1)).Trim());
+        }
+        catch { }
+        return (string.Empty, string.Empty);
+    }
+
+    private static void PersistMobileLinkSelfHeals(
+        SqliteConnection connection,
+        long clientId,
+        IReadOnlyList<PurchaseImportRecord> repaired,
+        IDictionary<long, string> originalJson)
+    {
+        if (repaired.Count == 0) return;
+        using var transaction = connection.BeginTransaction();
+        foreach (var row in repaired)
+        {
+            if (row.PersistentId <= 0) continue;
+            var json = JsonSerializer.Serialize(row);
+            originalJson[row.PersistentId] = json;
+            using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText =
+                """
+                UPDATE PurchaseRecords
+                SET
+                    ClientGstin = $ClientGstin,
+                    CompanyName = $CompanyName,
+                    GstApplicability = $GstApplicability,
+                    Rate = $Rate,
+                    PurchaseLedger = $PurchaseLedger,
+                    IgstLedger = $IgstLedger,
+                    CgstLedger = $CgstLedger,
+                    SgstLedger = $SgstLedger,
+                    RecordJson = $RecordJson,
+                    UpdatedUtc = $UpdatedUtc
+                WHERE
+                    Id = $Id
+                    AND ClientId = $ClientId
+                    AND IsUserEdited = 0
+                    AND SourceSection = 'Mobile Link';
+                """;
+            update.Parameters.AddWithValue("$ClientGstin", row.ClientGstin);
+            update.Parameters.AddWithValue("$CompanyName", row.CompanyName);
+            update.Parameters.AddWithValue("$GstApplicability", row.GstApplicability);
+            update.Parameters.AddWithValue("$Rate", row.Rate);
+            update.Parameters.AddWithValue("$PurchaseLedger", row.PurchaseLedger);
+            update.Parameters.AddWithValue("$IgstLedger", row.IgstLedger);
+            update.Parameters.AddWithValue("$CgstLedger", row.CgstLedger);
+            update.Parameters.AddWithValue("$SgstLedger", row.SgstLedger);
+            update.Parameters.AddWithValue("$RecordJson", json);
+            update.Parameters.AddWithValue("$UpdatedUtc", DateTime.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$Id", row.PersistentId);
+            update.Parameters.AddWithValue("$ClientId", clientId);
+            update.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
 
@@ -619,12 +731,12 @@ public sealed class SqlitePurchaseRecordRepository :
                 );
                 SELECT last_insert_rowid();
                 """;
+            record.ImportMode = "Manual Import";
             AddParameters(insert, batchId, clientId, financialYear, record);
             insert.Parameters.AddWithValue("$RecordJson", JsonSerializer.Serialize(record));
             var recordId = Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
             record.PersistentId = recordId;
             record.BatchId = batchId;
-            record.ImportMode = "Manual Import";
             record.IsUserEdited = false;
             inserted++;
         }
@@ -1793,7 +1905,7 @@ public sealed class SqlitePurchaseRecordRepository :
                 WHERE
                     Id = $Id
                     AND ClientId = $ClientId
-                    AND ImportMode = 'Auto Import';
+                    AND (ImportMode = 'Auto Import' OR SourceSection = 'Mobile Link');
                 """;
 
             command.Parameters.AddWithValue("$Destination", record.Destination);
@@ -2090,7 +2202,7 @@ public sealed class SqlitePurchaseRecordRepository :
                 WHERE
                     Id = $Id
                     AND ClientId = $ClientId
-                    AND ImportMode = 'Auto Import';
+                    AND (ImportMode = 'Auto Import' OR SourceSection = 'Mobile Link');
                 """;
 
             command.Parameters.AddWithValue("$Destination", record.Destination);

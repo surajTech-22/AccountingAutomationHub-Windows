@@ -70,6 +70,10 @@ public sealed class PurchaseImportRecord : INotifyPropertyChanged
         ReconciliationStatus.Equals("2B Only", StringComparison.OrdinalIgnoreCase);
 
     [JsonIgnore]
+    public bool HideAccountingGstTreatmentSelector =>
+        PurchaseTreatmentPolicy.IsManualBooksImport(this);
+
+    [JsonIgnore]
     public IReadOnlyList<string> GstTreatmentOptions
     {
         get

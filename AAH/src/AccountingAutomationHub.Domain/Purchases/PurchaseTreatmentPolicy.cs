@@ -43,9 +43,13 @@ public static class PurchaseTreatmentPolicy
     public static bool IsDebitNoteReverse(PurchaseImportRecord row) =>
         row.Destination.Equals(DebitNoteReverseDestination, StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsMobileLinkImport(PurchaseImportRecord row) =>
+        row.SourceSection.Equals("Mobile Link", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsManualBooksImport(PurchaseImportRecord row) =>
-        row.ImportMode.Equals("Manual Import", StringComparison.OrdinalIgnoreCase) ||
-        row.ReconciliationStatus.Equals("Manual Purchase Register - Books", StringComparison.OrdinalIgnoreCase);
+        !IsMobileLinkImport(row) &&
+        (row.ImportMode.Equals("Manual Import", StringComparison.OrdinalIgnoreCase) ||
+         row.ReconciliationStatus.Equals("Manual Purchase Register - Books", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Supplier credit notes reduce normal Purchase ITC. Supplier debit notes increase
@@ -121,6 +125,12 @@ public static class PurchaseTreatmentPolicy
     public static string SourceBasedPurchaseTreatment(PurchaseImportRecord row)
     {
         ArgumentNullException.ThrowIfNull(row);
+        if (IsMobileLinkImport(row))
+        {
+            return string.IsNullOrWhiteSpace(row.GstApplicability)
+                ? ShownInTwoB
+                : NormalizePurchaseTreatment(row.GstApplicability);
+        }
         if (ReconciliationSaysTwoBRejected(row.ReconciliationStatus))
             return GstIncludedInCost;
         if (ReconciliationSaysTwoBMissing(row.ReconciliationStatus))
@@ -135,6 +145,9 @@ public static class PurchaseTreatmentPolicy
     public static IReadOnlyList<string> GetAllowedPurchaseTreatments(PurchaseImportRecord row)
     {
         ArgumentNullException.ThrowIfNull(row);
+        if (IsMobileLinkImport(row))
+            return new[] { ShownInTwoB, NotShownInTwoB, GstIncludedInCost };
+
         if (ReconciliationSaysTwoBRejected(row.ReconciliationStatus))
             return new[] { GstIncludedInCost };
 

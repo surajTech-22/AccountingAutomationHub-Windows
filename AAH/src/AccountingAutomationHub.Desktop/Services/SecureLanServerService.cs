@@ -882,9 +882,12 @@ public sealed class SecureLanServerService : IDisposable
 
     private void HandOffMobileInvoiceDirect(long clientId, string financialYear, string scanId, MobileInvoiceMappedResult mapped)
     {
+        var client = _clients.GetById(clientId);
+        var clientGstin = (client?.Gstin ?? string.Empty).Trim();
+        var companyName = (client?.ClientName ?? string.Empty).Trim();
         if (mapped.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase))
         {
-            var records = BuildMobilePurchaseRecords(mapped);
+            var records = BuildMobilePurchaseRecords(mapped, clientGstin, companyName);
             var result = new PurchaseManualImportResult
             {
                 SourcePath = $"MobileLink:{scanId}",
@@ -896,7 +899,7 @@ public sealed class SecureLanServerService : IDisposable
         }
         else if (mapped.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase))
         {
-            var records = BuildMobileSalesRecords(mapped);
+            var records = BuildMobileSalesRecords(mapped, clientGstin, companyName);
             var result = new SalesManualImportResult
             {
                 SourcePath = $"MobileLink:{scanId}",
@@ -909,14 +912,18 @@ public sealed class SecureLanServerService : IDisposable
         else throw new InvalidOperationException("Mobile invoice direction must be Sales or Purchase before confirmation.");
     }
 
-    internal static IReadOnlyList<PurchaseImportRecord> BuildMobilePurchaseRecords(MobileInvoiceMappedResult mapped)
+    internal static IReadOnlyList<PurchaseImportRecord> BuildMobilePurchaseRecords(
+        MobileInvoiceMappedResult mapped,
+        string clientGstin = "",
+        string companyName = "")
     {
         if (mapped.Lines.Count == 0)
             return new[]
             {
                 new PurchaseImportRecord
                 {
-                    Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
+                    ClientGstin = clientGstin, CompanyName = companyName,
+                    Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.ShownInTwoB,
                     SupplierName = mapped.CounterpartyName, SupplierGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
                     DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                     SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, TaxableValue = mapped.TaxableTotal,
@@ -935,9 +942,11 @@ public sealed class SecureLanServerService : IDisposable
                 .ToArray();
             return slabGroups.Select((slab, idx) => new PurchaseImportRecord
             {
+                ClientGstin = clientGstin,
+                CompanyName = companyName,
                 Destination = "Purchase",
                 ReconciliationStatus = "Manual",
-                GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
+                GstApplicability = PurchaseTreatmentPolicy.ShownInTwoB,
                 SupplierName = mapped.CounterpartyName,
                 SupplierGstin = mapped.CounterpartyGstin,
                 DocumentType = mapped.DocumentType,
@@ -974,7 +983,8 @@ public sealed class SecureLanServerService : IDisposable
             var resolvedItem = string.IsNullOrWhiteSpace(r.StockItem) ? r.Description : r.StockItem.Trim();
             return new PurchaseImportRecord
             {
-                Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB,
+                ClientGstin = clientGstin, CompanyName = companyName,
+                Destination = "Purchase", ReconciliationStatus = "Manual", GstApplicability = PurchaseTreatmentPolicy.ShownInTwoB,
                 SupplierName = mapped.CounterpartyName, SupplierGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
                 DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                 SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
@@ -988,13 +998,17 @@ public sealed class SecureLanServerService : IDisposable
         }).ToArray();
     }
 
-    internal static IReadOnlyList<SalesImportRecord> BuildMobileSalesRecords(MobileInvoiceMappedResult mapped)
+    internal static IReadOnlyList<SalesImportRecord> BuildMobileSalesRecords(
+        MobileInvoiceMappedResult mapped,
+        string clientGstin = "",
+        string companyName = "")
     {
         if (mapped.Lines.Count == 0)
             return new[]
             {
                 new SalesImportRecord
                 {
+                    ClientGstin = clientGstin, CompanyName = companyName,
                     Destination = "Sales", CustomerName = mapped.CounterpartyName, OriginalCustomerName = mapped.CounterpartyName,
                     CustomerNameSource = "Mobile Link", CustomerGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
                     DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
@@ -1014,6 +1028,8 @@ public sealed class SecureLanServerService : IDisposable
                 .ToArray();
             return slabGroups.Select((slab, idx) => new SalesImportRecord
             {
+                ClientGstin = clientGstin,
+                CompanyName = companyName,
                 Destination = "Sales",
                 CustomerName = mapped.CounterpartyName,
                 OriginalCustomerName = mapped.CounterpartyName,
@@ -1055,6 +1071,7 @@ public sealed class SecureLanServerService : IDisposable
             var resolvedItem = string.IsNullOrWhiteSpace(r.StockItem) ? r.Description : r.StockItem.Trim();
             return new SalesImportRecord
             {
+                ClientGstin = clientGstin, CompanyName = companyName,
                 Destination = "Sales", CustomerName = mapped.CounterpartyName, OriginalCustomerName = mapped.CounterpartyName,
                 CustomerNameSource = "Mobile Link", CustomerGstin = mapped.CounterpartyGstin, DocumentType = mapped.DocumentType,
                 DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,

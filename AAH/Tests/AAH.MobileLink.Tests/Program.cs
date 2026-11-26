@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AccountingAutomationHub.Desktop.Services;
 using AccountingAutomationHub.Domain.Clients;
+using AccountingAutomationHub.Domain.Purchases;
 using AccountingAutomationHub.Infrastructure.Clients;
 using AccountingAutomationHub.Infrastructure.Persistence;
 using AccountingAutomationHub.Infrastructure.Purchases;
@@ -400,7 +401,73 @@ internal static class Program
             var savedCgSg = purRepo.GetRecords(client.Id, client.FinancialYear).Single(x => x.DocumentNumber == "INV-CGSG-01");
             Check(savedCgSg.Cgst == 65.48m && savedCgSg.Sgst == 65.48m, "Expected equalized CGST=65.48 and SGST=65.48 persisted.");
 
-            Console.WriteLine("PASS AAH.MobileLink.Tests: exact photo duplicate, auto multi-page link/unlink, page-2 SHA-256 tamper gate, AlreadyImported DB gate, Cont. Page 2 isolated auto-link, multi-photo ingest split, reverse-upload ordering, Accounting-vs-Item invoice posting, supplier self-learning memory, AutoImportInbox, and strict CGST==SGST equality gate.");
+            // 12. Mobile Link Purchase default GST Treatment = Shown in 2B, visible selector, ClientGstin populated & self-healing
+            Check(savedCgSg.GstApplicability == PurchaseTreatmentPolicy.ShownInTwoB,
+                $"Mobile Link Purchase row must default to 'Shown in 2B', got '{savedCgSg.GstApplicability}'.");
+            Check(savedCgSg.CgstLedger == "Input CGST @ 2.5%" && savedCgSg.SgstLedger == "Input SGST @ 2.5%",
+                $"Mobile Link Purchase row must use claimable tax ledgers without '- Not shown in 2B', got CGST='{savedCgSg.CgstLedger}', SGST='{savedCgSg.SgstLedger}'.");
+            Check(savedCgSg.ClientGstin == client.Gstin && savedCgSg.CompanyName == client.ClientName,
+                $"Mobile Link Purchase row must carry ClientGstin and CompanyName, got GSTIN='{savedCgSg.ClientGstin}', Company='{savedCgSg.CompanyName}'.");
+            Check(!savedCgSg.HideAccountingGstTreatmentSelector,
+                "Mobile Link Purchase row must NOT hide the GST Treatment selector.");
+            Check(savedCgSg.AccountingGstTreatmentOptions.Contains(PurchaseTreatmentPolicy.ShownInTwoB) &&
+                  savedCgSg.AccountingGstTreatmentOptions.Contains(PurchaseTreatmentPolicy.NotShownInTwoB) &&
+                  savedCgSg.AccountingGstTreatmentOptions.Contains(PurchaseTreatmentPolicy.GstIncludedInCost),
+                "Mobile Link Purchase row selector must offer Shown in 2B, Not shown in 2B, and GST included in cost.");
+
+            // User override persists via UpdateRecords and is NOT overwritten on reload
+            savedCgSg.GstApplicability = PurchaseTreatmentPolicy.NotShownInTwoB;
+            PurchaseTreatmentPolicy.ApplyAccountingShape(savedCgSg);
+            var updatedRows = purRepo.UpdateRecords(client.Id, [savedCgSg]);
+            Check(updatedRows == 1, $"Expected UpdateRecords to update Mobile Link row, updated={updatedRows}.");
+            var reloadedEdited = purRepo.GetRecords(client.Id, client.FinancialYear).Single(x => x.DocumentNumber == "INV-CGSG-01");
+            Check(reloadedEdited.IsUserEdited && reloadedEdited.GstApplicability == PurchaseTreatmentPolicy.NotShownInTwoB &&
+                  reloadedEdited.CgstLedger == "Input CGST @ 2.5% - Not shown in 2B",
+                $"User-edited Mobile Link treatment must persist on reload, got IsUserEdited={reloadedEdited.IsUserEdited}, Treatment='{reloadedEdited.GstApplicability}', CgstLedger='{reloadedEdited.CgstLedger}'.");
+
+            // Legacy unedited Mobile Link row with 'Not shown in 2B' and blank ClientGstin self-heals on read while keeping IsUserEdited=false
+            using (var healConn = new SqliteConnection($"Data Source={ApplicationDataPaths.DatabasePath}"))
+            {
+                healConn.Open();
+                using var cmd = healConn.CreateCommand();
+                cmd.CommandText =
+                    """
+                    UPDATE PurchaseRecords
+                    SET ClientGstin='', CompanyName='', GstApplicability='Not shown in 2B',
+                        CgstLedger='Input CGST @ 2.5% - Not shown in 2B', SgstLedger='Input SGST @ 2.5% - Not shown in 2B',
+                        IsUserEdited=0, RecordJson=''
+                    WHERE Id=$Id;
+                    """;
+                cmd.Parameters.AddWithValue("$Id", savedCgSg.PersistentId);
+                cmd.ExecuteNonQuery();
+            }
+            var selfHealed = purRepo.GetRecords(client.Id, client.FinancialYear).Single(x => x.DocumentNumber == "INV-CGSG-01");
+            Check(!selfHealed.IsUserEdited &&
+                  selfHealed.GstApplicability == PurchaseTreatmentPolicy.ShownInTwoB &&
+                  selfHealed.CgstLedger == "Input CGST @ 2.5%" &&
+                  selfHealed.ClientGstin == client.Gstin,
+                $"Expected unedited legacy Mobile Link row to self-heal to Shown in 2B + ClientGstin, got Treatment='{selfHealed.GstApplicability}', Cgst='{selfHealed.CgstLedger}', ClientGstin='{selfHealed.ClientGstin}'.");
+
+            // Non-Mobile-Link Manual Purchase Register rows keep Fix116 R1 blank/hidden GST Treatment
+            var manualBooksRow = new PurchaseImportRecord
+            {
+                ImportMode = "Manual Import",
+                SourceSection = "Manual Purchase Register • B2B",
+                ReconciliationStatus = "Manual Purchase Register - Books",
+                Rate = 18m,
+                TaxableValue = 1000m,
+                Cgst = 90m,
+                Sgst = 90m,
+                GstApplicability = PurchaseTreatmentPolicy.ShownInTwoB
+            };
+            PurchaseTreatmentPolicy.ApplyAccountingShape(manualBooksRow);
+            Check(PurchaseTreatmentPolicy.IsManualBooksImport(manualBooksRow) &&
+                  manualBooksRow.HideAccountingGstTreatmentSelector &&
+                  manualBooksRow.GstApplicability == string.Empty &&
+                  manualBooksRow.CgstLedger == "Input CGST @ 9%",
+                "Non-Mobile-Link Manual Purchase Register must preserve Fix116 R1 blank hidden GST Treatment.");
+
+            Console.WriteLine("PASS AAH.MobileLink.Tests: exact photo duplicate, auto multi-page link/unlink, page-2 SHA-256 tamper gate, AlreadyImported DB gate, Cont. Page 2 isolated auto-link, multi-photo ingest split, reverse-upload ordering, Accounting-vs-Item invoice posting, supplier self-learning memory, AutoImportInbox, strict CGST==SGST equality gate, and Mobile Link Shown in 2B + ClientGstin.");
             return 0;
         }
         finally

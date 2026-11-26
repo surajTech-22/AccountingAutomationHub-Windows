@@ -141,7 +141,7 @@
                                 <Setter TargetName="AccountingGstTreatmentSelector" Property="Visibility" Value="Collapsed" />
                                 <Setter TargetName="ReconciliationGstTreatmentSelector" Property="Visibility" Value="Visible" />
                             </DataTrigger>
-                            <DataTrigger Binding="{Binding ImportMode}" Value="Manual Import">
+                            <DataTrigger Binding="{Binding HideAccountingGstTreatmentSelector}" Value="True">
                                 <Setter TargetName="AccountingGstTreatmentSelector" Property="Visibility" Value="Collapsed" />
                                 <Setter TargetName="ReconciliationGstTreatmentSelector" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
