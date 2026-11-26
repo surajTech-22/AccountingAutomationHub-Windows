@@ -774,6 +774,11 @@ public sealed class SecureLanServerService : IDisposable
                     if (Math.Abs(mappedResult.InvoiceTotal - (mappedResult.TaxableTotal + mappedResult.CgstTotal +
                         mappedResult.SgstTotal + mappedResult.IgstTotal + mappedResult.CessTotal + mappedResult.RoundOff)) > 0.25m)
                         throw new InvalidOperationException("InvoiceVision invoice totals do not reconcile.");
+                    if (mappedResult.IgstTotal <= 0m && (mappedResult.CgstTotal > 0m || mappedResult.SgstTotal > 0m) &&
+                        Math.Abs(mappedResult.CgstTotal - mappedResult.SgstTotal) > 0.005m)
+                        throw new InvalidOperationException("CGST and SGST totals must be equal for intra-state invoices.");
+                    if (mappedResult.Lines.Any(l => l.Igst <= 0m && (l.Cgst > 0m || l.Sgst > 0m) && Math.Abs(l.Cgst - l.Sgst) > 0.005m))
+                        throw new InvalidOperationException("Every intra-state invoice row must have equal CGST and SGST.");
                     var account = _clients.GetById(clientId);
                     var activeGstin = new string((account?.Gstin ?? "").ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
                     var seller = sourceRoot.GetProperty("seller").GetProperty("gstin").GetString() ?? "";

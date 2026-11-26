@@ -502,7 +502,7 @@ internal static class InvoiceDocumentLayoutParser
             if (expected <= 0m) continue;
             var cgstClose = row.Cgst > 0m && Math.Abs(row.Cgst - expected) <= 0.20m;
             var sgstClose = row.Sgst > 0m && Math.Abs(row.Sgst - expected) <= 0.20m;
-            var componentsDisagree = row.Cgst <= 0m || row.Sgst <= 0m || Math.Abs(row.Cgst - row.Sgst) > 0.05m;
+            var componentsDisagree = row.Cgst <= 0m || row.Sgst <= 0m || Math.Abs(row.Cgst - row.Sgst) > 0.005m;
             var damagedPrecision = !LooksCleanMoneyCell(row.CgstSourceText) || !LooksCleanMoneyCell(row.SgstSourceText);
             // If one local component is missing/damaged, or both OCR strings visibly lost precision,
             // use the taxable+rate hypothesis only when the surviving numeric evidence supports it.

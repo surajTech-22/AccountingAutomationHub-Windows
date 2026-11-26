@@ -556,12 +556,24 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 foreach (var slabNode in authoritativeSlabs.OfType<JsonObject>())
                 {
                     if (!TryAmount(MobileInvoiceGstRateTranslator.Translate(Text(slabNode, "gstRate")), out var rate) || rate <= 0m) continue;
+                    var slabTaxable = AmountOrZero(Text(slabNode, "taxable"));
+                    var slabCgst = AmountOrZero(Text(slabNode, "cgst"));
+                    var slabSgst = AmountOrZero(Text(slabNode, "sgst"));
+                    var slabIgst = AmountOrZero(Text(slabNode, "igst"));
+                    if (slabIgst <= 0m && (slabCgst > 0m || slabSgst > 0m) && Math.Abs(slabCgst - slabSgst) > 0.005m)
+                    {
+                        var expectedHalf = slabTaxable > 0m
+                            ? Math.Round(slabTaxable * rate / 200m, 2, MidpointRounding.AwayFromZero)
+                            : Math.Round((slabCgst + slabSgst) / 2m, 2, MidpointRounding.AwayFromZero);
+                        slabCgst = expectedHalf;
+                        slabSgst = expectedHalf;
+                    }
                     var row = new MobileInvoiceTaxSlabRow(
                         rate,
-                        AmountOrZero(Text(slabNode, "taxable")),
-                        AmountOrZero(Text(slabNode, "cgst")),
-                        AmountOrZero(Text(slabNode, "sgst")),
-                        AmountOrZero(Text(slabNode, "igst")),
+                        slabTaxable,
+                        slabCgst,
+                        slabSgst,
+                        slabIgst,
                         "AAH invoice geometry + GST summary authority");
                     _authoritativeTaxSlabs[rate] = row;
                     _recognizedSlabRates.Add(rate);
@@ -813,7 +825,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 if (rowCgst <= 0m || rowSgst <= 0m) issues.Add($"Row {index + 1} local GST requires both CGST and SGST / UTGST");
                 else
                 {
-                    if (Math.Abs(rowCgst - rowSgst) > 0.10m) issues.Add($"Row {index + 1} CGST and SGST / UTGST must reconcile equally");
+                    if (Math.Abs(rowCgst - rowSgst) > 0.005m) issues.Add($"Row {index + 1} CGST and SGST / UTGST must reconcile equally");
                     if (Math.Abs(rowCgst - expectedComponent) > 0.20m || Math.Abs(rowSgst - expectedComponent) > 0.20m)
                         issues.Add($"Row {index + 1} CGST/SGST does not reconcile to Taxable × GST %");
                 }
@@ -860,7 +872,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         if (igst <= 0m && (cgst > 0m || sgst > 0m))
         {
             if (cgst <= 0m || sgst <= 0m) issues.Add("Local invoice requires both CGST and SGST / UTGST");
-            else if (Math.Abs(cgst - sgst) > 0.10m) issues.Add($"CGST and SGST / UTGST must reconcile equally for a local invoice ({cgst:0.00} vs {sgst:0.00})");
+            else if (Math.Abs(cgst - sgst) > 0.005m) issues.Add($"CGST and SGST / UTGST must reconcile equally for a local invoice ({cgst:0.00} vs {sgst:0.00})");
         }
 
         var lineRates = Lines.Select(x => AmountOrZero(x.GstRate)).Where(IsSupportedGstRate).Where(x => x > 0m).ToHashSet();
@@ -975,8 +987,25 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 else
                 {
                     var expected = Math.Round(taxable * rate / 200m, 2, MidpointRounding.AwayFromZero);
-                    if (Math.Abs(cgst - expected) > 0.10m) line.Cgst = expected.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
-                    if (Math.Abs(sgst - expected) > 0.10m) line.Sgst = expected.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+                    if (Math.Abs(cgst - sgst) > 0.005m || Math.Abs(cgst - expected) > 0.10m || Math.Abs(sgst - expected) > 0.10m)
+                    {
+                        var equalHalf = expected;
+                        if (Math.Abs(cgst - expected) <= 0.10m && Math.Abs(sgst - expected) <= 0.10m && Math.Abs(cgst - sgst) > 0.005m)
+                            equalHalf = expected;
+                        else if (Math.Abs(cgst - expected) <= 0.10m)
+                            equalHalf = cgst;
+                        else if (Math.Abs(sgst - expected) <= 0.10m)
+                            equalHalf = sgst;
+                        var textHalf = equalHalf.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+                        if (Math.Abs(cgst - equalHalf) > 0.005m) line.Cgst = textHalf;
+                        if (Math.Abs(sgst - equalHalf) > 0.005m) line.Sgst = textHalf;
+                        if (AmountOrZero(line.LineTotal) > 0m)
+                        {
+                            var expectedTotal = Math.Round(taxable + equalHalf + equalHalf + AmountOrZero(line.Cess), 2, MidpointRounding.AwayFromZero);
+                            if (Math.Abs(AmountOrZero(line.LineTotal) - expectedTotal) <= 0.25m)
+                                line.LineTotal = expectedTotal.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
                     if (igst > 0m) line.Igst = "";
                 }
             }
@@ -990,6 +1019,19 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 var cgstAuthority = AmountOrZero(Header("cgstTotal"));
                 var sgstAuthority = AmountOrZero(Header("sgstTotal"));
                 var igstAuthority = AmountOrZero(Header("igstTotal"));
+                if (igstAuthority <= 0m && (cgstAuthority > 0m || sgstAuthority > 0m) && Math.Abs(cgstAuthority - sgstAuthority) > 0.005m)
+                {
+                    cgstAuthority = taxableLines.Sum(x => AmountOrZero(x.Cgst));
+                    sgstAuthority = taxableLines.Sum(x => AmountOrZero(x.Sgst));
+                    if (Math.Abs(cgstAuthority - sgstAuthority) > 0.005m)
+                    {
+                        var equalHdr = Math.Round((cgstAuthority + sgstAuthority) / 2m, 2, MidpointRounding.AwayFromZero);
+                        cgstAuthority = equalHdr;
+                        sgstAuthority = equalHdr;
+                    }
+                    SetHeaderAmount("cgstTotal", cgstAuthority);
+                    SetHeaderAmount("sgstTotal", sgstAuthority);
+                }
                 var cessAuthority = AmountOrZero(Header("cessTotal"));
                 var chargesAuthority = AmountOrZero(Header("otherCharges"));
                 if (invoiceTotalAuthority > 0m)
@@ -1040,7 +1082,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             var igst = group.Sum(x => AmountOrZero(x.Igst));
             var expected = Math.Round(taxable * rate / 100m, 2, MidpointRounding.AwayFromZero);
             var actual = cgst + sgst + igst;
-            var status = Math.Abs(actual - expected) <= 0.20m && (igst > 0m || Math.Abs(cgst - sgst) <= 0.10m) ? "Reconciled" : "Needs review";
+            var status = Math.Abs(actual - expected) <= 0.20m && (igst > 0m || Math.Abs(cgst - sgst) <= 0.005m) ? "Reconciled" : "Needs review";
             TaxSlabs.Add(new MobileInvoiceTaxSlabRow(rate, taxable, cgst, sgst, igst, status));
         }
         foreach (var rate in _recognizedSlabRates.OrderBy(x => x))

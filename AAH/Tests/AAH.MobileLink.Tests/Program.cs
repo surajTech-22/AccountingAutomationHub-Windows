@@ -370,7 +370,37 @@ internal static class Program
             var reswept = server.SweepLocalAutoImportInbox(client.Id, client.FinancialYear, triggerOcr: false);
             Check(reswept == 0, "Second AutoImportInbox sweep must be an idempotent no-op.");
 
-            Console.WriteLine("PASS AAH.MobileLink.Tests: exact photo duplicate, auto multi-page link/unlink, page-2 SHA-256 tamper gate, AlreadyImported DB gate, Cont. Page 2 isolated auto-link, multi-photo ingest split, reverse-upload ordering, Accounting-vs-Item invoice posting, supplier self-learning memory, and AutoImportInbox.");
+            // 11. Strict Intra-State CGST == SGST Server Gate
+            var imgCgSg = Path.Combine(sampleDir, "cg_sg_gate.jpg");
+            File.WriteAllBytes(imgCgSg, Encoding.UTF8.GetBytes("CGST-SGST-EQUALITY-GATE-TEST"));
+            var shaCgSg = Sha256Hex(imgCgSg);
+            var scanCgSg = server.RegisterQueuedMobileScanForTest(client.Id, client.FinancialYear, "CG-SG-1", [imgCgSg],
+                BuildPayloadJson(sellerGstin, buyerGstin, "INV-CGSG-01", "2026-11-26", 2750.00m, [shaCgSg]), "CGST 65.48 SGST 65.47", "Ready", DateTime.UtcNow.AddSeconds(50));
+            var unequalMapped = new MobileInvoiceMappedResult
+            {
+                Direction = "Purchase", RecognitionMode = "Accounting Invoice", DocumentType = "Tax Invoice",
+                InvoiceNumber = "INV-CGSG-01", InvoiceDate = new DateTime(2026, 11, 26),
+                CounterpartyName = "ALPHA FOODS PVT LTD", CounterpartyGstin = sellerGstin,
+                TaxableTotal = 2619.05m, CgstTotal = 65.48m, SgstTotal = 65.47m, RoundOff = 0.00m, InvoiceTotal = 2750.00m,
+                SourceImageSha256 = shaCgSg,
+                Lines = [new MobileInvoiceMappedLine { Description = "ITEM", HsnSac = "090422", Taxable = 2619.05m, GstRate = 5m, Cgst = 65.48m, Sgst = 65.47m, LineTotal = 2750.00m }]
+            };
+            bool cgsgBlocked = false;
+            try { server.CompleteMobileInvoiceReview(client.Id, client.FinancialYear, scanCgSg.ScanId, true, unequalMapped); }
+            catch (InvalidOperationException) { cgsgBlocked = true; }
+            Check(cgsgBlocked, "Expected unequal CGST (65.48) != SGST (65.47) to be blocked by server gate.");
+
+            unequalMapped.CgstTotal = 65.48m;
+            unequalMapped.SgstTotal = 65.48m;
+            unequalMapped.RoundOff = -0.01m;
+            unequalMapped.Lines[0].Cgst = 65.48m;
+            unequalMapped.Lines[0].Sgst = 65.48m;
+            unequalMapped.Lines[0].LineTotal = 2750.01m;
+            server.CompleteMobileInvoiceReview(client.Id, client.FinancialYear, scanCgSg.ScanId, true, unequalMapped);
+            var savedCgSg = purRepo.GetRecords(client.Id, client.FinancialYear).Single(x => x.DocumentNumber == "INV-CGSG-01");
+            Check(savedCgSg.Cgst == 65.48m && savedCgSg.Sgst == 65.48m, "Expected equalized CGST=65.48 and SGST=65.48 persisted.");
+
+            Console.WriteLine("PASS AAH.MobileLink.Tests: exact photo duplicate, auto multi-page link/unlink, page-2 SHA-256 tamper gate, AlreadyImported DB gate, Cont. Page 2 isolated auto-link, multi-photo ingest split, reverse-upload ordering, Accounting-vs-Item invoice posting, supplier self-learning memory, AutoImportInbox, and strict CGST==SGST equality gate.");
             return 0;
         }
         finally
@@ -474,8 +504,8 @@ internal static class Program
                 var saved = purRepo.GetRecords(client.Id, client.FinancialYear).Where(x => x.DocumentNumber == mapped.InvoiceNumber).ToArray();
                 totalPurchaseRows += saved.Length;
                 var slabSum = saved.Sum(x => x.TaxableValue + x.Cgst + x.Sgst + x.Igst + x.Cess + x.RoundOff);
-                Check(saved.Length >= 1 && saved.All(x => !x.HasInventory && string.IsNullOrEmpty(x.ItemName) && x.ActualQuantity == 0m && string.IsNullOrEmpty(x.Unit) && x.ItemRate == 0m),
-                    $"Accounting Invoice check failed for {mapped.InvoiceNumber}: rows={saved.Length}");
+                Check(saved.Length >= 1 && saved.All(x => !x.HasInventory && string.IsNullOrEmpty(x.ItemName) && x.ActualQuantity == 0m && string.IsNullOrEmpty(x.Unit) && x.ItemRate == 0m && (x.Igst > 0m || Math.Abs(x.Cgst - x.Sgst) <= 0.005m)),
+                    $"Accounting Invoice / CGST==SGST check failed for {mapped.InvoiceNumber}: rows={saved.Length}");
                 Check(Math.Abs(slabSum - mapped.InvoiceTotal) <= 0.25m,
                     $"Slab sum mismatch for {mapped.InvoiceNumber}: {slabSum:0.00} vs {mapped.InvoiceTotal:0.00}");
                 var mem = MobileSupplierMemoryStore.GetSupplierSummary(mapped.CounterpartyGstin);
