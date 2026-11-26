@@ -58,7 +58,7 @@ jobs:
             exit 1
           fi
           actual_sha="$(keytool -exportcert -keystore "$signing_file" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | sha256sum | cut -d ' ' -f1)"
-          expected_sha="16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775"
+          expected_sha="135a568fa8b6b2a47fbe805563e35bc93a37330827456a266f5ede38d9198ac7"
           if [[ "$actual_sha" != "$expected_sha" ]]; then
             echo "::error::Keystore certificate SHA-256 ($actual_sha) does not match pinned AAH cert ($expected_sha)."
             exit 1
@@ -81,7 +81,7 @@ jobs:
           test -x "$apksigner"
           signer="$("$apksigner" verify --print-certs "$apk")"
           echo "$signer"
-          echo "$signer" | grep -F '16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775'
+          echo "$signer" | grep -F '135a568fa8b6b2a47fbe805563e35bc93a37330827456a266f5ede38d9198ac7'
           version_name="$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
           mkdir -p "$RUNNER_TEMP/android-out"
           cp "$apk" "$RUNNER_TEMP/android-out/AAHMobile.apk"

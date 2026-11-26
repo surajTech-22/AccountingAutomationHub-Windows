@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.657)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.658)"
         required: true
-        default: "v4.0.0.657"
+        default: "v4.0.0.658"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   build-android-signed:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.657]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.658]') }}
     name: Build signed AAHMobile APK (optional if secrets configured)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -86,7 +86,7 @@ jobs:
           signing_file="$RUNNER_TEMP/aah-upload.jks"
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$signing_file"
           actual_sha="$(keytool -exportcert -keystore "$signing_file" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | sha256sum | cut -d ' ' -f1)"
-          expected_sha="16fba06bd7a6975edaea669a1b089717af6873f1028f6661421bd9f320757775"
+          expected_sha="135a568fa8b6b2a47fbe805563e35bc93a37330827456a266f5ede38d9198ac7"
           if [[ "$actual_sha" != "$expected_sha" ]]; then
             echo "::error::Android keystore cert SHA-256 mismatch: $actual_sha != $expected_sha"
             exit 1
@@ -122,14 +122,14 @@ jobs:
 
   build-channel:
     needs: [build-android-signed]
-# v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with editable selector & Client GSTIN + unlimited continuous Android photo capture/auto-send.
+# v4.0.0.658: Bundle permanent-key-signed AAHMobile.apk (4.0.0.658-mobile36) with unlimited continuous photo & background auto-send.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.657]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.658]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.657' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.658' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -395,7 +395,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.658: Coordinated Windows + permanent-key-signed Android release (4.0.0.658-mobile36) with unlimited continuous photo capture & background auto-send."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -429,7 +429,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.657: Default Mobile Link Purchase GST treatment to Shown in 2B with visible selector and Client GSTIN, plus unlimited continuous photo capture & background auto-send on Android."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.658: Coordinated Windows + permanent-key-signed Android release (4.0.0.658-mobile36) with unlimited continuous photo capture & background auto-send."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
