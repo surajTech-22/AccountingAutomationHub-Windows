@@ -2,8 +2,8 @@
   "schema": 1,
   "source": "AAH CL017 R14 additional component sources",
   "parts": 15,
-  "file_count": 285,
-  "byte_length": 4301157,
-  "sha256": "fd56b1397b64716269eb68419b42b846759032fad798c63c4eb7e283d1858271",
+  "file_count": 305,
+  "byte_length": 4331737,
+  "sha256": "a1e1fe8b5f920cf8a8450e642480f2aaf8980021963cd03b0c8b15c8aa99328d",
   "excluded_note": "Compiled caches, binary recovery payloads, historical benchmark photo archives were intentionally excluded."
 }
