@@ -531,6 +531,7 @@ public sealed class MainWindowViewModel :
 
         _workspaceStateCache.AttachLiveChangeHub(_liveChangeHub);
         _liveChangeHub.Changed += OnAccountingLiveCacheChanged;
+        _secureLanServerService?.AttachLiveChangeHub(_liveChangeHub);
 
         _salesViewModel =
             new SalesImportViewModel(

@@ -101,8 +101,24 @@ public sealed class SecureLanServerService : IDisposable
     // document/table layout. Bank-statement verification is never invoked for invoices.
     private readonly MobileInvoiceDocumentOcrService _mobileInvoiceDocumentOcr = new();
     private readonly CancellationTokenSource _mobileInvoiceOcrCancellation = new();
+    private AccountingLiveChangeHub? _liveChangeHub;
     public event EventHandler? MobileLinkChanged;
     public event EventHandler? MobilePresenceChanged;
+
+    public void AttachLiveChangeHub(AccountingLiveChangeHub liveChangeHub)
+    {
+        if (ReferenceEquals(_liveChangeHub, liveChangeHub)) return;
+        if (_liveChangeHub is not null) _liveChangeHub.Changed -= OnAccountingLiveChanged;
+        _liveChangeHub = liveChangeHub;
+        _liveChangeHub.Changed += OnAccountingLiveChanged;
+    }
+
+    private void OnAccountingLiveChanged(object? sender, AccountingLiveChange change)
+    {
+        if (change.Area is not (AccountingLiveArea.Purchase or AccountingLiveArea.Sales)) return;
+        if (change.Reason.StartsWith("Mobile Link confirmed", StringComparison.OrdinalIgnoreCase)) return;
+        SyncMobileConfirmedHistoryWithRegisters(change.ClientId, change.FinancialYear);
+    }
 
 
     public SecureLanServerService(ApplicationPreferenceService settings)
@@ -627,6 +643,7 @@ public sealed class SecureLanServerService : IDisposable
     public IReadOnlyList<MobileInvoiceQueueItem> GetMobileInvoiceQueue(long clientId, string financialYear)
     {
         SweepLocalAutoImportInbox(clientId, financialYear, triggerOcr: true);
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
         return _mobileInvoiceQueue.Values
             .Where(x => x.ClientId == clientId && x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.ReceivedUtc).ThenBy(x => x.ScanId, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -896,6 +913,7 @@ public sealed class SecureLanServerService : IDisposable
                 PurchaseRows = records.Count
             };
             _mobilePurchaseRepository.SaveManualImport(clientId, financialYear, result, false);
+            _liveChangeHub?.Publish(clientId, financialYear, AccountingLiveArea.Purchase, $"Mobile Link confirmed {mapped.InvoiceNumber}");
         }
         else if (mapped.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase))
         {
@@ -908,6 +926,7 @@ public sealed class SecureLanServerService : IDisposable
                 SalesRows = records.Count
             };
             _mobileSalesRepository.SaveManualImport(clientId, financialYear, result, false);
+            _liveChangeHub?.Publish(clientId, financialYear, AccountingLiveArea.Sales, $"Mobile Link confirmed {mapped.InvoiceNumber}");
         }
         else throw new InvalidOperationException("Mobile invoice direction must be Sales or Purchase before confirmation.");
     }
@@ -3379,6 +3398,14 @@ public sealed class SecureLanServerService : IDisposable
         }
     }
 
+    private void SaveMobileConfirmedHistory(long clientId, string financialYear, List<MobileConfirmedScanHistoryEntry> entries)
+    {
+        lock (_mobileHistoryLock)
+        {
+            WriteMobileJson(MobileConfirmedHistoryPath(clientId, financialYear), entries);
+        }
+    }
+
     private static string ComputeSha256Hex(string filePath)
     {
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -3473,10 +3500,89 @@ public sealed class SecureLanServerService : IDisposable
         return (sellerGstin, counterpartyGstin, rowSigs);
     }
 
+    private (bool Loaded,
+        List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)> Purchase,
+        List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)> Sales)
+        LoadLiveRegisterSummaries(long clientId, string financialYear)
+    {
+        var existingPurchase = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
+        var existingSales = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
+        try
+        {
+            EnsureRepositoriesInitialized();
+            foreach (var grp in _mobilePurchaseRepository.GetRecords(clientId, financialYear)
+                .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
+                .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.SupplierGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
+            {
+                if (grp.Key.Item2.Length < 2) continue;
+                var first = grp.First();
+                existingPurchase.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
+            }
+            foreach (var grp in _mobileSalesRepository.GetRecords(clientId, financialYear)
+                .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
+                .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.CustomerGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
+            {
+                if (grp.Key.Item2.Length < 2) continue;
+                var first = grp.First();
+                existingSales.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
+            }
+            return (true, existingPurchase, existingSales);
+        }
+        catch
+        {
+            // Empty/uninitialized DB should never block Mobile Link queue display.
+            return (false, existingPurchase, existingSales);
+        }
+    }
+
+    private static bool IsRegisterMatch(string normInv, string cpGstin, decimal total, string recGstin, string recNormInv, decimal recVal)
+    {
+        if (!string.Equals(recNormInv, normInv, StringComparison.OrdinalIgnoreCase)) return false;
+        if (cpGstin.Length == 15 && recGstin.Length == 15)
+            return string.Equals(cpGstin, recGstin, StringComparison.OrdinalIgnoreCase);
+        return total > 0m && Math.Abs(recVal - total) <= 1.00m;
+    }
+
+    private static bool IsConfirmedEntryStillPresentInRegister(
+        MobileConfirmedScanHistoryEntry entry,
+        IReadOnlyList<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)> existingPurchase,
+        IReadOnlyList<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)> existingSales)
+    {
+        var entryInv = NormalizeInvNoForMatch(entry.InvoiceNumber);
+        if (entryInv.Length < 2) return false;
+        var entryGstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(entry.CounterpartyGstin);
+        if (!entry.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase) &&
+            existingPurchase.Any(r => IsRegisterMatch(entryInv, entryGstin, entry.InvoiceTotal, r.Gstin, r.NormInv, r.Value)))
+            return true;
+        if (!entry.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase) &&
+            existingSales.Any(r => IsRegisterMatch(entryInv, entryGstin, entry.InvoiceTotal, r.Gstin, r.NormInv, r.Value)))
+            return true;
+        return false;
+    }
+
+    public void SyncMobileConfirmedHistoryWithRegisters(long clientId, string financialYear)
+    {
+        RecomputeQueueLinkAndDuplicateFlags(clientId, financialYear);
+        MobileLinkChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void RecomputeQueueLinkAndDuplicateFlags(long clientId, string financialYear)
     {
         lock (_mobileQueueAnalysisLock)
         {
+            var (registersLoaded, existingPurchase, existingSales) = LoadLiveRegisterSummaries(clientId, financialYear);
+            var confirmedHistory = LoadMobileConfirmedHistory(clientId, financialYear);
+            var activeConfirmedHistory = confirmedHistory;
+            if (registersLoaded && confirmedHistory.Count > 0)
+            {
+                var pruned = confirmedHistory
+                    .Where(entry => IsConfirmedEntryStillPresentInRegister(entry, existingPurchase, existingSales))
+                    .ToList();
+                if (pruned.Count != confirmedHistory.Count)
+                    SaveMobileConfirmedHistory(clientId, financialYear, pruned);
+                activeConfirmedHistory = pruned;
+            }
+
             var items = _mobileInvoiceQueue.Values
                 .Where(x => x.ClientId == clientId &&
                             x.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase) &&
@@ -3499,10 +3605,9 @@ public sealed class SecureLanServerService : IDisposable
                 metaByScan[it.ScanId] = (md.SellerGstin, md.CounterpartyGstin, md.RowSignatures, NormalizeInvNoForMatch(it.InvoiceNumber), ExtractPageMarker(it), ParseMoneySafe(it.InvoiceTotal));
             }
 
-            // Pass 1: Exact Photo SHA-256 duplicates (vs confirmed history and earlier queued items)
-            var confirmedHistory = LoadMobileConfirmedHistory(clientId, financialYear);
+            // Pass 1: Exact Photo SHA-256 duplicates (vs reconciled confirmed history and earlier queued items)
             var confirmedShaMap = new Dictionary<string, MobileConfirmedScanHistoryEntry>(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in confirmedHistory)
+            foreach (var entry in activeConfirmedHistory)
             {
                 foreach (var sha in entry.PageSha256List)
                     if (!string.IsNullOrWhiteSpace(sha)) confirmedShaMap.TryAdd(sha, entry);
@@ -3532,31 +3637,7 @@ public sealed class SecureLanServerService : IDisposable
                     seenQueueSha.TryAdd(h, it);
             }
 
-            // Pass 2: Semantic duplicate against already-imported PurchaseRecords / SalesRecords & confirmed history
-            var existingPurchase = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
-            var existingSales = new List<(string Gstin, string NormInv, string RawInv, DateTime? Date, decimal Value)>();
-            try
-            {
-                EnsureRepositoriesInitialized();
-                foreach (var grp in _mobilePurchaseRepository.GetRecords(clientId, financialYear)
-                    .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
-                    .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.SupplierGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
-                {
-                    if (grp.Key.Item2.Length < 2) continue;
-                    var first = grp.First();
-                    existingPurchase.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
-                }
-                foreach (var grp in _mobileSalesRepository.GetRecords(clientId, financialYear)
-                    .Where(r => !string.IsNullOrWhiteSpace(r.DocumentNumber))
-                    .GroupBy(r => (MobileInvoicePartyIdentityResolver.NormalizeGstin(r.CustomerGstin), NormalizeInvNoForMatch(r.DocumentNumber))))
-                {
-                    if (grp.Key.Item2.Length < 2) continue;
-                    var first = grp.First();
-                    existingSales.Add((grp.Key.Item1, grp.Key.Item2, first.DocumentNumber, first.DocumentDate, first.DocumentValue));
-                }
-            }
-            catch { /* Empty/uninitialized DB should never block Mobile Link queue display */ }
-
+            // Pass 2: Semantic duplicate against live PurchaseRecords / SalesRecords (or confirmed history only if DB could not be read)
             foreach (var it in items)
             {
                 if (it.IsDuplicate) continue;
@@ -3564,23 +3645,15 @@ public sealed class SecureLanServerService : IDisposable
                 if (m.NormInv.Length < 2) continue;
 
                 (string Register, string RawInv, DateTime? Date, decimal Value)? match = null;
-                bool MatchesRecord(string recGstin, string recNormInv, decimal recVal)
-                {
-                    if (!string.Equals(recNormInv, m.NormInv, StringComparison.OrdinalIgnoreCase)) return false;
-                    if (m.CpGstin.Length == 15 && recGstin.Length == 15)
-                        return string.Equals(m.CpGstin, recGstin, StringComparison.OrdinalIgnoreCase);
-                    return m.Total > 0m && Math.Abs(recVal - m.Total) <= 1.00m;
-                }
-
                 if (!it.Direction.Equals("Sales", StringComparison.OrdinalIgnoreCase))
                 {
-                    var pHit = existingPurchase.FirstOrDefault(r => MatchesRecord(r.Gstin, r.NormInv, r.Value));
+                    var pHit = existingPurchase.FirstOrDefault(r => IsRegisterMatch(m.NormInv, m.CpGstin, m.Total, r.Gstin, r.NormInv, r.Value));
                     if (!string.IsNullOrEmpty(pHit.NormInv))
                         match = ("Purchase", pHit.RawInv, pHit.Date, pHit.Value);
                 }
                 if (match is null && !it.Direction.Equals("Purchase", StringComparison.OrdinalIgnoreCase))
                 {
-                    var sHit = existingSales.FirstOrDefault(r => MatchesRecord(r.Gstin, r.NormInv, r.Value));
+                    var sHit = existingSales.FirstOrDefault(r => IsRegisterMatch(m.NormInv, m.CpGstin, m.Total, r.Gstin, r.NormInv, r.Value));
                     if (!string.IsNullOrEmpty(sHit.NormInv))
                         match = ("Sales", sHit.RawInv, sHit.Date, sHit.Value);
                 }
@@ -3593,15 +3666,18 @@ public sealed class SecureLanServerService : IDisposable
                     continue;
                 }
 
-                var histHit = confirmedHistory.FirstOrDefault(h =>
-                    NormalizeInvNoForMatch(h.InvoiceNumber) == m.NormInv &&
-                    ((m.CpGstin.Length == 15 && h.CounterpartyGstin.Length == 15 && m.CpGstin == h.CounterpartyGstin) ||
-                     (m.Total > 0m && Math.Abs(h.InvoiceTotal - m.Total) <= 1.00m)));
-                if (histHit is not null)
+                if (!registersLoaded)
                 {
-                    it.DuplicateKind = "AlreadyImported";
-                    it.DuplicateTargetId = histHit.ScanId;
-                    it.DuplicateDetail = $"Already confirmed on {histHit.ConfirmedUtc:dd-MM-yyyy} (Inv {histHit.InvoiceNumber}, ₹{histHit.InvoiceTotal:N2})";
+                    var histHit = activeConfirmedHistory.FirstOrDefault(h =>
+                        NormalizeInvNoForMatch(h.InvoiceNumber) == m.NormInv &&
+                        ((m.CpGstin.Length == 15 && h.CounterpartyGstin.Length == 15 && m.CpGstin == h.CounterpartyGstin) ||
+                         (m.Total > 0m && Math.Abs(h.InvoiceTotal - m.Total) <= 1.00m)));
+                    if (histHit is not null)
+                    {
+                        it.DuplicateKind = "AlreadyImported";
+                        it.DuplicateTargetId = histHit.ScanId;
+                        it.DuplicateDetail = $"Already confirmed on {histHit.ConfirmedUtc:dd-MM-yyyy} (Inv {histHit.InvoiceNumber}, ₹{histHit.InvoiceTotal:N2})";
+                    }
                 }
             }
 
@@ -5512,6 +5588,7 @@ public sealed class SecureLanServerService : IDisposable
         if (_disposed) return;
         _disposed = true;
         try { _mobileInvoiceOcrCancellation.Cancel(); } catch { }
+        if (_liveChangeHub is not null) _liveChangeHub.Changed -= OnAccountingLiveChanged;
         CancelAutomaticStartRetry();
         _leaseTimer?.Dispose(); _leaseTimer = null;
         _androidQrRotationTimer?.Dispose(); _androidQrRotationTimer = null;

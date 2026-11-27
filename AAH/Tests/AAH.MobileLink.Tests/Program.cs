@@ -187,6 +187,48 @@ internal static class Program
             mappedDup.DuplicateOverrideAcknowledged = true;
             server.CompleteMobileInvoiceReview(client.Id, client.FinancialYear, scanReupload.ScanId, true, mappedDup);
 
+            // 4b. Live hub bidirectional sync & Purchase ClearModule/Delete clears stale duplicates
+            var liveHub = new AccountingLiveChangeHub();
+            var publishedAreas = new System.Collections.Generic.List<(AccountingLiveArea Area, string Reason)>();
+            liveHub.Changed += (_, ev) => publishedAreas.Add((ev.Area, ev.Reason));
+            server.AttachLiveChangeHub(liveHub);
+
+            var purRepoSync = new SqlitePurchaseRecordRepository();
+            purRepoSync.Initialize();
+            purRepoSync.ClearModule(client.Id, client.FinancialYear);
+            liveHub.Publish(client.Id, client.FinancialYear, AccountingLiveArea.Purchase, "Purchase module cleared");
+
+            var scanSamePhotoAfterDelete = server.RegisterQueuedMobileScanForTest(
+                client.Id, client.FinancialYear, "SCAN-AFTER-DEL-PHOTO", [imgP1Dup],
+                BuildPayloadJson(sellerGstin, buyerGstin, "INV-MULTI-1", "2026-11-20", 2170m, [sha1]),
+                "Net Payable 2170.00", "Ready");
+            Check(scanSamePhotoAfterDelete.DuplicateKind == "None" && !scanSamePhotoAfterDelete.IsDuplicate,
+                $"Expected deleted Purchase bill photo NOT to flag duplicate, got {scanSamePhotoAfterDelete.DuplicateKind}: {scanSamePhotoAfterDelete.DuplicateDetail}");
+
+            var mappedAfterDelete = new MobileInvoiceMappedResult
+            {
+                Direction = "Purchase",
+                DocumentType = "Tax Invoice",
+                InvoiceNumber = "INV-MULTI-1",
+                InvoiceDate = new DateTime(2026, 11, 20),
+                CounterpartyName = "ALPHA FOODS PVT LTD",
+                CounterpartyGstin = sellerGstin,
+                InvoiceTotal = 2170m,
+                TaxableTotal = 2170m,
+                SourceImageSha256 = sha1,
+                DuplicateOverrideAcknowledged = false
+            };
+            server.CompleteMobileInvoiceReview(client.Id, client.FinancialYear, scanSamePhotoAfterDelete.ScanId, true, mappedAfterDelete);
+            Check(publishedAreas.Any(x => x.Area == AccountingLiveArea.Purchase && x.Reason.Contains("Mobile Link confirmed", StringComparison.OrdinalIgnoreCase)),
+                "Expected confirming a Mobile Link Purchase invoice to publish AccountingLiveArea.Purchase.");
+            var scanDupAfterReconfirm = server.RegisterQueuedMobileScanForTest(
+                client.Id, client.FinancialYear, "SCAN-RECONF-DUP", [imgP1Dup],
+                BuildPayloadJson(sellerGstin, buyerGstin, "INV-MULTI-1", "2026-11-20", 2170m, [sha1]),
+                "Net Payable 2170.00", "Ready");
+            Check(scanDupAfterReconfirm.DuplicateKind == "ExactPhotoConfirmed" && scanDupAfterReconfirm.IsDuplicate,
+                $"Expected re-confirmed Purchase bill photo to flag ExactPhotoConfirmed, got {scanDupAfterReconfirm.DuplicateKind}");
+            server.RemoveDuplicateMobileScan(client.Id, client.FinancialYear, scanDupAfterReconfirm.ScanId);
+
             // 5. Batch Mixed Scans + Cont. Page 2 Auto-Link Isolation (only matching invoice auto-links, unrelated scan stays separate)
             var imgV1 = Path.Combine(sampleDir, "v1.jpg");
             var imgV2 = Path.Combine(sampleDir, "v2.jpg");
