@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.666)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.667)"
         required: true
-        default: "v4.0.0.666"
+        default: "v4.0.0.667"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   build-android-signed:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.666]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.667]') }}
     name: Build signed AAHMobile APK (optional if secrets configured)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -122,14 +122,14 @@ jobs:
 
   build-channel:
     needs: [build-android-signed]
-# v4.0.0.666: Fix SmartAutoScanner active autofocus lock, 3-zone clarity gate & 2.4s swap-bill cooldown + removal/inner-hash gating, keeping Google Scanner 100% intact (4.0.0.666-mobile44).
+# v4.0.0.667: Instant cached stitch on invoice merge, serialized OCR queue, fixed NANDI/ANVI memory collision & invoiceTotal + Adarsh 2948/150qty, plus mobile Auto-Flash, shadow gate, LAB shadow cleanup & 4-zone clarity (4.0.0.667-mobile45).
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.666]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.667]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.666' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.667' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -395,7 +395,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.666: Fixed SmartAutoScanner active autofocus lock, 3-zone text-stroke clarity rejection, and 2.4s swap-bill cooldown + removal/inner-hash gating while keeping Google ML Kit Scanner intact (4.0.0.666-mobile44)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.667: Instant cached OCR stitch on merge (no re-OCR), serialized OCR queue, supplier memory & grand-total/Adarsh fixes, plus mobile Auto-Flash, shadow rejection, LAB shadow cleanup & 4-zone clarity gate (4.0.0.667-mobile45)."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -429,7 +429,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.666: Fixed SmartAutoScanner active autofocus lock, 3-zone text-stroke clarity rejection, and 2.4s swap-bill cooldown + removal/inner-hash gating while keeping Google ML Kit Scanner intact (4.0.0.666-mobile44)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.667: Instant cached OCR stitch on merge (no re-OCR), serialized OCR queue, supplier memory & grand-total/Adarsh fixes, plus mobile Auto-Flash, shadow rejection, LAB shadow cleanup & 4-zone clarity gate (4.0.0.667-mobile45)."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or

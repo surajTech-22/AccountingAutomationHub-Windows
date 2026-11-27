@@ -130,13 +130,7 @@ internal static class InvoiceOcrChildBridge
             return (new Status { Message = "Original Phone Link photo is missing; InvoiceVision skipped." }, null);
         }
 
-        var isFastCachedStitch = cachedPageOcrTexts is not null
-            && cachedPageOcrTexts.Count == usablePaths.Length
-            && usablePaths.Length >= 2
-            && cachedPageOcrTexts.All(t => !string.IsNullOrWhiteSpace(t));
-
-        if (!isFastCachedStitch)
-            await ExtractionQueue.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await ExtractionQueue.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var runDir = Path.Combine(evidenceFolder, "ChildHandoff");
@@ -261,8 +255,7 @@ internal static class InvoiceOcrChildBridge
         }
         finally
         {
-            if (!isFastCachedStitch)
-                ExtractionQueue.Release();
+            ExtractionQueue.Release();
         }
     }
 
