@@ -78,9 +78,9 @@
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
                                             <Button Content="Auto" Padding="6,2" Margin="0,0,4,0" Click="AutoSplit_Click"/>
-                                            <Button Content="−" Width="28" Margin="0,0,4,0" Click="MinusSplit_Click"/>
+                                            <Button Content="−" Width="28" Margin="0,0,4,0" Click="MinusSplit_Click" ToolTip="Decrease number of split entries (-)"/>
                                             <TextBox Width="48" Text="{Binding SplitText, Mode=OneWay}" TextAlignment="Center" LostFocus="SplitText_LostFocus"/>
-                                            <Button Content="+" Width="28" Margin="4,0,0,0" Click="PlusSplit_Click"/>
+                                            <Button Content="+" Width="28" Margin="4,0,0,0" Click="PlusSplit_Click" ToolTip="Increase number of split entries (+)"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>

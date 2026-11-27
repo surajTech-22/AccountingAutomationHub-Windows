@@ -130,7 +130,7 @@
                     <TextBox Text="{Binding LedgerMappingDetailFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              Width="250" MinHeight="28" Padding="7,3" Margin="0,0,6,0"
                              VerticalContentAlignment="Center"
-                             ToolTip="Search the selected detail column. ALL COLUMNS searches Date, Narration, Debit, Credit, Mode, Method, Ledger, Bank and Row No."/>
+                             ToolTip="Search or filter detail rows (Comma = AND). Supports comparison symbols on amounts and dates: &gt; Greater Than, &gt;= Greater Than or Equal, &lt; Less Than, &lt;= Less Than or Equal, = Exact Match (e.g. &gt;5000 or &gt;1000, &lt;=10000). ALL COLUMNS searches Date, Narration, Debit, Credit, Mode, Method, Ledger, Bank and Row No."/>
                     <Button Content="Clear Filter" Click="ClearDetailFilter_Click" Padding="10,5" Margin="0,0,6,0"/>
                     <Button Content="Clear Sort &amp; Filter" Click="ClearDetailSortFilter_Click" Padding="10,5" Margin="0,0,10,0"
                             ToolTip="Clear the detail search/filter and every sort/filter applied to this grid."/>

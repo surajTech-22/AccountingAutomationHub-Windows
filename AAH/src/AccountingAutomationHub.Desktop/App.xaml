@@ -46,7 +46,7 @@
                                 </DockPanel>
                                 <TextBlock Grid.Row="1"
                                            Text="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
-                                           ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                           ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalToolTip)}"
                                            FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Stretch" TextAlignment="Right"
                                            TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                            Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0">

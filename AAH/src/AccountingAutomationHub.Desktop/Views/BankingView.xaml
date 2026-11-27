@@ -78,7 +78,7 @@
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0"
                                        Text="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
-                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalText)}"
+                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridColumnHeader}}, Path=Column.(behaviors:DataGridColumnFilterBehavior.TotalToolTip)}"
                                        FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Stretch" TextAlignment="Right"
                                        TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                        Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,2">
@@ -313,7 +313,7 @@
                                   Style="{StaticResource FlatFilterComboBoxStyle}" Width="135" Margin="0,0,6,0"/>
                         <TextBox Text="{Binding BankStatementFilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  Width="230" MinHeight="28" Padding="7,3" Margin="0,0,6,0"
-                                 VerticalContentAlignment="Center" ToolTip="Contains filter for the selected Bank Statement column"/>
+                                 VerticalContentAlignment="Center" ToolTip="Filter the selected Bank Statement column (Comma = AND). Supports amount &amp; date comparison symbols: &gt; Greater Than, &gt;= Greater Than or Equal, &lt; Less Than, &lt;= Less Than or Equal, = Exact Match (e.g. &gt;5000 or &gt;=1000, &lt;=25000)."/>
                         <Button Content="Clear Filter" Click="BankStatementClearFilter_Click" Padding="10,5" Margin="0,0,6,0"/>
                         <Button Content="Clear Sort" Click="BankStatementClearSort_Click" Padding="10,5" Margin="0,0,6,0"/>
                         <Button Content="Clear Sort &amp; Filter" Click="BankStatementClearSortFilter_Click" Padding="10,5"/>

@@ -46,10 +46,99 @@ public static partial class FlexibleFilterMatcher
             out date);
     }
 
+    public static bool IsComparisonQuery(string? rawQuery)
+    {
+        var query = (rawQuery ?? string.Empty).Trim();
+        if (query.Length == 0) return false;
+        foreach (var rawTerm in query.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (TrySplitComparison(rawTerm, out var op, out _) && !op.Equals("=", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    public static bool TrySplitComparison(string? rawTerm, out string op, out string operand)
+    {
+        op = string.Empty;
+        operand = string.Empty;
+        var term = (rawTerm ?? string.Empty).Trim();
+        if (term.Length == 0) return false;
+
+        foreach (var candidate in new[] { ">=", "<=", "!=", "<>", ">", "<", "=" })
+        {
+            if (term.StartsWith(candidate, StringComparison.Ordinal))
+            {
+                op = candidate;
+                operand = term[candidate.Length..].Trim();
+                return operand.Length > 0;
+            }
+        }
+        return false;
+    }
+
+    public static string DescribeComparisonExpression(string? rawQuery)
+    {
+        var query = (rawQuery ?? string.Empty).Trim();
+        if (query.Length == 0) return string.Empty;
+
+        var parts = new List<string>();
+        foreach (var rawTerm in query.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!TrySplitComparison(rawTerm, out var op, out var operand)) continue;
+            var phrase = op switch
+            {
+                ">" => $"Greater than {operand} (excludes {operand})",
+                ">=" => $"Greater than or equal to {operand} (includes {operand})",
+                "<" => $"Less than {operand} (excludes {operand})",
+                "<=" => $"Less than or equal to {operand} (includes {operand})",
+                "=" => $"Equal to {operand} (exact match)",
+                "!=" or "<>" => $"Not equal to {operand}",
+                _ => rawTerm
+            };
+            parts.Add(phrase);
+        }
+        return string.Join(" AND ", parts);
+    }
+
     public static bool MatchesDate(DateTime actualDate, string? rawQuery, bool exactOnly = false)
     {
         var query = (rawQuery ?? string.Empty).Trim();
         if (query.Length == 0) return true;
+
+        if (query.Contains(',', StringComparison.Ordinal) || IsComparisonQuery(query))
+        {
+            var terms = query.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (terms.Length > 1 || IsComparisonQuery(query))
+            {
+                foreach (var term in terms)
+                {
+                    if (!MatchesSingleDateTerm(actualDate, term, exactOnly)) return false;
+                }
+                return terms.Length > 0;
+            }
+        }
+
+        return MatchesSingleDateTerm(actualDate, query, exactOnly);
+    }
+
+    private static bool MatchesSingleDateTerm(DateTime actualDate, string query, bool exactOnly)
+    {
+        if (TrySplitComparison(query, out var op, out var operand))
+        {
+            if (!TryParseFlexibleDate(operand, out var targetDate)) return false;
+            var actual = actualDate.Date;
+            var target = targetDate.Date;
+            return op switch
+            {
+                ">" => actual > target,
+                ">=" => actual >= target,
+                "<" => actual < target,
+                "<=" => actual <= target,
+                "!=" or "<>" => actual != target,
+                _ => actual == target
+            };
+        }
 
         if (TryParseFlexibleDate(query, out var parsedQueryDate))
             return actualDate.Date == parsedQueryDate.Date;
@@ -182,10 +271,51 @@ public static partial class FlexibleFilterMatcher
         return TryExtractAmountQuery(rawQuery, out _, out var parsed) && parsed is decimal value && (amount = value) == value;
     }
 
-    public static bool MatchesAmount(decimal actualAmount, string? rawQuery, bool exactOnly = false)
+    public static bool MatchesAmount(
+        decimal actualAmount,
+        string? rawQuery,
+        bool exactOnly = false,
+        bool ignoreZeroForLessThan = false)
     {
         var query = (rawQuery ?? string.Empty).Trim();
         if (query.Length == 0) return true;
+
+        if (query.Contains(',', StringComparison.Ordinal) || IsComparisonQuery(query))
+        {
+            var terms = query.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            foreach (var term in terms)
+            {
+                if (!MatchesSingleAmountTerm(actualAmount, term, exactOnly, ignoreZeroForLessThan))
+                    return false;
+            }
+            return terms.Length > 0;
+        }
+
+        return MatchesSingleAmountTerm(actualAmount, query, exactOnly, ignoreZeroForLessThan);
+    }
+
+    private static bool MatchesSingleAmountTerm(
+        decimal actualAmount,
+        string query,
+        bool exactOnly,
+        bool ignoreZeroForLessThan)
+    {
+        if (TrySplitComparison(query, out var op, out var operand))
+        {
+            if (!TryParseAmount(operand, out var expected)) return false;
+            if (ignoreZeroForLessThan && actualAmount == 0m && (op == "<" || (op == "<=" && expected > 0m)))
+                return false;
+            return op switch
+            {
+                ">" => actualAmount > expected,
+                ">=" => actualAmount >= expected,
+                "<" => actualAmount < expected,
+                "<=" => actualAmount <= expected,
+                "!=" or "<>" => actualAmount != expected,
+                _ => actualAmount == expected
+            };
+        }
+
         if (!TryExtractAmountQuery(query, out var normalizedQuery, out var parsedQuery))
             return false;
 

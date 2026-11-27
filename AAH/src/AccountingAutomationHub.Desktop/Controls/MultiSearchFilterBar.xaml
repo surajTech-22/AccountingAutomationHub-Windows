@@ -9,7 +9,7 @@
                 <TextBox x:Name="SearchBox" MinHeight="32" Padding="10,6" VerticalContentAlignment="Center"
                          Text="{Binding SearchText, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          TextChanged="SearchBox_TextChanged" PreviewKeyDown="SearchBox_PreviewKeyDown"
-                         ToolTip="Search all columns. Comma = AND. Numeric symbols work with field names, for example Debit &gt; 50000, Closing &lt;= 20000, Source Entries &gt;= 5. Sort commands also work, for example sort Closing desc. Field names are suggested while typing."/>
+                         ToolTip="Search all columns (Comma = AND between conditions). Numeric and date comparison symbols: &gt; means Greater Than (excludes value), &gt;= means Greater Than or Equal (includes value), &lt; means Less Than (excludes value), &lt;= means Less Than or Equal (includes value), = means Exact Match. Example: Debit &gt; 50000, Closing &lt;= 20000. Sort commands also work (e.g. sort Closing desc)."/>
                 <Popup x:Name="SuggestionsPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=SearchBox}"
                        StaysOpen="False" AllowsTransparency="True">
                     <Border Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="6" Padding="4" MinWidth="240" MaxWidth="520">

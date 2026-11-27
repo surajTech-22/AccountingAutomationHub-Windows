@@ -174,6 +174,8 @@ public sealed class BankingViewModel : PageViewModel
     private string _bulkMappingAmountFromText = string.Empty;
     private string _bulkMappingAmountToText = string.Empty;
     private string _bulkMappingFilterSummary = "Bank: All Banks · Voucher Type: All · Amount: Any";
+    private string _bulkMappingFilterSummaryToolTip = "All checked transactions are included. Type amount comparisons like >20 (Greater Than 20) or >=1000, <=25000 in Amount Filter.";
+    private string _bulkMappingPreviewHeaderText = "Matching Transactions Preview (0)";
     private bool _bulkMappingAmountFilterActive;
     private bool _suppressBulkMappingLiveFilterRefresh;
     private bool _bulkMappingUseVoucherTypeGrid;
@@ -361,6 +363,7 @@ public sealed class BankingViewModel : PageViewModel
     public ObservableCollection<LedgerMappingDetailRow> FilteredLedgerMappingDetails { get; } = [];
     public ObservableCollection<LedgerMappingWorkbenchRow> BulkLedgerMappingRows { get; } = [];
     public ObservableCollection<BulkVoucherTypeMappingRow> BulkVoucherTypeMappingRows { get; } = [];
+    public BulkObservableCollection<BankTransactionRecord> BulkMappingPreviewTransactions { get; } = [];
     public ObservableCollection<string> LedgerMappingBankOptions { get; } = [];
     public ObservableCollection<string> LedgerMappingMethodOptions { get; } = [];
     public ObservableCollection<string> BulkMappingBankOptions { get; } = [];
@@ -1221,6 +1224,18 @@ public sealed class BankingViewModel : PageViewModel
     {
         get => _bulkMappingFilterSummary;
         private set => SetProperty(ref _bulkMappingFilterSummary, value ?? string.Empty);
+    }
+
+    public string BulkMappingFilterSummaryToolTip
+    {
+        get => _bulkMappingFilterSummaryToolTip;
+        private set => SetProperty(ref _bulkMappingFilterSummaryToolTip, value ?? string.Empty);
+    }
+
+    public string BulkMappingPreviewHeaderText
+    {
+        get => _bulkMappingPreviewHeaderText;
+        private set => SetProperty(ref _bulkMappingPreviewHeaderText, value ?? string.Empty);
     }
 
     public bool BulkMappingIsSimple
@@ -4278,7 +4293,9 @@ public sealed class BankingViewModel : PageViewModel
     {
         var needle = (filterText ?? string.Empty).Trim();
         if (needle.Length == 0) return true;
-        var exact = needle.StartsWith("=", StringComparison.Ordinal);
+        var isComparison = FlexibleFilterMatcher.IsComparisonQuery(needle);
+        var hasComma = needle.Contains(',', StringComparison.Ordinal);
+        var exact = !isComparison && !hasComma && needle.StartsWith("=", StringComparison.Ordinal);
         if (exact) needle = needle[1..].Trim();
         if (needle.Length == 0) return true;
 
@@ -4291,16 +4308,14 @@ public sealed class BankingViewModel : PageViewModel
         var runningBalance = row.RunningBalance?.ToString("N2") ?? string.Empty;
 
         var matchDate = FlexibleFilterMatcher.MatchesDate(row.TransactionDate, needle, exactOnly: exact);
-        var matchDebit = FlexibleFilterMatcher.MatchesAmount(row.Debit, needle, exactOnly: exact) ||
-                         Has(debit, needle) ||
-                         Has(row.Debit.ToString(CultureInfo.InvariantCulture), needle);
-        var matchCredit = FlexibleFilterMatcher.MatchesAmount(row.Credit, needle, exactOnly: exact) ||
-                          Has(credit, needle) ||
-                          Has(row.Credit.ToString(CultureInfo.InvariantCulture), needle);
+        var matchDebit = FlexibleFilterMatcher.MatchesAmount(row.Debit, needle, exactOnly: exact, ignoreZeroForLessThan: true) ||
+                         (!isComparison && !hasComma && (Has(debit, needle) || Has(row.Debit.ToString(CultureInfo.InvariantCulture), needle)));
+        var matchCredit = FlexibleFilterMatcher.MatchesAmount(row.Credit, needle, exactOnly: exact, ignoreZeroForLessThan: true) ||
+                          (!isComparison && !hasComma && (Has(credit, needle) || Has(row.Credit.ToString(CultureInfo.InvariantCulture), needle)));
         var matchBalance = (row.RunningBalance.HasValue &&
-                            (FlexibleFilterMatcher.MatchesAmount(row.RunningBalance.Value, needle, exactOnly: exact) ||
-                             Has(row.RunningBalance.Value.ToString(CultureInfo.InvariantCulture), needle))) ||
-                           Has(runningBalance, needle);
+                            (FlexibleFilterMatcher.MatchesAmount(row.RunningBalance.Value, needle, exactOnly: exact, ignoreZeroForLessThan: false) ||
+                             (!isComparison && !hasComma && Has(row.RunningBalance.Value.ToString(CultureInfo.InvariantCulture), needle)))) ||
+                           (!isComparison && !hasComma && Has(runningBalance, needle));
 
         return column.ToUpperInvariant() switch
         {
@@ -4312,8 +4327,10 @@ public sealed class BankingViewModel : PageViewModel
             "MODE" => Has(row.Mode, needle),
             "LEDGER" => Has(row.LedgerName, needle),
             "BANK" => Has(row.BankAccountName, needle),
-            _ => matchDate || Has(row.Narration, needle) || matchDebit || matchCredit || matchBalance ||
-                 Has(row.Mode, needle) || Has(row.LedgerName, needle) || Has(row.BankAccountName, needle)
+            _ => isComparison
+                ? (matchDate || matchDebit || matchCredit)
+                : (matchDate || Has(row.Narration, needle) || matchDebit || matchCredit || matchBalance ||
+                   Has(row.Mode, needle) || Has(row.LedgerName, needle) || Has(row.BankAccountName, needle))
         };
     }
 
@@ -4343,14 +4360,16 @@ public sealed class BankingViewModel : PageViewModel
     private static bool MatchesLedgerMappingDetailFilter(LedgerMappingDetailRow detail, string column, string needle)
     {
         if (needle.Length == 0) return true;
+        var isComparison = FlexibleFilterMatcher.IsComparisonQuery(needle);
+        var hasComma = needle.Contains(',', StringComparison.Ordinal);
         static bool Has(string? value, string text) => (value ?? string.Empty).Contains(text, StringComparison.OrdinalIgnoreCase);
         var matchDate = FlexibleFilterMatcher.MatchesDate(detail.Date, needle);
-        var matchDebit = FlexibleFilterMatcher.MatchesAmount(detail.Debit, needle) ||
-                         Has(detail.Debit.ToString("N2"), needle) ||
-                         Has(detail.Debit.ToString(CultureInfo.InvariantCulture), needle);
-        var matchCredit = FlexibleFilterMatcher.MatchesAmount(detail.Credit, needle) ||
-                          Has(detail.Credit.ToString("N2"), needle) ||
-                          Has(detail.Credit.ToString(CultureInfo.InvariantCulture), needle);
+        var matchDebit = FlexibleFilterMatcher.MatchesAmount(detail.Debit, needle, ignoreZeroForLessThan: true) ||
+                         (!isComparison && !hasComma && (Has(detail.Debit.ToString("N2"), needle) ||
+                          Has(detail.Debit.ToString(CultureInfo.InvariantCulture), needle)));
+        var matchCredit = FlexibleFilterMatcher.MatchesAmount(detail.Credit, needle, ignoreZeroForLessThan: true) ||
+                          (!isComparison && !hasComma && (Has(detail.Credit.ToString("N2"), needle) ||
+                           Has(detail.Credit.ToString(CultureInfo.InvariantCulture), needle)));
         var rowNo = detail.RowNo.ToString(CultureInfo.InvariantCulture);
 
         return column.ToUpperInvariant() switch
@@ -4364,9 +4383,11 @@ public sealed class BankingViewModel : PageViewModel
             "LEDGER" => Has(detail.Ledger, needle),
             "BANK" => Has(detail.Bank, needle),
             "ROW NO" => Has(rowNo, needle),
-            _ => matchDate || Has(detail.Narration, needle) ||
-                 matchDebit || matchCredit || Has(detail.Mode, needle) || Has(detail.Method, needle) ||
-                 Has(detail.Ledger, needle) || Has(detail.Bank, needle) || Has(rowNo, needle)
+            _ => isComparison
+                ? (matchDate || matchDebit || matchCredit)
+                : (matchDate || Has(detail.Narration, needle) ||
+                   matchDebit || matchCredit || Has(detail.Mode, needle) || Has(detail.Method, needle) ||
+                   Has(detail.Ledger, needle) || Has(detail.Bank, needle) || Has(rowNo, needle))
         };
     }
 
@@ -8027,7 +8048,26 @@ public sealed class BankingViewModel : PageViewModel
             }
         }
 
+        var previewIds = _bulkSelectedAtomicMappings.SelectMany(mapping => mapping.TransactionIds).Where(id => id > 0).Distinct().ToHashSet();
+        var txById = Transactions.Where(transaction => previewIds.Contains(transaction.Id)).ToDictionary(transaction => transaction.Id);
+        if (txById.Count < previewIds.Count && CurrentClientId > 0)
+        {
+            foreach (var transaction in _repository.GetTransactions(CurrentClientId, CurrentFinancialYear, false))
+                if (previewIds.Contains(transaction.Id) && !txById.ContainsKey(transaction.Id)) txById[transaction.Id] = transaction;
+        }
+        var previewRows = txById.Values
+            .OrderBy(transaction => transaction.TransactionDate)
+            .ThenBy(transaction => transaction.Id)
+            .ToArray();
+        BulkMappingPreviewTransactions.ReplaceRange(previewRows);
+
         var transactionCount = _bulkSelectedAtomicMappings.SelectMany(mapping => mapping.TransactionIds).Where(id => id > 0).Distinct().Count();
+        var previewDebit = previewRows.Sum(item => Math.Abs(item.Debit));
+        var previewCredit = previewRows.Sum(item => Math.Abs(item.Credit));
+        BulkMappingPreviewHeaderText = previewRows.Length > 0
+            ? $"Matching Transactions Preview · {previewRows.Length:N0} transaction(s) · Debit ₹{previewDebit:N2} · Credit ₹{previewCredit:N2}"
+            : $"Matching Transactions Preview · {transactionCount:N0} legacy / 0 resolved row(s)";
+
         var amountText = amountSearchExpression.Length > 0
             ? amountSearchExpression
             : amountOperator switch
@@ -8038,7 +8078,11 @@ public sealed class BankingViewModel : PageViewModel
                 "Between" when amountValue.HasValue && amountTo.HasValue => $"{amountValue.Value:N2} to {amountTo.Value:N2}",
                 _ => "Any"
             };
+        var amountMeaning = FlexibleFilterMatcher.DescribeComparisonExpression(amountText);
         BulkMappingFilterSummary = $"Bank: {bankFilter} · Voucher Type: {(voucherType.Length == 0 ? "All" : voucherType)} · Amount: {amountText}";
+        BulkMappingFilterSummaryToolTip = amountMeaning.Length > 0
+            ? $"Active Filter — {BulkMappingFilterSummary}\nAmount Meaning: {amountMeaning}\nSymbols: > Greater Than | >= Greater Than or Equal | < Less Than | <= Less Than or Equal | = Exact | Comma = AND"
+            : $"Active Filter — {BulkMappingFilterSummary}\nSymbols: > Greater Than | >= Greater Than or Equal | < Less Than | <= Less Than or Equal | = Exact | Comma = AND";
         BulkMappingCaption = transactionCount == 0
             ? $"0 selected transactions match the current filter. {BulkMappingFilterSummary}."
             : simpleType
@@ -8326,6 +8370,7 @@ public sealed class BankingViewModel : PageViewModel
         IsBulkLedgerMappingOpen = false;
         BulkLedgerMappingRows.Clear();
         BulkVoucherTypeMappingRows.Clear();
+        BulkMappingPreviewTransactions.Clear();
         BulkMappingBankOptions.Clear();
         _bulkSelectedBaseMappings.Clear();
         _bulkSelectedAtomicMappings.Clear();
@@ -8348,6 +8393,8 @@ public sealed class BankingViewModel : PageViewModel
             _suppressBulkMappingLiveFilterRefresh = false;
         }
         BulkMappingFilterSummary = "Bank: All Banks · Voucher Type: All · Amount: Any";
+        BulkMappingFilterSummaryToolTip = "All checked transactions are included. Type amount comparisons like >20 (Greater Than 20) or >=1000, <=25000 in Amount Filter.";
+        BulkMappingPreviewHeaderText = "Matching Transactions Preview (0)";
         _bulkMappingAmountFilterActive = false;
         BulkMappingFinalLedger = string.Empty;
         BulkMappingLedgerGroup = string.Empty;

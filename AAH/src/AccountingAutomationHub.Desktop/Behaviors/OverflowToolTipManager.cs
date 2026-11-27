@@ -1,9 +1,11 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using AccountingAutomationHub.Domain.Common;
 
 namespace AccountingAutomationHub.Desktop.Behaviors;
 
@@ -80,13 +82,17 @@ public static class OverflowToolTipManager
             return;
 
         var text = ExtractText(element).Trim();
-        if (text.Length == 0 || !IsOverflowing(element, text)) return;
+        if (text.Length == 0) return;
+
+        var overflowing = IsOverflowing(element, text);
+        var tipText = BuildMeaningfulToolTip(text, overflowing);
+        if (tipText.Length == 0) return;
 
         var toolTip = new ToolTip
         {
             Content = new TextBlock
             {
-                Text = text,
+                Text = tipText,
                 TextWrapping = TextWrapping.Wrap,
                 MaxWidth = 640
             },
@@ -96,6 +102,52 @@ public static class OverflowToolTipManager
             IsOpen = true
         };
         element.SetValue(AutoToolTipProperty, toolTip);
+    }
+
+    private static string BuildMeaningfulToolTip(string text, bool isOverflowing)
+    {
+        var singleSymbolMeaning = text switch
+        {
+            "▾" or "▼" => $"{text} — Open dropdown / column filter menu",
+            "▲" => "▲ — Sort ascending / expand",
+            "◀" or "◂" => $"{text} — Previous item",
+            "▶" or "▸" => $"{text} — Next item",
+            "↻" or "↺" => $"{text} — Refresh / reload",
+            "✕" or "×" => $"{text} — Close or clear",
+            "ⓘ" => "ⓘ — Show full explanation / details",
+            "✓" or "✔" => $"{text} — Verified / completed",
+            "⚠" => "⚠ — Warning / review required",
+            "→" => "→ — Transfers / maps to",
+            "⇄" => "⇄ — Transfer between accounts",
+            "+" => "+ — Add / increase",
+            "−" or "-" => $"{text} — Subtract / decrease",
+            _ => string.Empty
+        };
+        if (singleSymbolMeaning.Length > 0) return singleSymbolMeaning;
+
+        if ((text.StartsWith("Σ ", StringComparison.Ordinal) || text.StartsWith("∑ ", StringComparison.Ordinal)) && text.Length > 2)
+            return $"Sum (Σ) of visible rows in this column: {text[2..].Trim()}";
+
+        var meanings = new List<string>();
+        foreach (Match match in Regex.Matches(text, @"(?:Amount|Debit|Credit|Filter|Closing|Balance)\s*:\s*([^·\r\n]+)", RegexOptions.IgnoreCase))
+        {
+            var expr = match.Groups[1].Value.Trim();
+            if (FlexibleFilterMatcher.IsComparisonQuery(expr) || expr.StartsWith('='))
+            {
+                var desc = FlexibleFilterMatcher.DescribeComparisonExpression(expr);
+                if (desc.Length > 0) meanings.Add(desc);
+            }
+        }
+        if (meanings.Count == 0 && (FlexibleFilterMatcher.IsComparisonQuery(text) || text.StartsWith('=')))
+        {
+            var desc = FlexibleFilterMatcher.DescribeComparisonExpression(text);
+            if (desc.Length > 0) meanings.Add(desc);
+        }
+
+        if (meanings.Count > 0)
+            return $"{text}\nMeaning: {string.Join("; ", meanings.Distinct(StringComparer.Ordinal))}";
+
+        return isOverflowing ? text : string.Empty;
     }
 
     private static void OnMouseLeave(object sender, MouseEventArgs e)

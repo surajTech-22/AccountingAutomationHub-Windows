@@ -584,6 +584,7 @@
                                        Margin="0,4,0,0" />
                         </StackPanel>
                         <Button Content="✕"
+                                ToolTip="Close Client editor panel"
                                 Command="{Binding CloseEditorCommand}"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Top"
@@ -1059,7 +1060,7 @@
                             <TextBlock Text="User Access" FontSize="21" FontWeight="SemiBold" />
                             <TextBlock Text="{Binding LanAccessClientCaption}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" />
                         </StackPanel>
-                        <Button Content="✕" Command="{Binding CloseClientLanAccessCommand}" HorizontalAlignment="Right" VerticalAlignment="Top" Padding="10,5" />
+                        <Button Content="✕" ToolTip="Close User Access panel" Command="{Binding CloseClientLanAccessCommand}" HorizontalAlignment="Right" VerticalAlignment="Top" Padding="10,5" />
                     </Grid>
                 </Border>
 

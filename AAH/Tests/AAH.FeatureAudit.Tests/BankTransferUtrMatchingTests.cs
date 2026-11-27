@@ -152,6 +152,25 @@ internal static class BankTransferUtrMatchingTests
             "Partial amount 10000 should not satisfy exactOnly=true.");
         Check(!FlexibleFilterMatcher.TryExtractAmountQuery("TRANSFER", out _, out _),
             "Plain narration words must not parse as numeric amount queries.");
+
+        // Numeric & date comparison operators (>, >=, <, <=, !=, comma-AND ranges)
+        Check(FlexibleFilterMatcher.MatchesAmount(500m, ">20"), ">20 must match 500.");
+        Check(!FlexibleFilterMatcher.MatchesAmount(20m, ">20"), ">20 must exclude exact 20.");
+        Check(FlexibleFilterMatcher.MatchesAmount(20m, ">=20"), ">=20 must include 20.");
+        Check(FlexibleFilterMatcher.MatchesAmount(15m, "<20"), "<20 must match 15.");
+        Check(!FlexibleFilterMatcher.MatchesAmount(20m, "<20"), "<20 must exclude exact 20.");
+        Check(FlexibleFilterMatcher.MatchesAmount(20m, "<=20"), "<=20 must include 20.");
+        Check(FlexibleFilterMatcher.MatchesAmount(5000m, ">=1000, <=10000"), "Comma-AND range >=1000, <=10000 must match 5000.");
+        Check(!FlexibleFilterMatcher.MatchesAmount(500m, ">=1000, <=10000"), "Comma-AND range >=1000, <=10000 must reject 500.");
+        Check(!FlexibleFilterMatcher.MatchesAmount(0m, "<5000", ignoreZeroForLessThan: true),
+            "Empty 0.00 Debit/Credit cell must not falsely match <5000 when ignoreZeroForLessThan is enabled.");
+        Check(FlexibleFilterMatcher.MatchesAmount(0m, "<=0", ignoreZeroForLessThan: true),
+            "Explicit <=0 must still match 0.00.");
+        Check(FlexibleFilterMatcher.MatchesDate(nov15, ">05-11-2025"), ">05-11-2025 must match 15-11-2025.");
+        Check(!FlexibleFilterMatcher.MatchesDate(nov5, ">05-11-2025"), ">05-11-2025 must exclude 05-11-2025.");
+        Check(FlexibleFilterMatcher.MatchesDate(nov15, ">=05-11-2025, <=20-11-2025"), "Date range must match 15-11-2025.");
+        Check(FlexibleFilterMatcher.DescribeComparisonExpression(">20").Contains("Greater than 20", StringComparison.Ordinal),
+            "DescribeComparisonExpression should spell out >20 in plain English.");
     }
 
     private static void RunContraPolicyAndMaintenanceTests()

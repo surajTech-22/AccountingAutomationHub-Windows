@@ -74,14 +74,15 @@
                         <TextBlock Text="Amount Filter" VerticalAlignment="Center" Margin="0,0,7,0"/>
                         <controls:MultiSearchFilterBar x:Name="BulkAmountSearchBar" Width="310"
                                                        SearchText="{Binding BulkMappingAmountSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                       ToolTip="Use amount expressions such as &gt;5000, &lt;=25000; comma = AND for multiple amount conditions."/>
+                                                       ToolTip="Filter selected transactions by amount (Comma = AND between conditions). Comparison symbols: &gt; Greater Than, &gt;= Greater Than or Equal, &lt; Less Than, &lt;= Less Than or Equal, = Exact Match (e.g. &gt;5000 or &gt;=1000, &lt;=25000)."/>
                     </StackPanel>
                     <Border Padding="9,4" Margin="0,0,7,6" CornerRadius="10" Background="#E7F6EC" BorderBrush="#A7D8B5" BorderThickness="1" VerticalAlignment="Center">
-                        <TextBlock Text="LIVE" FontWeight="SemiBold" Foreground="#24713A"/>
+                        <TextBlock Text="LIVE" FontWeight="SemiBold" Foreground="#24713A" ToolTip="Filters update this window and the Matching Transactions Preview live as you type."/>
                     </Border>
                     <Button Content="Clear" Command="{Binding ClearBulkMappingFiltersCommand}" Padding="12,6" Margin="0,0,0,6"/>
                 </WrapPanel>
                 <TextBlock Text="{Binding BulkMappingFilterSummary, Mode=OneWay}"
+                           ToolTip="{Binding BulkMappingFilterSummaryToolTip, Mode=OneWay}"
                            Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
@@ -132,44 +133,82 @@
                        TextWrapping="Wrap" Foreground="#6B5512"/>
         </Border>
 
-        <DataGrid Grid.Row="3"
-                  ItemsSource="{Binding BulkVoucherTypeMappingRows}"
-                  AutoGenerateColumns="False"
-                  CanUserAddRows="False" CanUserDeleteRows="False"
-                  IsReadOnly="False"
-                  Visibility="{Binding BulkMappingIsMixed, Converter={StaticResource BooleanToVisibilityConverter}}"
-                  RowHeight="42" ColumnHeaderHeight="38"
-                  GridLinesVisibility="Horizontal"
-                  HorizontalGridLinesBrush="#E3E9F1">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Voucher Type" Binding="{Binding VoucherType, Mode=OneWay}" IsReadOnly="True" Width="160"/>
-                <DataGridTextColumn Header="Transactions" Binding="{Binding TransactionCount, Mode=OneWay}" IsReadOnly="True" Width="110"/>
-                <DataGridTemplateColumn Header="Final Ledger" Width="*" MinWidth="240">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <controls:SuggestTextBox Style="{StaticResource BulkMappingSelectorStyle}"
-                                                     SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                                     Text="{Binding FinalLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                     SuggestionChosen="VoucherTypeMappingSelector_SuggestionChosen"
-                                                     LostKeyboardFocus="VoucherTypeMappingSelector_LostKeyboardFocus"/>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-                <DataGridTemplateColumn Header="Ledger Group" Width="220">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <controls:SuggestTextBox Style="{StaticResource BulkMappingSelectorStyle}"
-                                                     SourceItems="{Binding DataContext.BulkLedgerGroupNames, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                                     Text="{Binding LedgerGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                     SuggestionChosen="VoucherTypeMappingSelector_SuggestionChosen"
-                                                     LostKeyboardFocus="VoucherTypeMappingSelector_LostKeyboardFocus"
-                                                     ToolTip="Type to search or enter a Ledger Group. Tally prebuilt Groups are suggested first, followed by current live/custom Groups."/>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-                <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" IsReadOnly="True" Width="170"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DataGrid Grid.Row="0"
+                      ItemsSource="{Binding BulkVoucherTypeMappingRows}"
+                      AutoGenerateColumns="False"
+                      CanUserAddRows="False" CanUserDeleteRows="False"
+                      IsReadOnly="False"
+                      Visibility="{Binding BulkMappingIsMixed, Converter={StaticResource BooleanToVisibilityConverter}}"
+                      MaxHeight="155" Margin="0,0,0,10"
+                      RowHeight="42" ColumnHeaderHeight="38"
+                      GridLinesVisibility="Horizontal"
+                      HorizontalGridLinesBrush="#E3E9F1">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Voucher Type" Binding="{Binding VoucherType, Mode=OneWay}" IsReadOnly="True" Width="150"/>
+                    <DataGridTextColumn Header="Transactions" Binding="{Binding TransactionCount, Mode=OneWay}" IsReadOnly="True" Width="128"/>
+                    <DataGridTemplateColumn Header="Final Ledger" Width="*" MinWidth="220">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <controls:SuggestTextBox Style="{StaticResource BulkMappingSelectorStyle}"
+                                                         SourceItems="{Binding DataContext.MasterLedgerNames, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                         Text="{Binding FinalLedger, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         SuggestionChosen="VoucherTypeMappingSelector_SuggestionChosen"
+                                                         LostKeyboardFocus="VoucherTypeMappingSelector_LostKeyboardFocus"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Ledger Group" Width="210">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <controls:SuggestTextBox Style="{StaticResource BulkMappingSelectorStyle}"
+                                                         SourceItems="{Binding DataContext.BulkLedgerGroupNames, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                         Text="{Binding LedgerGroup, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         SuggestionChosen="VoucherTypeMappingSelector_SuggestionChosen"
+                                                         LostKeyboardFocus="VoucherTypeMappingSelector_LostKeyboardFocus"
+                                                         ToolTip="Type to search or enter a Ledger Group. Tally prebuilt Groups are suggested first, followed by current live/custom Groups."/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Status" Binding="{Binding Status, Mode=OneWay}" IsReadOnly="True" Width="160"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <Border Grid.Row="1" Padding="10" Background="#FFFFFF" CornerRadius="8" BorderBrush="#D8E0EB" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding BulkMappingPreviewHeaderText, Mode=OneWay}"
+                               FontWeight="SemiBold" Foreground="#235F9C" Margin="0,0,0,8"/>
+                    <DataGrid Grid.Row="1"
+                              ItemsSource="{Binding BulkMappingPreviewTransactions}"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False" CanUserDeleteRows="False"
+                              IsReadOnly="True"
+                              EnableRowVirtualization="True"
+                              RowHeight="30" ColumnHeaderHeight="34"
+                              GridLinesVisibility="Horizontal"
+                              HorizontalGridLinesBrush="#EDF2F7">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Date" Binding="{Binding TransactionDate, StringFormat={}{0:dd.MM.yyyy}}" Width="92"/>
+                            <DataGridTextColumn Header="Narration" Binding="{Binding Narration}" Width="*" MinWidth="220"/>
+                            <DataGridTextColumn Header="Debit" Binding="{Binding Debit, StringFormat={}{0:N2}}" Width="105"/>
+                            <DataGridTextColumn Header="Credit" Binding="{Binding Credit, StringFormat={}{0:N2}}" Width="105"/>
+                            <DataGridTextColumn Header="Mode" Binding="{Binding Mode}" Width="84"/>
+                            <DataGridTextColumn Header="Current Ledger" Binding="{Binding LedgerName}" Width="165"/>
+                            <DataGridTextColumn Header="Bank" Binding="{Binding BankAccountName}" Width="170"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+        </Grid>
 
         <DockPanel Grid.Row="4" Margin="0,10,0,0" LastChildFill="True">
             <CheckBox DockPanel.Dock="Left" Content="Create missing Master ledger" IsChecked="{Binding CreateLedgerWhenApplying}" VerticalAlignment="Center" Margin="0,0,14,0"/>

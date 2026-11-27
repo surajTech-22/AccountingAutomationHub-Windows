@@ -44,6 +44,12 @@ public static class DataGridColumnFilterBehavior
         typeof(DataGridColumnFilterBehavior),
         new PropertyMetadata(string.Empty));
 
+    public static readonly DependencyProperty TotalToolTipProperty = DependencyProperty.RegisterAttached(
+        "TotalToolTip",
+        typeof(string),
+        typeof(DataGridColumnFilterBehavior),
+        new PropertyMetadata(string.Empty));
+
     public static readonly DependencyProperty TotalPathProperty = DependencyProperty.RegisterAttached(
         "TotalPath",
         typeof(string),
@@ -61,8 +67,18 @@ public static class DataGridColumnFilterBehavior
 
     public static void SetIsEnabled(DependencyObject element, bool value) => element.SetValue(IsEnabledProperty, value);
     public static bool GetIsEnabled(DependencyObject element) => (bool)element.GetValue(IsEnabledProperty);
-    public static void SetTotalText(DependencyObject element, string value) => element.SetValue(TotalTextProperty, value ?? string.Empty);
+    public static void SetTotalText(DependencyObject element, string value)
+    {
+        var normalized = value ?? string.Empty;
+        element.SetValue(TotalTextProperty, normalized);
+        var tip = normalized.Length == 0
+            ? string.Empty
+            : $"Sum (Σ) of visible rows in this column: {normalized.TrimStart('Σ', ' ')}";
+        element.SetValue(TotalToolTipProperty, tip);
+    }
     public static string GetTotalText(DependencyObject element) => (string)element.GetValue(TotalTextProperty);
+    public static void SetTotalToolTip(DependencyObject element, string value) => element.SetValue(TotalToolTipProperty, value ?? string.Empty);
+    public static string GetTotalToolTip(DependencyObject element) => (string)element.GetValue(TotalToolTipProperty);
     public static void SetTotalPath(DependencyObject element, string value) => element.SetValue(TotalPathProperty, value ?? string.Empty);
     public static string GetTotalPath(DependencyObject element) => (string)element.GetValue(TotalPathProperty);
     public static void SetShowTotals(DependencyObject element, bool value) => element.SetValue(ShowTotalsProperty, value);
