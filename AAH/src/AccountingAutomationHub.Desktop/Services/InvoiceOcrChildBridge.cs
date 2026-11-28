@@ -24,8 +24,8 @@ internal static class InvoiceOcrChildBridge
     public const bool IsLinked = true;
     public const string InstalledExe = @"C:\AccountingAutomationHub\InvoiceVisionChild\InvoiceVisionChild.exe";
 
-    // Serialize heavy VLM extractions on CPU-only PCs so concurrent phone photos queue cleanly.
-    private static readonly SemaphoreSlim ExtractionQueue = new(1, 1);
+    // Allow up to 4 concurrent extractions to stream into the warm ManagerAgent batch pipeline.
+    private static readonly SemaphoreSlim ExtractionQueue = new(4, 4);
     private static readonly TimeSpan ExtractionTimeout = TimeSpan.FromMinutes(12);
 
     internal sealed class Status

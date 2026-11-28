@@ -813,6 +813,8 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             var rowCgst = AmountOrZero(line.Cgst);
             var rowSgst = AmountOrZero(line.Sgst);
             var rowIgst = AmountOrZero(line.Igst);
+            if (gstRate == 0m && (rowCgst > 0m || rowSgst > 0m || rowIgst > 0m))
+                issues.Add($"Row {index + 1} carries GST amount on 0% GST rate");
             var expectedTax = Math.Round(rowTaxable * gstRate / 100m, 2, MidpointRounding.AwayFromZero);
             if (rowIgst > 0m)
             {
@@ -873,6 +875,18 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         {
             if (cgst <= 0m || sgst <= 0m) issues.Add("Local invoice requires both CGST and SGST / UTGST");
             else if (Math.Abs(cgst - sgst) > 0.005m) issues.Add($"CGST and SGST / UTGST must reconcile equally for a local invoice ({cgst:0.00} vs {sgst:0.00})");
+        }
+
+        if (Lines.Count > 0)
+        {
+            var rowCgstSum = Lines.Sum(x => AmountOrZero(x.Cgst));
+            var rowSgstSum = Lines.Sum(x => AmountOrZero(x.Sgst));
+            var rowIgstSum = Lines.Sum(x => AmountOrZero(x.Igst));
+            if ((rowCgstSum + rowSgstSum + rowIgstSum) > 0m && (cgst + sgst + igst) > 0m &&
+                (Math.Abs(rowCgstSum - cgst) > 1.00m || Math.Abs(rowSgstSum - sgst) > 1.00m || Math.Abs(rowIgstSum - igst) > 1.00m))
+            {
+                issues.Add($"Product-row GST totals ({rowCgstSum:0.00}/{rowSgstSum:0.00}/{rowIgstSum:0.00}) do not match invoice tax totals ({cgst:0.00}/{sgst:0.00}/{igst:0.00})");
+            }
         }
 
         var lineRates = Lines.Select(x => AmountOrZero(x.GstRate)).Where(IsSupportedGstRate).Where(x => x > 0m).ToHashSet();
