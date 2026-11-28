@@ -465,7 +465,13 @@ public partial class App : System.Windows.Application
         repository.Initialize();
         _preferenceRepository = repository;
         _mainViewModel = new MainWindowViewModel(repository, Preferences, AutomationService, SecureLanServer);
-        _mainWindow = new MainWindow(_mainViewModel, Preferences);
+        var createdWindow = new MainWindow(_mainViewModel, Preferences);
+        createdWindow.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_mainWindow, createdWindow))
+                _mainWindow = null;
+        };
+        _mainWindow = createdWindow;
         MainWindow = _mainWindow;
         if (NetworkClientRuntime.IsNetworkClient && RemoteAahAgent is null)
             RemoteAahAgent = new RemoteAahAgentService();
@@ -533,6 +539,25 @@ public partial class App : System.Windows.Application
         catch { }
     }
 
+    private static void BringWindowToForeground(Window window)
+    {
+        try
+        {
+            if (window.WindowState == WindowState.Minimized)
+                window.WindowState = WindowState.Normal;
+            if (!window.ShowInTaskbar)
+                window.ShowInTaskbar = true;
+            var wasTopmost = window.Topmost;
+            if (!wasTopmost)
+                window.Topmost = true;
+            window.Activate();
+            window.Focus();
+            if (!wasTopmost)
+                window.Topmost = false;
+        }
+        catch { }
+    }
+
     private void HideWorkspaceAfterDestinationPaint(Window destination, Window? source)
     {
         if (source is null || ReferenceEquals(destination, source) || !source.IsVisible) return;
@@ -567,8 +592,7 @@ public partial class App : System.Windows.Application
         if (!accountingWindow.IsVisible) accountingWindow.Show();
         if (accountingWindow.WindowState == WindowState.Minimized) accountingWindow.WindowState = WindowState.Normal;
         MainWindow = accountingWindow;
-        accountingWindow.Activate();
-        accountingWindow.Focus();
+        BringWindowToForeground(accountingWindow);
         QueueDeferredRuntimeWarmup();
     }
 
@@ -652,8 +676,7 @@ public partial class App : System.Windows.Application
         if (host.WindowState == WindowState.Minimized) host.WindowState = WindowState.Normal;
         MainWindow = host;
         if (NetworkClientRuntime.IsNetworkClient && RemoteAahAgent is null) RemoteAahAgent = new RemoteAahAgentService();
-        host.Activate();
-        host.Focus();
+        BringWindowToForeground(host);
         _ = audit.PrepareForDisplayAsync();
     }
 
@@ -697,8 +720,7 @@ public partial class App : System.Windows.Application
         if (!host.IsVisible) host.Show();
         if (host.WindowState == WindowState.Minimized) host.WindowState = WindowState.Normal;
         MainWindow = host;
-        host.Activate();
-        host.Focus();
+        BringWindowToForeground(host);
         QueueDeferredRuntimeWarmup();
     }
 
@@ -720,8 +742,7 @@ public partial class App : System.Windows.Application
         host.ShowWorkspaceSelectorContent();
         if (!host.IsVisible) host.Show();
         MainWindow = host;
-        host.Activate();
-        host.Focus();
+        BringWindowToForeground(host);
     }
 
     public void SelectWorkspaceFromHost(AahWorkspaceKind selected)
@@ -773,7 +794,12 @@ public partial class App : System.Windows.Application
             if (!selectorHost.IsVisible) selectorHost.Show();
             if (selectorHost.WindowState == WindowState.Minimized)
                 selectorHost.WindowState = WindowState.Normal;
-            selectorHost.Activate();
+            BringWindowToForeground(selectorHost);
+            return;
+        }
+        if (_workspaceSelectorVisible)
+        {
+            ShowWorkspaceSelectorInHost(initial: _workspaceSelectorInitial);
             return;
         }
         if (_activeWorkspace == AahWorkspaceKind.Audit) ShowAuditWindow();
