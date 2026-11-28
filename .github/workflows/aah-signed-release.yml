@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.668)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.669)"
         required: true
-        default: "v4.0.0.668"
+        default: "v4.0.0.669"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   build-android-signed:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.668]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.669]') }}
     name: Build signed AAHMobile APK (optional if secrets configured)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -122,14 +122,14 @@ jobs:
 
   build-channel:
     needs: [build-android-signed]
-# v4.0.0.668: Pipelined multi-agent InvoiceVision v2 integration (unlimited EOS, strict zero-false-match GST gates, SHA-256 OCR cache, SemaphoreSlim(4,4)), plus mobile SmartAutoScanner FLAG_KEEP_SCREEN_ON & lease refresh (4.0.0.668-mobile46).
+# v4.0.0.669: InvoiceVisionChild v2.8.0 Stage 1/2/4 parallel child agents (1:1 N->N AuditChild parity), singleton PaddleX, QR speedup, Win32 JobObject server cleanup, SriRajalakshmi/Raghavendra/SriRama/Nandi parser fixes & heartbeat-based bridge watchdog.
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.668]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.669]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.668' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.669' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -395,7 +395,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.668: Continuous pipelined multi-agent InvoiceVision v2 bridge (concurrent 4-slot queue, strict GST 0%-rate & row-vs-header tax enforcement), plus mobile SmartAutoScanner FLAG_KEEP_SCREEN_ON wake lock & lease refresh (4.0.0.668-mobile46)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.669: Heartbeat-aware InvoiceVisionChild v2.8.0 bridge (no 12m queued kill), parallel Stage 1/2/4 child agents (1:1 N->N AuditChild parity), zero-duplicate-LightOn Qwen escalation, Win32 JobObject orphan server prevention & Sri Rajalakshmi/Raghavendra/Sri Rama/Nandi GST fixes."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -429,7 +429,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.668: Continuous pipelined multi-agent InvoiceVision v2 bridge (concurrent 4-slot queue, strict GST 0%-rate & row-vs-header tax enforcement), plus mobile SmartAutoScanner FLAG_KEEP_SCREEN_ON wake lock & lease refresh (4.0.0.668-mobile46)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.669: Heartbeat-aware InvoiceVisionChild v2.8.0 bridge (no 12m queued kill), parallel Stage 1/2/4 child agents (1:1 N->N AuditChild parity), zero-duplicate-LightOn Qwen escalation, Win32 JobObject orphan server prevention & Sri Rajalakshmi/Raghavendra/Sri Rama/Nandi GST fixes."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or

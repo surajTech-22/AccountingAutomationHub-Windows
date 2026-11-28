@@ -24,9 +24,9 @@ internal static class InvoiceOcrChildBridge
     public const bool IsLinked = true;
     public const string InstalledExe = @"C:\AccountingAutomationHub\InvoiceVisionChild\InvoiceVisionChild.exe";
 
-    // Allow up to 4 concurrent extractions to stream into the warm ManagerAgent batch pipeline.
-    private static readonly SemaphoreSlim ExtractionQueue = new(4, 4);
-    private static readonly TimeSpan ExtractionTimeout = TimeSpan.FromMinutes(12);
+    // Match warm daemon concurrency (-np 2) so queued scans stream smoothly without stalling on 12m wall-clock timers.
+    private static readonly SemaphoreSlim ExtractionQueue = new(2, 2);
+    private static readonly TimeSpan ExtractionInactivityTimeout = TimeSpan.FromMinutes(8);
 
     internal sealed class Status
     {
@@ -188,16 +188,19 @@ internal static class InvoiceOcrChildBridge
                 return (new Status { RequestId = requestId, Message = "Could not start InvoiceVision Child v2." }, null);
             }
 
-            var timeout = TimeSpan.FromMinutes(Math.Clamp(usablePaths.Length * 5, 12, 45));
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
+            var maxWall = TimeSpan.FromMinutes(Math.Clamp(usablePaths.Length * 10, 45, 90));
+            using var hardCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            hardCts.CancelAfter(maxWall);
+            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(hardCts.Token);
+            idleCts.CancelAfter(ExtractionInactivityTimeout);
 
-            var errTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+            var errTask = proc.StandardError.ReadToEndAsync(idleCts.Token);
             var outTask = Task.Run(async () =>
             {
                 string? line;
-                while ((line = await proc.StandardOutput.ReadLineAsync(timeoutCts.Token).ConfigureAwait(false)) is not null)
+                while ((line = await proc.StandardOutput.ReadLineAsync(idleCts.Token).ConfigureAwait(false)) is not null)
                 {
+                    try { idleCts.CancelAfter(ExtractionInactivityTimeout); } catch { }
                     if (line.StartsWith("PROGRESS|", StringComparison.Ordinal))
                     {
                         var parts = line.Split('|', 3);
@@ -205,17 +208,20 @@ internal static class InvoiceOcrChildBridge
                             progress?.Invoke("InvoiceVision v2 · " + parts[2]);
                     }
                 }
-            }, timeoutCts.Token);
+            }, idleCts.Token);
 
             try
             {
-                await Task.WhenAll(outTask, errTask, proc.WaitForExitAsync(timeoutCts.Token)).ConfigureAwait(false);
+                await Task.WhenAll(outTask, errTask, proc.WaitForExitAsync(idleCts.Token)).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
                 if (cancellationToken.IsCancellationRequested) throw;
-                return (new Status { RequestId = requestId, Message = $"InvoiceVision Child v2 timed out ({timeout.TotalMinutes:0}m); using AAH ONNX OCR fallback." }, null);
+                var reason = hardCts.IsCancellationRequested
+                    ? $"InvoiceVision Child v2 exceeded max wall clock ({maxWall.TotalMinutes:0}m); using AAH ONNX OCR fallback."
+                    : $"InvoiceVision Child v2 stalled ({ExtractionInactivityTimeout.TotalMinutes:0}m without heartbeat); using AAH ONNX OCR fallback.";
+                return (new Status { RequestId = requestId, Message = reason }, null);
             }
 
             var stderr = await errTask.ConfigureAwait(false);
