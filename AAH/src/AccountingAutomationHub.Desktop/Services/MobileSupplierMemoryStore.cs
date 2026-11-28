@@ -76,6 +76,21 @@ internal static class MobileSupplierMemoryStore
                 field_diffs_json TEXT NOT NULL DEFAULT '{}',
                 learned_utc TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS supplier_layout_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_gstin TEXT NOT NULL DEFAULT '',
+                supplier_name_norm TEXT NOT NULL DEFAULT '',
+                layout_hash TEXT NOT NULL DEFAULT '',
+                header_signature TEXT NOT NULL DEFAULT '',
+                rule_json TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'user_confirmed',
+                confidence REAL NOT NULL DEFAULT 0.85,
+                hit_count INTEGER NOT NULL DEFAULT 1,
+                success_count INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(supplier_gstin, layout_hash)
+            );
             """;
         cmd.ExecuteNonQuery();
     }
@@ -175,6 +190,10 @@ internal static class MobileSupplierMemoryStore
             if (aliases.Count > 20)
                 aliases = aliases.Skip(aliases.Count - 20).ToList();
 
+            var rowLtSum = mapped.Lines.Sum(l => l.LineTotal);
+            var taxSum = mapped.CgstTotal + mapped.SgstTotal + mapped.IgstTotal;
+            var inferredInclusive = (prevTaxInclusive != 0 || (mapped.Lines.Count > 0 && mapped.InvoiceTotal > 0 && taxSum > 0 && Math.Abs(rowLtSum - mapped.InvoiceTotal) <= Math.Max(2m, mapped.InvoiceTotal * 0.015m))) ? 1 : 0;
+
             var compactExample = BuildCompactExampleJson(mapped);
             using (var upsert = conn.CreateCommand())
             {
@@ -200,7 +219,7 @@ internal static class MobileSupplierMemoryStore
                 upsert.Parameters.AddWithValue("$aliases", JsonSerializer.Serialize(aliases));
                 upsert.Parameters.AddWithValue("$dir", (mapped.Direction ?? string.Empty).Trim());
                 upsert.Parameters.AddWithValue("$mode", mode);
-                upsert.Parameters.AddWithValue("$incl", prevTaxInclusive);
+                upsert.Parameters.AddWithValue("$incl", inferredInclusive);
                 upsert.Parameters.AddWithValue("$cnt", prevCount + 1);
                 upsert.Parameters.AddWithValue("$utc", nowUtc);
                 upsert.Parameters.AddWithValue("$ex", compactExample);
@@ -236,15 +255,7 @@ internal static class MobileSupplierMemoryStore
                 learnedHsn++;
             }
 
-            var diffsJson = JsonSerializer.Serialize(new
-            {
-                originalOcrName,
-                verifiedName = canonicalName,
-                direction = mapped.Direction,
-                recognitionMode = mode,
-                lineCount = mapped.Lines.Count,
-                invoiceTotal = mapped.InvoiceTotal
-            });
+            var diffsJson = BuildDiffsJson(scan.PayloadJson, mapped, originalOcrName, canonicalName, mode);
             using (var corrCmd = conn.CreateCommand())
             {
                 corrCmd.Transaction = tx;
@@ -259,9 +270,75 @@ internal static class MobileSupplierMemoryStore
                 corrCmd.ExecuteNonQuery();
             }
 
+            var ruleJson = JsonSerializer.Serialize(new
+            {
+                preferredDirection = (mapped.Direction ?? string.Empty).Trim(),
+                preferredRecognitionMode = mode,
+                taxInclusive = inferredInclusive == 1,
+                confirmedByUser = true
+            });
+            using (var ruleCmd = conn.CreateCommand())
+            {
+                ruleCmd.Transaction = tx;
+                ruleCmd.CommandText = """
+                    INSERT INTO supplier_layout_rules(
+                        supplier_gstin, supplier_name_norm, layout_hash, header_signature,
+                        rule_json, source, confidence, hit_count, success_count, created_at, updated_at
+                    ) VALUES ($g, $sn, '', '', $rj, 'user_confirmed', 0.95, 1, 1, $utc, $utc)
+                    ON CONFLICT(supplier_gstin, layout_hash) DO UPDATE SET
+                        supplier_name_norm = excluded.supplier_name_norm,
+                        rule_json = excluded.rule_json,
+                        confidence = 0.98,
+                        success_count = supplier_layout_rules.success_count + 1,
+                        updated_at = excluded.updated_at;
+                    """;
+                ruleCmd.Parameters.AddWithValue("$g", gstin);
+                ruleCmd.Parameters.AddWithValue("$sn", new string(canonicalName.ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray()));
+                ruleCmd.Parameters.AddWithValue("$rj", ruleJson);
+                ruleCmd.Parameters.AddWithValue("$utc", nowUtc);
+                ruleCmd.ExecuteNonQuery();
+            }
+
             tx.Commit();
             return $"AI Memory learned {canonicalName} ({gstin}) · {prevCount + 1} confirmation(s), {learnedHsn} HSN rule(s), mode: {mode}.";
         }
+    }
+
+    private static string BuildDiffsJson(string payloadJson, MobileInvoiceMappedResult mapped, string originalOcrName, string canonicalName, string mode)
+    {
+        var changedFields = new Dictionary<string, object?>();
+        try
+        {
+            var root = JsonNode.Parse(payloadJson)?.AsObject();
+            if (root is not null)
+            {
+                var origInv = root["invoiceNumber"]?.ToString().Trim() ?? "";
+                if (!string.Equals(origInv, mapped.InvoiceNumber?.Trim() ?? "", StringComparison.OrdinalIgnoreCase))
+                    changedFields["invoiceNumber"] = new { from = origInv, to = mapped.InvoiceNumber };
+                var origTot = root["invoiceTotal"]?.GetValue<decimal?>() ?? 0m;
+                if (Math.Abs(origTot - mapped.InvoiceTotal) > 0.05m)
+                    changedFields["invoiceTotal"] = new { from = origTot, to = mapped.InvoiceTotal };
+                var origTaxable = root["taxableTotal"]?.GetValue<decimal?>() ?? 0m;
+                if (Math.Abs(origTaxable - mapped.TaxableTotal) > 0.05m)
+                    changedFields["taxableTotal"] = new { from = origTaxable, to = mapped.TaxableTotal };
+                var origDir = root["direction"]?.ToString().Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(origDir) && !origDir.Equals(mapped.Direction, StringComparison.OrdinalIgnoreCase))
+                    changedFields["direction"] = new { from = origDir, to = mapped.Direction };
+            }
+        }
+        catch { }
+
+        return JsonSerializer.Serialize(new
+        {
+            originalOcrName,
+            verifiedName = canonicalName,
+            direction = mapped.Direction,
+            recognitionMode = mode,
+            lineCount = mapped.Lines.Count,
+            invoiceTotal = mapped.InvoiceTotal,
+            taxableTotal = mapped.TaxableTotal,
+            changedFields
+        });
     }
 
     private static string ExtractOriginalPartyName(string payloadJson, string direction)

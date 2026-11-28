@@ -3958,6 +3958,8 @@ public sealed class SecureLanServerService : IDisposable
 
         if (triggerOcr)
         {
+            var staleResultPath = Path.Combine(primary.EvidenceFolder, "ChildHandoff", "result.json");
+            try { if (File.Exists(staleResultPath)) File.Delete(staleResultPath); } catch { }
             var client = _clients.GetById(clientId);
             if (client is not null && !client.IsArchived && client.FinancialYear.Equals(financialYear, StringComparison.OrdinalIgnoreCase))
                 _ = RunMobileInvoiceDocumentOcrAsync(primary, client);

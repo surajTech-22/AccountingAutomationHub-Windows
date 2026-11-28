@@ -389,7 +389,16 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             // choices only. Posting Ledger allocation belongs to Sales/Purchase and is not loaded here.
             StockItemOptions.ReplaceWith(_server.GetInvoiceStockItemNames(client.Id, client.FinancialYear));
             UnitOptions.ReplaceWith(_server.GetInvoiceUnitNames(client.Id, client.FinancialYear));
-            var nextSelected = rows.FirstOrDefault(x => x.ScanId.Equals(selectedId, StringComparison.OrdinalIgnoreCase)) ?? rows.FirstOrDefault();
+            MobileInvoiceQueueItem? nextSelected = null;
+            if (!string.IsNullOrWhiteSpace(selectedId))
+                nextSelected = rows.FirstOrDefault(x => x.ScanId.Equals(selectedId, StringComparison.OrdinalIgnoreCase));
+            if (nextSelected is null && _preferredQueueIndex >= 0 && rows.Length > 0)
+            {
+                var clamped = Math.Clamp(_preferredQueueIndex, 0, rows.Length - 1);
+                nextSelected = rows[clamped];
+            }
+            _preferredQueueIndex = -1;
+            nextSelected ??= rows.FirstOrDefault();
             if (ReferenceEquals(SelectedScan, nextSelected)) LoadSelectedScan();
             else SelectedScan = nextSelected;
             if (previousScan is not null && nextSelected is not null &&
@@ -710,6 +719,8 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         return result;
     }
 
+    private int _preferredQueueIndex = -1;
+
     private void CompleteCurrent(bool confirmed)
     {
         var client = _clientContext.CurrentClient; var scan = SelectedScan; if (client is null || scan is null || _server is null) return;
@@ -726,6 +737,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                     return;
                 }
             }
+            _preferredQueueIndex = Queue.IndexOf(scan);
             var mapped = confirmed ? BuildMappedResult(scan) : null;
             _server.CompleteMobileInvoiceReview(client.Id, client.FinancialYear, scan.ScanId, confirmed, mapped);
             if (confirmed) _server.SaveMobileInvoiceLearning(client.Id, client.FinancialYear, BuildLearningJson());
@@ -1375,6 +1387,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         if (_server is null || _clientContext.CurrentClient is not { } client || SelectedScan is null) return;
         try
         {
+            _preferredQueueIndex = Queue.IndexOf(SelectedScan);
             StatusText = _server.RemoveDuplicateMobileScan(client.Id, client.FinancialYear, SelectedScan.ScanId);
             Refresh();
         }

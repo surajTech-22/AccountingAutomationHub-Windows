@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.671)"
+        description: "Stable version tag, must match signed AAH binary version (e.g. v4.0.0.672)"
         required: true
-        default: "v4.0.0.671"
+        default: "v4.0.0.672"
         type: string
       publish_signed_draft:
         description: "Legacy signed DRAFT mode; requires PFX secrets"
@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   build-android-signed:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.671]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.672]') }}
     name: Build signed AAHMobile APK (optional if secrets configured)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -122,14 +122,14 @@ jobs:
 
   build-channel:
     needs: [build-android-signed]
-# v4.0.0.671: InvoiceVisionChild v2.8.2 (Q04 cache-hit PP-LCNet orientation + 1400-tok strip check, Q08 post-tax summary discount, Q15/Q16 duplicate same-page table dedup & Receivable Amt & partial Page-1/Page-2 escalation skip, RBIIN022462 State Tax / Collectable Amount, and FY26-27 parenthesized rate extraction).
+# v4.0.0.672: InvoiceVisionChild v2.9.0 (Hybrid Offline AI Self-Learning: sqlite-vec + FTS5 layout/rule memory + Qwen3-1.7B fast TextAI HTML repair + auto rule synthesis, SNP0780 hyphenated C-GST/S-GST ledger fix, IN14461427006630 C/I GST + S/UT GST + component summary fix, CF/26-27/1896 Company GSTIN + Party anchor & pre-tax discount fix, NC04643 overwide rows & single-row OCR repair, partial Cont. Page skip, Confirm/Reject Next index preservation, and stale multi-page result cleanup).
     # pull requests, branch drift, failed builds, or unrelated commits.
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.671]') }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha && contains(github.event.workflow_run.head_commit.message, '[AAH-RELEASE-SMOKE-v4.0.0.672]') }}
     name: Build AAH Setup and verified auto-update release
     runs-on: windows-latest
     timeout-minutes: 85
     env:
-      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.671' }}
+      AAH_TAG: ${{ inputs.release_tag || 'v4.0.0.672' }}
       PUBLISH_DRAFT: ${{ inputs.publish_signed_draft }}
       PUBLISH_CHECKSUM: ${{ inputs.publish_checksum_release || github.event_name == 'workflow_run' }}
       AAH_CODESIGN_PFX_B64: ${{ secrets.AAH_CODESIGN_PFX_B64 }}
@@ -395,7 +395,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.671: InvoiceVisionChild v2.8.2 (Q04 cache-hit upright footer strip check, Q08 post-tax DISCOUNT handling, Q15/Q16 duplicate table dedup & Receivable Amt & partial-page skip, RBIIN022462 State Tax/Collectable Amount, and parenthesized rate extraction)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title "AAH $tag — signed staged release" --notes "AAH v4.0.0.672: InvoiceVisionChild v2.9.0 (Hybrid Offline AI Self-Learning: sqlite-vec + FTS5 layout/rule memory + Qwen3-1.7B TextAI HTML repair + auto rule synthesis, SNP0780 C-GST/S-GST, IN14461427006630 C/I & S/UT GST + component summary, CF/26-27/1896 Company GSTIN & pre-tax discount, NC04643 overwide columns & OCR slip repair, Cont. Page partial skip, and Confirm/Reject Next queue index preservation)."
           if ($LASTEXITCODE -ne 0) { throw 'Draft release publishing failed.' }
           Write-Host "Signed DRAFT created. No end-user device was updated. Stable release remains disabled."
 
@@ -429,7 +429,7 @@ jobs:
           foreach ($opt in @('ci-release/out/AAHMobile.apk','ci-release/out/AAHMobile.apk.version','ci-release/out/AAHMobile.apk.sha256')) {
             if (Test-Path $opt) { $assets += $opt }
           }
-          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.671: InvoiceVisionChild v2.8.2 (Q04 cache-hit upright footer strip check, Q08 post-tax DISCOUNT handling, Q15/Q16 duplicate table dedup & Receivable Amt & partial-page skip, RBIIN022462 State Tax/Collectable Amount, and parenthesized rate extraction)."
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "AAH $tag automatic updates" --notes "AAH v4.0.0.672: InvoiceVisionChild v2.9.0 (Hybrid Offline AI Self-Learning: sqlite-vec + FTS5 layout/rule memory + Qwen3-1.7B TextAI HTML repair + auto rule synthesis, SNP0780 C-GST/S-GST, IN14461427006630 C/I & S/UT GST + component summary, CF/26-27/1896 Company GSTIN & pre-tax discount, NC04643 overwide columns & OCR slip repair, Cont. Page partial skip, and Confirm/Reject Next queue index preservation)."
           if ($LASTEXITCODE -ne 0) { throw 'Verified GitHub checksum release creation failed.' }
           $release=gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.tagName -ne $tag -or $release.isDraft -or $release.isPrerelease -or
