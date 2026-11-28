@@ -270,21 +270,42 @@ internal static class MobileSupplierMemoryStore
                 corrCmd.ExecuteNonQuery();
             }
 
-            var ruleJson = JsonSerializer.Serialize(new
+            var clientHash = !string.IsNullOrEmpty(normClient) ? $"client:{normClient}" : string.Empty;
+            var existingRuleNode = ReadClientRuleJson(conn, tx, gstin, clientHash);
+            var origInv = ExtractOriginalInvoiceNumber(scan.PayloadJson);
+            var invRule = InferInvoiceNumberRule(origInv, mapped.InvoiceNumber ?? string.Empty, existingRuleNode?["invoiceNumberRule"] as JsonObject);
+            var lineRules = MergeLineRules(mapped, existingRuleNode?["savedLineRules"] as JsonArray);
+            var origZeroRows = CountOriginalZeroValueRows(scan.PayloadJson);
+            var savedZeroRows = mapped.Lines.Count(IsZeroValueFreeMappedLine);
+            var prevDropZero = existingRuleNode?["dropZeroValueRows"]?.GetValue<bool?>() ?? false;
+            var dropZero = savedZeroRows == 0 && (origZeroRows > 0 || prevDropZero);
+
+            var ruleObj = new JsonObject
             {
-                preferredDirection = (mapped.Direction ?? string.Empty).Trim(),
-                preferredRecognitionMode = mode,
-                taxInclusive = inferredInclusive == 1,
-                confirmedByUser = true
-            });
-            using (var ruleCmd = conn.CreateCommand())
+                ["clientGstin"] = normClient,
+                ["preferredDirection"] = (mapped.Direction ?? string.Empty).Trim(),
+                ["preferredRecognitionMode"] = mode,
+                ["taxInclusive"] = inferredInclusive == 1,
+                ["creditNoteMode"] = mapped.CreditNoteTotal > 0m ? "deduct_footer" : (existingRuleNode?["creditNoteMode"]?.ToString() ?? string.Empty),
+                ["dropZeroValueRows"] = dropZero,
+                ["keepZeroValueRows"] = savedZeroRows > 0,
+                ["confirmedByUser"] = true,
+                ["savedLineRules"] = lineRules
+            };
+            if (invRule is not null)
+                ruleObj["invoiceNumberRule"] = invRule;
+            var ruleJson = ruleObj.ToJsonString();
+
+            var hashesToSave = string.IsNullOrEmpty(clientHash) ? new[] { string.Empty } : new[] { clientHash, string.Empty };
+            foreach (var hKey in hashesToSave)
             {
+                using var ruleCmd = conn.CreateCommand();
                 ruleCmd.Transaction = tx;
                 ruleCmd.CommandText = """
                     INSERT INTO supplier_layout_rules(
                         supplier_gstin, supplier_name_norm, layout_hash, header_signature,
                         rule_json, source, confidence, hit_count, success_count, created_at, updated_at
-                    ) VALUES ($g, $sn, '', '', $rj, 'user_confirmed', 0.95, 1, 1, $utc, $utc)
+                    ) VALUES ($g, $sn, $lh, '', $rj, 'user_confirmed', 0.95, 1, 1, $utc, $utc)
                     ON CONFLICT(supplier_gstin, layout_hash) DO UPDATE SET
                         supplier_name_norm = excluded.supplier_name_norm,
                         rule_json = excluded.rule_json,
@@ -294,14 +315,236 @@ internal static class MobileSupplierMemoryStore
                     """;
                 ruleCmd.Parameters.AddWithValue("$g", gstin);
                 ruleCmd.Parameters.AddWithValue("$sn", new string(canonicalName.ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray()));
+                ruleCmd.Parameters.AddWithValue("$lh", hKey);
                 ruleCmd.Parameters.AddWithValue("$rj", ruleJson);
                 ruleCmd.Parameters.AddWithValue("$utc", nowUtc);
                 ruleCmd.ExecuteNonQuery();
             }
 
             tx.Commit();
-            return $"AI Memory learned {canonicalName} ({gstin}) · {prevCount + 1} confirmation(s), {learnedHsn} HSN rule(s), mode: {mode}.";
+            return $"AI Memory learned {canonicalName} ({gstin}) · {prevCount + 1} confirmation(s), {learnedHsn} HSN, {lineRules.Count} line rule(s), mode: {mode}.";
         }
+    }
+
+    public static void ApplyClientSupplierRules(JsonObject root, string? clientGstin, string? counterpartyGstin)
+    {
+        var gstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(counterpartyGstin ?? string.Empty);
+        if (!MobileInvoicePartyIdentityResolver.ValidGstin(gstin) || !File.Exists(DatabasePath))
+            return;
+        var normClient = MobileInvoicePartyIdentityResolver.NormalizeGstin(clientGstin ?? string.Empty);
+        var clientHash = !string.IsNullOrEmpty(normClient) ? $"client:{normClient}" : string.Empty;
+
+        try
+        {
+            JsonObject? ruleNode = null;
+            lock (Gate)
+            {
+                using var conn = OpenConnection();
+                ruleNode = (!string.IsNullOrEmpty(clientHash) ? ReadClientRuleJson(conn, null, gstin, clientHash) : null)
+                           ?? ReadClientRuleJson(conn, null, gstin, string.Empty);
+            }
+            if (ruleNode is null) return;
+
+            var prefDir = ruleNode["preferredDirection"]?.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(prefDir) && string.IsNullOrWhiteSpace(root["direction"]?.ToString()))
+                root["direction"] = prefDir;
+
+            var prefMode = ruleNode["preferredRecognitionMode"]?.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(prefMode) && string.IsNullOrWhiteSpace(root["recognitionMode"]?.ToString()))
+                root["recognitionMode"] = prefMode;
+
+            if (ruleNode["invoiceNumberRule"] is JsonObject invRule)
+            {
+                var curInv = root["invoiceNumber"]?.ToString().Trim() ?? string.Empty;
+                var rewritten = ApplyInvoiceNumberTransform(curInv, invRule);
+                if (!string.IsNullOrWhiteSpace(rewritten) && !string.Equals(rewritten, curInv, StringComparison.Ordinal))
+                    root["invoiceNumber"] = rewritten;
+            }
+
+            if (root["rows"] is JsonArray rows)
+            {
+                var dropZero = ruleNode["dropZeroValueRows"]?.GetValue<bool?>() ?? false;
+                var lineMap = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+                if (ruleNode["savedLineRules"] is JsonArray lineRules)
+                {
+                    foreach (var item in lineRules.OfType<JsonObject>())
+                    {
+                        var key = item["lineKey"]?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(key))
+                            lineMap[key] = item;
+                    }
+                }
+                for (var i = rows.Count - 1; i >= 0; i--)
+                {
+                    if (rows[i] is not JsonObject rObj) continue;
+                    var desc = rObj["description"]?.ToString().Trim() ?? string.Empty;
+                    var hsn = DigitsOnly(rObj["hsnSac"]?.ToString() ?? string.Empty);
+                    var txVal = ParseDec(rObj["taxable"]?.ToString());
+                    var ltVal = ParseDec(rObj["lineTotal"]?.ToString());
+                    if (dropZero && txVal == 0m && ltVal == 0m && !string.IsNullOrWhiteSpace(desc))
+                    {
+                        rows.RemoveAt(i);
+                        continue;
+                    }
+                    var kFull = MakeLineKey(desc, hsn);
+                    var kDesc = MakeLineKey(desc, string.Empty);
+                    var matched = (lineMap.TryGetValue(kFull, out var r1) ? r1 : null)
+                                  ?? (!string.IsNullOrWhiteSpace(kDesc) && lineMap.TryGetValue(kDesc, out var r2) ? r2 : null);
+                    if (matched is not null)
+                    {
+                        if (string.IsNullOrWhiteSpace(rObj["unit"]?.ToString()) && !string.IsNullOrWhiteSpace(matched["unit"]?.ToString()))
+                            rObj["unit"] = matched["unit"]!.ToString();
+                        if (string.IsNullOrWhiteSpace(rObj["stockItem"]?.ToString()) && !string.IsNullOrWhiteSpace(matched["stockItem"]?.ToString()))
+                            rObj["stockItem"] = matched["stockItem"]!.ToString();
+                        if (string.IsNullOrWhiteSpace(rObj["ledger"]?.ToString()) && !string.IsNullOrWhiteSpace(matched["ledger"]?.ToString()))
+                            rObj["ledger"] = matched["ledger"]!.ToString();
+                        if (ParseDec(rObj["gstRate"]?.ToString()) <= 0m && ParseDec(matched["gstRate"]?.ToString()) > 0m && txVal > 0m)
+                            rObj["gstRate"] = matched["gstRate"]!.ToString();
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static JsonObject? ReadClientRuleJson(SqliteConnection conn, SqliteTransaction? tx, string gstin, string layoutHash)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT rule_json FROM supplier_layout_rules WHERE supplier_gstin = $g AND layout_hash = $lh LIMIT 1;";
+        cmd.Parameters.AddWithValue("$g", gstin);
+        cmd.Parameters.AddWithValue("$lh", layoutHash);
+        var txt = cmd.ExecuteScalar()?.ToString();
+        if (string.IsNullOrWhiteSpace(txt)) return null;
+        try { return JsonNode.Parse(txt) as JsonObject; } catch { return null; }
+    }
+
+    private static string ExtractOriginalInvoiceNumber(string payloadJson)
+    {
+        try { return JsonNode.Parse(payloadJson)?["invoiceNumber"]?.ToString().Trim() ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    private static int CountOriginalZeroValueRows(string payloadJson)
+    {
+        try
+        {
+            if (JsonNode.Parse(payloadJson)?["rows"] is not JsonArray arr) return 0;
+            return arr.OfType<JsonObject>().Count(r =>
+                ParseDec(r["taxable"]?.ToString()) == 0m &&
+                ParseDec(r["lineTotal"]?.ToString()) == 0m &&
+                !string.IsNullOrWhiteSpace(r["description"]?.ToString()));
+        }
+        catch { return 0; }
+    }
+
+    private static bool IsZeroValueFreeMappedLine(MobileInvoiceMappedLine l) =>
+        l.Taxable == 0m && l.Cgst == 0m && l.Sgst == 0m && l.Igst == 0m && l.Cess == 0m && l.LineTotal == 0m &&
+        !string.IsNullOrWhiteSpace(l.Description);
+
+    private static JsonObject? InferInvoiceNumberRule(string origInv, string savedInv, JsonObject? existing)
+    {
+        var orig = (origInv ?? string.Empty).Trim();
+        var saved = (savedInv ?? string.Empty).Trim();
+        if (!string.IsNullOrEmpty(orig) && !string.IsNullOrEmpty(saved) && !orig.Equals(saved, StringComparison.OrdinalIgnoreCase))
+        {
+            if (orig.EndsWith(saved, StringComparison.OrdinalIgnoreCase) && orig.Length > saved.Length)
+            {
+                var prefix = orig[..^saved.Length];
+                var prefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { prefix, prefix.Trim() + " ", prefix.Trim() + "-", prefix.Trim() + "." };
+                if (existing?["stripPrefixes"] is JsonArray arr)
+                    foreach (var p in arr) if (!string.IsNullOrEmpty(p?.ToString())) prefixes.Add(p.ToString());
+                return new JsonObject
+                {
+                    ["stripPrefixes"] = new JsonArray(prefixes.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
+                    ["digitsOnly"] = saved.All(char.IsDigit),
+                    ["exampleFrom"] = orig,
+                    ["exampleTo"] = saved
+                };
+            }
+            if (!orig.All(char.IsDigit) && saved.All(char.IsDigit) && new string(orig.Where(char.IsDigit).ToArray()) == saved)
+            {
+                return new JsonObject
+                {
+                    ["digitsOnly"] = true,
+                    ["exampleFrom"] = orig,
+                    ["exampleTo"] = saved
+                };
+            }
+        }
+        return existing?.DeepClone() as JsonObject;
+    }
+
+    public static string ApplyInvoiceNumberTransform(string rawInv, JsonObject rule)
+    {
+        var s = (rawInv ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(s)) return s;
+        if (rule["stripPrefixes"] is JsonArray prefixes)
+        {
+            foreach (var pNode in prefixes)
+            {
+                var p = pNode?.ToString() ?? string.Empty;
+                if (!string.IsNullOrEmpty(p) && s.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+                {
+                    var trimmed = s[p.Length..].TrimStart(' ', '-', ':', '.');
+                    if (trimmed.Length > 0) return trimmed;
+                }
+            }
+        }
+        if (rule["digitsOnly"]?.GetValue<bool?>() == true)
+        {
+            var digits = new string(s.Where(char.IsDigit).ToArray());
+            if (digits.Length >= 2) return digits;
+        }
+        return s;
+    }
+
+    private static JsonArray MergeLineRules(MobileInvoiceMappedResult mapped, JsonArray? existing)
+    {
+        var merged = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+        if (existing is not null)
+        {
+            foreach (var item in existing.OfType<JsonObject>())
+            {
+                var k = item["lineKey"]?.ToString() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(k)) merged[k] = item.DeepClone().AsObject();
+            }
+        }
+        foreach (var l in mapped.Lines)
+        {
+            var hsn = DigitsOnly(l.HsnSac ?? string.Empty);
+            var desc = (l.Description ?? string.Empty).Trim();
+            var key = MakeLineKey(desc, hsn);
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            merged[key] = new JsonObject
+            {
+                ["lineKey"] = key,
+                ["description"] = desc.Length > 80 ? desc[..80] : desc,
+                ["hsnSac"] = hsn,
+                ["unit"] = l.Unit ?? string.Empty,
+                ["gstRate"] = Math.Round(l.GstRate, 2),
+                ["stockItem"] = l.StockItem ?? string.Empty,
+                ["isZeroValueFree"] = IsZeroValueFreeMappedLine(l)
+            };
+        }
+        var outArr = new JsonArray();
+        foreach (var v in merged.Values.TakeLast(120)) outArr.Add(v);
+        return outArr;
+    }
+
+    private static string MakeLineKey(string desc, string hsn)
+    {
+        var clean = new string((desc ?? string.Empty).ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
+        if (clean.Length > 28) clean = clean[..28];
+        return string.IsNullOrEmpty(hsn) ? clean : $"{hsn}:{clean}";
+    }
+
+    private static string DigitsOnly(string s) => new((s ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static decimal ParseDec(string? s)
+    {
+        var clean = (s ?? string.Empty).Replace(",", string.Empty).Trim();
+        return decimal.TryParse(clean, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0m;
     }
 
     private static string BuildDiffsJson(string payloadJson, MobileInvoiceMappedResult mapped, string originalOcrName, string canonicalName, string mode)

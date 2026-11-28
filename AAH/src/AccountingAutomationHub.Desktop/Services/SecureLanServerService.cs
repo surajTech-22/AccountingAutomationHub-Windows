@@ -789,7 +789,7 @@ public sealed class SecureLanServerService : IDisposable
                         Math.Abs(mappedResult.Lines.Sum(line => line.Taxable) - mappedResult.TaxableTotal) > 0.25m)
                         throw new InvalidOperationException("Extracted item rows and taxable summary do not reconcile; no posting is permitted.");
                     if (Math.Abs(mappedResult.InvoiceTotal - (mappedResult.TaxableTotal + mappedResult.CgstTotal +
-                        mappedResult.SgstTotal + mappedResult.IgstTotal + mappedResult.CessTotal + mappedResult.RoundOff)) > 0.25m)
+                        mappedResult.SgstTotal + mappedResult.IgstTotal + mappedResult.CessTotal + mappedResult.RoundOff - mappedResult.CreditNoteTotal)) > 0.25m)
                         throw new InvalidOperationException("InvoiceVision invoice totals do not reconcile.");
                     if (mappedResult.IgstTotal <= 0m && (mappedResult.CgstTotal > 0m || mappedResult.SgstTotal > 0m) &&
                         Math.Abs(mappedResult.CgstTotal - mappedResult.SgstTotal) > 0.005m)
@@ -955,7 +955,11 @@ public sealed class SecureLanServerService : IDisposable
 
         if (mapped.IsAccountingInvoiceMode)
         {
-            var slabGroups = mapped.Lines
+            var acctLines = mapped.Lines
+                .Where(l => l.Taxable != 0m || l.Cgst != 0m || l.Sgst != 0m || l.Igst != 0m || l.Cess != 0m)
+                .ToArray();
+            if (acctLines.Length == 0) acctLines = mapped.Lines.ToArray();
+            var slabGroups = acctLines
                 .GroupBy(line => Math.Round(line.GstRate, 2, MidpointRounding.AwayFromZero))
                 .OrderBy(group => group.Key)
                 .ToArray();
@@ -980,7 +984,7 @@ public sealed class SecureLanServerService : IDisposable
                 Sgst = Math.Round(slab.Sum(x => x.Sgst), 2, MidpointRounding.AwayFromZero),
                 Igst = Math.Round(slab.Sum(x => x.Igst), 2, MidpointRounding.AwayFromZero),
                 Cess = Math.Round(slab.Sum(x => x.Cess), 2, MidpointRounding.AwayFromZero),
-                RoundOff = idx == 0 ? mapped.RoundOff : 0m,
+                RoundOff = idx == 0 ? (mapped.RoundOff - mapped.CreditNoteTotal) : 0m,
                 SourceSection = "Mobile Link",
                 ItemSequence = idx + 1,
                 // Accounting Invoice mode: pure GST-slab ledger entry only; zero inventory evidence.
@@ -993,7 +997,7 @@ public sealed class SecureLanServerService : IDisposable
                 BilledQuantity = 0m,
                 ItemRate = 0m,
                 ItemAmount = 0m,
-                DiscountAmount = 0m
+                DiscountAmount = idx == 0 ? mapped.CreditNoteTotal : 0m
             }).ToArray();
         }
 
@@ -1008,11 +1012,11 @@ public sealed class SecureLanServerService : IDisposable
                 DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                 SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, Rate = r.GstRate,
                 TaxableValue = r.Taxable, Cgst = r.Cgst, Sgst = r.Sgst, Igst = r.Igst, Cess = r.Cess,
-                RoundOff = i == 0 ? mapped.RoundOff : 0m, SourceSection = "Mobile Link", ItemSequence = i + 1,
+                RoundOff = i == 0 ? (mapped.RoundOff - mapped.CreditNoteTotal) : 0m, SourceSection = "Mobile Link", ItemSequence = i + 1,
                 ItemName = resolvedItem, OriginalItemName = r.Description, HsnCode = r.HsnSac, ItemAmount = r.LineTotal, ItemRate = r.Rate,
                 // R46 R27: Mobile discount is recognition/review evidence only. TaxableValue is
                 // already post-discount accounting authority, so do not post a second discount to Tally.
-                ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, OriginalUnit = r.Unit, DiscountAmount = 0m
+                ActualQuantity = r.Quantity, BilledQuantity = r.Quantity, Unit = r.Unit, OriginalUnit = r.Unit, DiscountAmount = i == 0 ? mapped.CreditNoteTotal : 0m
             };
         }).ToArray();
     }
@@ -1033,15 +1037,19 @@ public sealed class SecureLanServerService : IDisposable
                     DocumentNumber = mapped.InvoiceNumber, DocumentDate = mapped.InvoiceDate, GstDate = mapped.InvoiceDate,
                     SourceDocumentValue = mapped.InvoiceTotal, DocumentValue = mapped.InvoiceTotal, TaxableValue = mapped.TaxableTotal,
                     Cgst = mapped.CgstTotal, Sgst = mapped.SgstTotal, Igst = mapped.IgstTotal, Cess = mapped.CessTotal,
-                    RoundOff = mapped.RoundOff, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ImportMode = "Accounting Invoice", ItemSequence = 1,
+                    RoundOff = mapped.RoundOff - mapped.CreditNoteTotal, SourceSection = "Mobile Link", SourceOrigin = "Mobile Link", ImportMode = "Accounting Invoice", ItemSequence = 1,
                     ItemName = string.Empty, OriginalItemName = string.Empty, HsnCode = string.Empty, Unit = string.Empty, OriginalUnit = string.Empty,
-                    ActualQuantity = 0m, BilledQuantity = 0m, ItemRate = 0m, ItemAmount = 0m, DiscountAmount = 0m
+                    ActualQuantity = 0m, BilledQuantity = 0m, ItemRate = 0m, ItemAmount = 0m, DiscountAmount = mapped.CreditNoteTotal
                 }
             };
 
         if (mapped.IsAccountingInvoiceMode)
         {
-            var slabGroups = mapped.Lines
+            var acctLines = mapped.Lines
+                .Where(l => l.Taxable != 0m || l.Cgst != 0m || l.Sgst != 0m || l.Igst != 0m || l.Cess != 0m)
+                .ToArray();
+            if (acctLines.Length == 0) acctLines = mapped.Lines.ToArray();
+            var slabGroups = acctLines
                 .GroupBy(line => Math.Round(line.GstRate, 2, MidpointRounding.AwayFromZero))
                 .OrderBy(group => group.Key)
                 .ToArray();
@@ -1066,7 +1074,7 @@ public sealed class SecureLanServerService : IDisposable
                 Sgst = Math.Round(slab.Sum(x => x.Sgst), 2, MidpointRounding.AwayFromZero),
                 Igst = Math.Round(slab.Sum(x => x.Igst), 2, MidpointRounding.AwayFromZero),
                 Cess = Math.Round(slab.Sum(x => x.Cess), 2, MidpointRounding.AwayFromZero),
-                RoundOff = idx == 0 ? mapped.RoundOff : 0m,
+                RoundOff = idx == 0 ? (mapped.RoundOff - mapped.CreditNoteTotal) : 0m,
                 SourceSection = "Mobile Link",
                 SourceOrigin = "Mobile Link",
                 ImportMode = "Accounting Invoice",
@@ -1081,7 +1089,7 @@ public sealed class SecureLanServerService : IDisposable
                 BilledQuantity = 0m,
                 ItemRate = 0m,
                 ItemAmount = 0m,
-                DiscountAmount = 0m
+                DiscountAmount = idx == 0 ? mapped.CreditNoteTotal : 0m
             }).ToArray();
         }
 
@@ -5750,6 +5758,7 @@ public sealed class MobileInvoiceMappedResult
     public decimal SgstTotal { get; set; }
     public decimal IgstTotal { get; set; }
     public decimal CessTotal { get; set; }
+    public decimal CreditNoteTotal { get; set; }
     public decimal RoundOff { get; set; }
     public bool SourceDiscrepanciesReviewed { get; set; }
     public bool DuplicateOverrideAcknowledged { get; set; }

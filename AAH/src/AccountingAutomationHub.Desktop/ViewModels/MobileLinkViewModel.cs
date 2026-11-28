@@ -607,6 +607,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             AddHeader("igstTotal", "IGST Total", root["igstTotal"]?.ToString() ?? string.Empty, candidates);
             AddHeader("cessTotal", "Cess Total", root["cessTotal"]?.ToString() ?? string.Empty, candidates);
             AddHeader("otherCharges", "Other Charges", root["otherCharges"]?.ToString() ?? string.Empty, candidates);
+            AddHeader("creditNoteTotal", "Discount / Credit Note Deduction", root["creditNoteTotal"]?.ToString() ?? string.Empty, candidates);
             AddHeader("roundOff", "Round Off", root["roundOff"]?.ToString() ?? string.Empty, candidates);
             AddHeader("invoiceTotal", "Invoice Total", root["invoiceTotal"]?.ToString() ?? string.Empty, candidates);
             if (root["rows"] is JsonArray rows)
@@ -854,10 +855,11 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             for (var index = 0; index < Lines.Count; index++)
             {
                 var line = Lines[index]; var prefix = $"Row {index + 1}";
+                var isFree = IsZeroValueFreeLine(line);
                 if (string.IsNullOrWhiteSpace(line.Description)) issues.Add(prefix + " description is required");
-                if (string.IsNullOrWhiteSpace(line.Quantity)) issues.Add(prefix + " Quantity is required");
-                if (string.IsNullOrWhiteSpace(line.Unit)) issues.Add(prefix + " Unit is required");
-                if (string.IsNullOrWhiteSpace(line.Rate)) issues.Add(prefix + " Rate is required");
+                if (!isFree && string.IsNullOrWhiteSpace(line.Quantity)) issues.Add(prefix + " Quantity is required");
+                if (!isFree && string.IsNullOrWhiteSpace(line.Unit)) issues.Add(prefix + " Unit is required");
+                if (!isFree && string.IsNullOrWhiteSpace(line.Rate)) issues.Add(prefix + " Rate is required");
                 if (string.IsNullOrWhiteSpace(line.StockItem)) issues.Add(prefix + " Stock Item is required");
             }
         }
@@ -865,13 +867,13 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         // residual is permissible; missing rows, rather than OCR word boxes, block review.
         if (Lines.Count > 0)
         {
-            var rowsWithTaxable = Lines.Where(x => AmountOrZero(x.Taxable) > 0m).ToArray();
-            if (rowsWithTaxable.Length != Lines.Count)
+            var rowsValidTaxable = Lines.Where(x => AmountOrZero(x.Taxable) > 0m || IsZeroValueFreeLine(x)).ToArray();
+            if (rowsValidTaxable.Length != Lines.Count)
                 issues.Add("Every extracted product row requires a verified taxable value");
             var summaryTaxable = AmountOrZero(Header("taxableTotal"));
             if (summaryTaxable > 0m && (_isOnnxReview
-                ? rowsWithTaxable.Sum(x => AmountOrZero(x.Taxable)) != summaryTaxable
-                : Math.Abs(rowsWithTaxable.Sum(x => AmountOrZero(x.Taxable)) - summaryTaxable) > 0.25m))
+                ? rowsValidTaxable.Sum(x => AmountOrZero(x.Taxable)) != summaryTaxable
+                : Math.Abs(rowsValidTaxable.Sum(x => AmountOrZero(x.Taxable)) - summaryTaxable) > 0.25m))
                 issues.Add("Product-row taxable total does not match the printed invoice summary");
         }
         if (!TryAmount(Header("invoiceTotal"), out var invoiceTotal) || invoiceTotal <= 0m) issues.Add("Invoice Total must be a recognized positive amount");
@@ -881,6 +883,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         var igst = AmountOrZero(Header("igstTotal"));
         var cess = AmountOrZero(Header("cessTotal"));
         var charges = AmountOrZero(Header("otherCharges"));
+        var creditNote = AmountOrZero(Header("creditNoteTotal"));
         var roundOff = SignedAmountOrZero(Header("roundOff"));
 
         if (igst <= 0m && (cgst > 0m || sgst > 0m))
@@ -912,13 +915,11 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
 
         if (invoiceTotal > 0m && (taxable > 0m || cgst > 0m || sgst > 0m || igst > 0m || cess > 0m || charges > 0m))
         {
-            // R46 R27: Taxable Total is already post-discount authority. Discount remains
-            // review evidence only and is never subtracted again or posted to Tally.
-            var reconciled = taxable + cgst + sgst + igst + cess + charges + roundOff;
+            var reconciled = taxable + cgst + sgst + igst + cess + charges - creditNote + roundOff;
             if (Math.Abs(reconciled - invoiceTotal) > 0.10m)
-                issues.Add($"Post-discount Taxable + GST + charges + Round Off does not reconcile ({reconciled:0.00} vs invoice total {invoiceTotal:0.00})");
+                issues.Add($"Post-discount Taxable + GST + charges - deduction + Round Off does not reconcile ({reconciled:0.00} vs invoice total {invoiceTotal:0.00})");
 
-            var calculatedRoundOff = Math.Round(invoiceTotal - (taxable + cgst + sgst + igst + cess + charges), 2, MidpointRounding.AwayFromZero);
+            var calculatedRoundOff = Math.Round(invoiceTotal - (taxable + cgst + sgst + igst + cess + charges - creditNote), 2, MidpointRounding.AwayFromZero);
             if (Math.Abs(calculatedRoundOff) <= 2m && Header("roundOff").Length > 0 && Math.Abs(calculatedRoundOff - roundOff) > 0.05m)
                 issues.Add($"Round Off {roundOff:0.00} does not match calculated invoice residual {calculatedRoundOff:0.00}");
         }
@@ -1060,9 +1061,10 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
                 }
                 var cessAuthority = AmountOrZero(Header("cessTotal"));
                 var chargesAuthority = AmountOrZero(Header("otherCharges"));
+                var creditNoteAuthority = AmountOrZero(Header("creditNoteTotal"));
                 if (invoiceTotalAuthority > 0m)
                 {
-                    var residualAuthority = Math.Round(invoiceTotalAuthority - (taxableAuthority + cgstAuthority + sgstAuthority + igstAuthority + cessAuthority + chargesAuthority), 2, MidpointRounding.AwayFromZero);
+                    var residualAuthority = Math.Round(invoiceTotalAuthority - (taxableAuthority + cgstAuthority + sgstAuthority + igstAuthority + cessAuthority + chargesAuthority - creditNoteAuthority), 2, MidpointRounding.AwayFromZero);
                     if (Math.Abs(residualAuthority) <= 2m) SetHeaderAmount("roundOff", residualAuthority, signed: true);
                 }
                 return;
@@ -1079,9 +1081,10 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             SetHeaderAmount("cessTotal", cessTotal);
             var invoiceTotal = AmountOrZero(Header("invoiceTotal"));
             var charges = AmountOrZero(Header("otherCharges"));
+            var creditNoteVal = AmountOrZero(Header("creditNoteTotal"));
             if (invoiceTotal > 0m)
             {
-                var residual = Math.Round(invoiceTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal + cessTotal + charges), 2, MidpointRounding.AwayFromZero);
+                var residual = Math.Round(invoiceTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal + cessTotal + charges - creditNoteVal), 2, MidpointRounding.AwayFromZero);
                 if (Math.Abs(residual) <= 2m) SetHeaderAmount("roundOff", residual, signed: true);
             }
         }
@@ -1126,6 +1129,18 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         catch { return "Tax Invoice"; }
     }
 
+    private static bool IsZeroValueFreeLine(MobileInvoiceLineRow line)
+    {
+        if (string.IsNullOrWhiteSpace(line.Description)) return false;
+        if (AmountOrZero(line.Taxable) != 0m || AmountOrZero(line.Cgst) != 0m || AmountOrZero(line.Sgst) != 0m ||
+            AmountOrZero(line.Igst) != 0m || AmountOrZero(line.Cess) != 0m || AmountOrZero(line.LineTotal) != 0m)
+            return false;
+        var qty = AmountOrZero(line.Quantity);
+        var rate = AmountOrZero(line.Rate);
+        var disc = AmountOrZero(line.Discount);
+        return qty == 0m || rate == 0m || (disc > 0m && disc >= qty * rate - 0.50m);
+    }
+
     private static decimal AmountOrZero(string value) => TryAmount(value, out var amount) ? Math.Abs(amount) : 0m;
     private static decimal SignedAmountOrZero(string value) => TryAmount(value, out var amount) ? amount : 0m;
     private static string NormalizeGstin(string value) => new((value ?? string.Empty)
@@ -1162,6 +1177,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
             SgstTotal = AmountOrZero(Header("sgstTotal")),
             IgstTotal = AmountOrZero(Header("igstTotal")),
             CessTotal = AmountOrZero(Header("cessTotal")),
+            CreditNoteTotal = AmountOrZero(Header("creditNoteTotal")),
             RoundOff = SignedAmountOrZero(Header("roundOff")),
             SourceDiscrepanciesReviewed = ReviewedOcrDiscrepancies,
             DuplicateOverrideAcknowledged = AllowDuplicateOverride,

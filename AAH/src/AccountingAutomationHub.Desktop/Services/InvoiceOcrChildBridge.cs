@@ -442,8 +442,11 @@ internal static class InvoiceOcrChildBridge
         var clientIsBuyer = clientGstin.Length == 15 && MobileInvoicePartyIdentityResolver.ValidGstin(buyerGstin) && clientGstin == buyerGstin;
         if (clientIsSeller == clientIsBuyer)
             blockingFlags.Add("CLIENT_GSTIN_DIRECTION_REQUIRES_MANUAL_VERIFICATION");
-        if (creditNoteTotal > 0m)
+        var netReconOk = Math.Abs(invoiceTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal + cessTotal + roundOff - creditNoteTotal)) <= 0.25m;
+        if (creditNoteTotal > 0m && !netReconOk)
             blockingFlags.Add($"CREDIT_NOTE_DEDUCTION_{creditNoteTotal:0.00}_REVIEW_REQUIRED");
+
+        MobileSupplierMemoryStore.ApplyClientSupplierRules(root, clientGstin, counterpartyGstin);
 
         if (src.TryGetProperty("verification", out var verEl))
         {
