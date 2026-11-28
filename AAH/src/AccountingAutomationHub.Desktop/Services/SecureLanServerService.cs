@@ -864,7 +864,7 @@ public sealed class SecureLanServerService : IDisposable
                 mappedResult.InvoiceTotal,
                 DateTime.UtcNow,
                 row.PageSha256List.ToList()));
-            try { MobileSupplierMemoryStore.RecordConfirmedInvoice(row, mappedResult); }
+            try { MobileSupplierMemoryStore.RecordConfirmedInvoice(row, mappedResult, _clients.GetById(clientId)?.Gstin); }
             catch { /* Best-effort self-learning memory must never block a confirmed accounting entry. */ }
         }
 

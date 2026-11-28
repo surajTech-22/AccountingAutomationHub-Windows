@@ -1396,7 +1396,7 @@ public sealed class MobileLinkViewModel : PageViewModel, IDisposable
         try
         {
             var mapped = BuildMappedResult(scan);
-            var msg = MobileSupplierMemoryStore.RecordConfirmedInvoice(scan, mapped);
+            var msg = MobileSupplierMemoryStore.RecordConfirmedInvoice(scan, mapped, _clientContext.CurrentClient?.Gstin);
             RefreshAiMemoryBadge();
             StatusText = msg;
         }

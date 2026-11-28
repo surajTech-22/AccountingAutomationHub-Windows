@@ -509,6 +509,19 @@ internal static class Program
                   manualBooksRow.CgstLedger == "Input CGST @ 9%",
                 "Non-Mobile-Link Manual Purchase Register must preserve Fix116 R1 blank hidden GST Treatment.");
 
+            MobileSupplierMemoryStore.RecordConfirmedInvoice(
+                new MobileInvoiceQueueItem { ScanId = "SELF-SCAN-01", PayloadJson = "{}" },
+                new MobileInvoiceMappedResult
+                {
+                    CounterpartyName = "SELF POISONED NAME",
+                    CounterpartyGstin = buyerGstin,
+                    InvoiceNumber = "SELF-01",
+                    InvoiceTotal = 500m
+                },
+                clientGstin: buyerGstin);
+            var selfPoisoned = MobileSupplierMemoryStore.GetSupplierSummary(buyerGstin);
+            Check(!selfPoisoned.Found, "MobileSupplierMemoryStore must refuse recording client's own GSTIN as a supplier profile.");
+
             Console.WriteLine("PASS AAH.MobileLink.Tests: exact photo duplicate, auto multi-page link/unlink, page-2 SHA-256 tamper gate, AlreadyImported DB gate, Cont. Page 2 isolated auto-link, multi-photo ingest split, reverse-upload ordering, Accounting-vs-Item invoice posting, supplier self-learning memory, AutoImportInbox, strict CGST==SGST equality gate, and Mobile Link Shown in 2B + ClientGstin.");
             return 0;
         }

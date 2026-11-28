@@ -121,9 +121,12 @@ internal static class MobileSupplierMemoryStore
         }
     }
 
-    public static string RecordConfirmedInvoice(MobileInvoiceQueueItem scan, MobileInvoiceMappedResult mapped)
+    public static string RecordConfirmedInvoice(MobileInvoiceQueueItem scan, MobileInvoiceMappedResult mapped, string? clientGstin = null)
     {
         var gstin = MobileInvoicePartyIdentityResolver.NormalizeGstin(mapped.CounterpartyGstin);
+        var normClient = MobileInvoicePartyIdentityResolver.NormalizeGstin(clientGstin ?? string.Empty);
+        if (!string.IsNullOrEmpty(normClient) && gstin.Equals(normClient, StringComparison.OrdinalIgnoreCase))
+            return "Supplier memory skipped: counterparty GSTIN matches client's own GSTIN.";
         if (!MobileInvoicePartyIdentityResolver.ValidGstin(gstin))
             return "Supplier memory skipped: counterparty GSTIN is missing or invalid.";
 
